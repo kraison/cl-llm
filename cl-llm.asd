@@ -12,7 +12,8 @@
                 :components ((:file "packages")
                              (:file "conditions")
                              (:file "json")
-                             (:file "sse"))))
+                             (:file "sse")
+                             (:file "http"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
 (defsystem "cl-llm/tests"
@@ -26,7 +27,9 @@
                              (:file "suite")
                              (:file "json")
                              (:file "conditions")
-                             (:file "sse"))))
+                             (:file "sse")
+                             (:file "fake-driver")
+                             (:file "http"))))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! (find-symbol* :cl-llm-suite :cl-llm.test))
                (error "cl-llm test suite failed."))))
