@@ -68,9 +68,17 @@ Each response is an argument list for ENQUEUE-RESPONSE."
 ;;; that default is correct for production use, but if a later task's test
 ;;; forgets WITH-FAKE-DRIVER, hitting that default means a real outbound
 ;;; network call instead of an immediate, obvious failure. To make the
-;;; "offline by default" guarantee structural rather than conventional, the
-;;; test system below rebinds HTTP:*DRIVER* to NO-FAKE-DRIVER for the whole
-;;; suite; WITH-FAKE-DRIVER's LET rebinding overrides it per-test as usual.
+;;; "offline by default" guarantee structural rather than conventional,
+;;; RUN-OFFLINE-SUITE below rebinds HTTP:*DRIVER* to a fresh NO-FAKE-DRIVER
+;;; for the dynamic extent of the suite run only; WITH-FAKE-DRIVER's LET
+;;; rebinding overrides it per-test as usual.
+;;;
+;;; This is a dynamic binding, not a load-time SETF: loading this file (or
+;;; the whole cl-llm/tests system) never touches HTTP:*DRIVER*, so a REPL
+;;; that loads the test system and keeps working still has the real,
+;;; production DEXADOR-DRIVER bound. The guard only exists while
+;;; RUN-OFFLINE-SUITE's LET is on the stack, and unwinds automatically --
+;;; on pass, fail, or non-local exit -- when that call returns.
 
 (defclass no-fake-driver (http:driver)
   ()
@@ -89,8 +97,20 @@ driver."))
   (error "cl-llm test suite: no fake driver bound -- wrap this test in WITH-FAKE-DRIVER."))
 
 (defvar *production-driver* http:*driver*
-  "HTTP:*DRIVER*'s real, production default -- captured here before the
-suite-wide override below replaces it, so tests can still confirm the
-genuine default is a DEXADOR-DRIVER.")
+  "A load-time snapshot of HTTP:*DRIVER*'s real, production default. This is
+just a read, not a workaround for a mutation: RUN-OFFLINE-SUITE's guard is
+a dynamic binding, so HTTP:*DRIVER* itself reads as the guard for any test
+that runs inside that binding (i.e. every test run via RUN-OFFLINE-SUITE /
+ASDF:TEST-SYSTEM) even though the guard is never installed permanently.
+HTTP-DRIVER-PROTOCOL-EXISTS uses this snapshot, taken before any dynamic
+override is in play, to confirm the genuine default is a DEXADOR-DRIVER.")
 
-(setf http:*driver* (make-instance 'no-fake-driver))
+(defun run-offline-suite ()
+  "Run CL-LLM-SUITE with HTTP:*DRIVER* bound to a fresh NO-FAKE-DRIVER for
+the dynamic extent of the run, then return FIVEAM:RUN!'s result. Unlike a
+load-time SETF, the LET here guarantees HTTP:*DRIVER* is back to its real,
+production default the moment this function returns -- whether the suite
+passed, failed, or a test aborted -- so callers (test-op, a REPL) never
+observe the guard afterward."
+  (let ((http:*driver* (make-instance 'no-fake-driver)))
+    (fiveam:run! 'cl-llm-suite)))

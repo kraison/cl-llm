@@ -31,5 +31,5 @@
                              (:file "fake-driver")
                              (:file "http"))))
   :perform (test-op (op c)
-             (unless (symbol-call :fiveam :run! (find-symbol* :cl-llm-suite :cl-llm.test))
+             (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))

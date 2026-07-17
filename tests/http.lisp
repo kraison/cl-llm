@@ -52,7 +52,7 @@
   (let ((ht (make-hash-table :test 'equal)))
     (setf (gethash "content-type" ht) "application/json")
     (setf (gethash "retry-after" ht) "30")
-    (let ((alist (http:normalize-response-headers ht)))
+    (let ((alist (http::normalize-response-headers ht)))
       (is (listp alist))
       (is (not (hash-table-p alist)))
       (is (string= "30" (cdr (assoc "retry-after" alist :test #'string-equal))))
@@ -62,23 +62,23 @@
 (test normalize-response-headers-lowercases-keys
   (let ((ht (make-hash-table :test 'equal)))
     (setf (gethash "Retry-After" ht) "7")
-    (let ((alist (http:normalize-response-headers ht)))
+    (let ((alist (http::normalize-response-headers ht)))
       (is (string= "7" (cdr (assoc "retry-after" alist :test #'string=)))))))
 
 (test normalize-response-headers-handles-empty-hash-table
-  (is (null (http:normalize-response-headers (make-hash-table :test 'equal)))))
+  (is (null (http::normalize-response-headers (make-hash-table :test 'equal)))))
 
 (test normalize-response-headers-passes-through-existing-alist
   (let ((alist '(("retry-after" . "5"))))
-    (is (equal alist (http:normalize-response-headers alist)))))
+    (is (equal alist (http::normalize-response-headers alist)))))
 
 (test normalize-response-headers-handles-nil
-  (is (null (http:normalize-response-headers nil))))
+  (is (null (http::normalize-response-headers nil))))
 
 (test normalize-response-headers-is-robust-to-unexpected-input
   "Must not error on a shape dexador has never actually produced."
-  (is (null (http:normalize-response-headers 42)))
-  (is (null (http:normalize-response-headers "not-headers"))))
+  (is (null (http::normalize-response-headers 42)))
+  (is (null (http::normalize-response-headers "not-headers"))))
 
 ;;; -- Finding 2: read-timeout translation --------------------------------
 ;;;
