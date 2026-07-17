@@ -20,7 +20,8 @@
                              (:file "protocol")
                              (:module "providers"
                               :serial t
-                              :components ((:file "anthropic"))))))
+                              :components ((:file "anthropic")))
+                             (:file "facade"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
 (defsystem "cl-llm/tests"
@@ -41,7 +42,8 @@
                              (:file "core")
                              (:file "protocol")
                              (:file "anthropic")
-                             (:file "tools"))))
+                             (:file "tools")
+                             (:file "facade"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))

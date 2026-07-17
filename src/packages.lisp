@@ -96,4 +96,8 @@
    ;; tools
    #:tool #:deftool #:find-tool #:register-tool #:unregister-tool
    #:tool-name #:tool-description #:tool-schema #:tool-function
-   #:encode-tool #:call-tool))
+   #:encode-tool #:call-tool
+   ;; facade
+   #:ask #:send
+   #:*provider* #:*model* #:*temperature* #:*top-p* #:*stop*
+   #:*system* #:*tools* #:*max-tool-turns*))
