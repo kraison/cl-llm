@@ -102,6 +102,48 @@ the existing USOCKET:TIMEOUT-ERROR handler."
     (http::with-translated-errors ("https://example/x")
       (error 'usocket:timeout-error))))
 
+;;; -- Finding 5: connection-level socket failures leaked as raw usocket
+;;; conditions instead of LLM-HTTP-ERROR ---------------------------------
+;;;
+;;; A refused or reset connection (or DNS failure) is not a timeout, and
+;;; is not a DEX:HTTP-REQUEST-FAILED either -- dexador never gets far
+;;; enough to see an HTTP response. Exercised directly against the macro
+;;; with manually signalled conditions, no network involved.
+
+(test connection-refused-translates-to-llm-http-error
+  (signals c:llm-http-error
+    (http::with-translated-errors ("https://example/x")
+      (error 'usocket:connection-refused-error))))
+
+(test connection-refused-does-not-signal-llm-timeout-error
+  "A refused connection is not a timeout -- must not be conflated with
+LLM-TIMEOUT-ERROR."
+  (handler-case
+      (http::with-translated-errors ("https://example/x")
+        (error 'usocket:connection-refused-error))
+    (c:llm-timeout-error () (fail "refused connection wrongly translated to llm-timeout-error"))
+    (c:llm-http-error () (pass))))
+
+(test host-unreachable-translates-to-llm-http-error
+  (signals c:llm-http-error
+    (http::with-translated-errors ("https://example/x")
+      (error 'usocket:host-unreachable-error))))
+
+(test ns-host-not-found-translates-to-llm-http-error
+  "DNS resolution failures use USOCKET:NS-ERROR, a hierarchy disjoint from
+USOCKET:SOCKET-ERROR, so they need their own clause."
+  (signals c:llm-http-error
+    (http::with-translated-errors ("https://example/x")
+      (error 'usocket:ns-host-not-found-error))))
+
+(test connect-timeout-still-wins-over-broad-socket-error-clause
+  "Regression guard: USOCKET:TIMEOUT-ERROR is itself a subtype of
+USOCKET:SOCKET-ERROR, so the new broad SOCKET-ERROR clause must not
+shadow the existing, more specific TIMEOUT-ERROR clause."
+  (signals c:llm-timeout-error
+    (http::with-translated-errors ("https://example/x")
+      (error 'usocket:timeout-error))))
+
 ;;; -- Finding 3: an omitted timeout must not become an explicit NIL -----
 
 (test timeout-request-args-omits-keywords-when-timeout-is-nil
