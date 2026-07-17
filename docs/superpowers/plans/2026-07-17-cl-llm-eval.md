@@ -1278,19 +1278,25 @@ captured ERROR condition (or NIL)."
   (cells nil :type list))
 
 (defun run-cell (variant scorers case)
-  "Run one CASE through one VARIANT with SCORERS, returning a CELL."
+  "Run one CASE through one VARIANT with SCORERS, returning a CELL.
+Only the model call is protected: an ASK failure becomes an error cell, but a
+scorer's LLM-EVAL-ERROR (a harness/dataset misuse) propagates out of the run,
+per the spec -- it is a definition mistake to surface immediately, not an API
+outage to record. So the scorer loop runs OUTSIDE the handler-case."
   (let ((prompt (funcall (variant-prompt-fn variant) case)))
-    (handler-case
-        ;; ASK returns (values text response); we need the RESPONSE object (the
-        ;; second value), not the text, since scorers take a response.
-        (let ((response (nth-value 1 (apply #'llm:ask prompt (variant-args variant)))))
+    (multiple-value-bind (response error)
+        (handler-case
+            ;; ASK returns (values text response); we need the RESPONSE object
+            ;; (the second value), not the text, since scorers take a response.
+            (values (nth-value 1 (apply #'llm:ask prompt (variant-args variant))) nil)
+          (c:llm-error (e) (values nil e)))
+      (if error
+          (%make-cell case (variant-label variant) nil nil error)
           (%make-cell case (variant-label variant) response
                       (loop for scorer in scorers
                             collect (scorer-name scorer)
                             collect (run-scorer scorer case response))
-                      nil))
-      (c:llm-error (e)
-        (%make-cell case (variant-label variant) nil nil e)))))
+                      nil)))))
 
 (defun run-suite (name-or-suite &key provider)
   "Run a suite and return a SUITE-RESULT. When PROVIDER is given it is bound to
