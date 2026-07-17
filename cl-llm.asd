@@ -14,7 +14,8 @@
                              (:file "json")
                              (:file "sse")
                              (:file "http")
-                             (:file "retry"))))
+                             (:file "retry")
+                             (:file "core"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
 (defsystem "cl-llm/tests"
@@ -31,7 +32,8 @@
                              (:file "sse")
                              (:file "fake-driver")
                              (:file "http")
-                             (:file "retry"))))
+                             (:file "retry")
+                             (:file "core"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))

@@ -62,4 +62,19 @@
    #:llm-error-type #:llm-error-message #:llm-error-retry-after
    #:llm-error-payload #:llm-error-tool-name #:llm-error-underlying
    #:*retries*
-   #:*timeout*))
+   #:*timeout*
+   ;; content parts
+   #:content-part #:text-part #:tool-use-part #:tool-result-part
+   #:part-text #:part-id #:part-name #:part-arguments
+   #:part-tool-use-id #:part-content #:part-error-p
+   #:make-text-part #:make-tool-use-part #:make-tool-result-part
+   ;; messages and conversations
+   #:message #:make-message #:message-role #:message-content
+   #:conversation #:make-conversation #:add-message
+   #:conversation-messages #:conversation-system #:conversation-provider
+   #:conversation-model #:conversation-parameters
+   ;; responses
+   #:response #:response-content #:response-stop-reason #:response-model
+   #:response-usage #:response-raw #:response-text #:response-tool-calls
+   #:response-message
+   #:usage #:usage-input-tokens #:usage-output-tokens))
