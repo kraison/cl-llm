@@ -237,6 +237,28 @@ Note: `dex:http-request-failed` on a streaming request has already consumed the
 body, so the error path returns a string body for both methods. Callers must
 check the status before reading the stream.
 
+> **Correction applied during implementation (code review, Task 5).** The code
+> block above is the brief's original and contains three verified defects that
+> were fixed in the merged implementation — consult `src/http.lisp`, not this
+> block, as the source of truth:
+>
+> 1. **Headers.** Dexador returns `response-headers` as a **hash-table**, not the
+>    alist this contract documents (verified: dexador reads them with `gethash`;
+>    fast-http builds `(make-hash-table :test 'equal)`). The real driver now
+>    normalizes to an alist via `normalize-response-headers` on both the success
+>    and failure paths. Without this, Task 6's
+>    `(assoc "retry-after" headers ...)` would silently return nil against every
+>    real response while the alist-based fake driver kept tests green.
+> 2. **Timeouts.** `usocket:timeout-error` covers only connect-phase timeouts.
+>    A stalled read — the realistic case for an LLM — signals `sb-sys:io-timeout`,
+>    which is NOT a subtype of it. Now also translated, under `#+sbcl`.
+> 3. **Explicit nil timeout.** Always passing `:read-timeout nil` DISABLES
+>    dexador's timeout entirely rather than falling back to its 10s default;
+>    the keywords are now omitted when no timeout is given.
+>
+> A suite-wide guard driver also makes a forgotten `with-fake-driver` fail loudly
+> instead of making a real network call.
+
 - [ ] **Step 5: Add the files to the ASDF systems**
 
 `cl-llm` src components become `packages, conditions, json, sse, http`.
