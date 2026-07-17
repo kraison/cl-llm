@@ -150,10 +150,10 @@ sbcl --eval '(asdf:test-system :cl-llm)'                    # offline, no key ne
 CL_LLM_LIVE=1 sbcl --eval '(asdf:test-system :cl-llm/live)' # real endpoints
 ```
 
-The offline suite (`cl-llm/tests`) is 403 checks, sub-second, and needs no
-network access or API key. It is what CI runs on every push and pull request.
-The separate `cl-llm/eval` system has its own offline suite (81 checks,
-`sbcl --eval '(asdf:test-system :cl-llm/eval)'`).
+The offline suite (`cl-llm/tests`) is several hundred checks, sub-second, and
+needs no network access or API key. It is what CI runs on every push and pull
+request. The separate `cl-llm/eval` system has its own offline suite
+(`sbcl --eval '(asdf:test-system :cl-llm/eval)'`).
 
 The live suite (`cl-llm/live`) is a separate ASDF system that hits real
 endpoints: Anthropic (needs `ANTHROPIC_API_KEY`) and, optionally, a local
