@@ -21,6 +21,7 @@
                              (:module "providers"
                               :serial t
                               :components ((:file "anthropic")))
+                             (:file "tool-loop")
                              (:file "facade"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
@@ -43,7 +44,8 @@
                              (:file "protocol")
                              (:file "anthropic")
                              (:file "tools")
-                             (:file "facade"))))
+                             (:file "facade")
+                             (:file "tool-loop"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))
