@@ -9,7 +9,15 @@
 (defun execute-tool-call (call tools)
   "Execute one TOOL-USE-PART, returning a TOOL-RESULT-PART.
 A tool that signals produces an error result the model can see and react to,
-rather than aborting the whole exchange."
+rather than aborting the whole exchange. This covers the entire C:LLM-ERROR
+hierarchy, not just C:LLM-TOOL-ERROR: a tool body may signal any cl-llm
+condition directly (for example LLM-PARSE-ERROR from parsing bad data, or
+LLM-AUTH-ERROR/LLM-API-ERROR/LLM-RATE-LIMIT-ERROR from a nested ASK/SEND
+call), and CALL-TOOL passes those through unwrapped rather than re-wrapping
+them as LLM-TOOL-ERROR. FIND-TOOL-AMONG below is deliberately evaluated
+outside this HANDLER-CASE's protected form: an unoffered tool name is a
+protocol violation that must still abort the loop, not be papered over as an
+error result."
   (let ((tool (find-tool-among call tools)))
     (handler-case
         (make-tool-result-part (part-id call)
@@ -17,6 +25,14 @@ rather than aborting the whole exchange."
       (c:llm-tool-error (e)
         (make-tool-result-part (part-id call)
                                (princ-to-string (c:llm-error-underlying e))
+                               :errorp t))
+      (c:llm-error (e)
+        ;; LLM-ERROR-UNDERLYING is a slot only LLM-TOOL-ERROR has; every other
+        ;; subtype defines a :REPORT, so PRINC-TO-STRING of the condition
+        ;; itself is the readable description that works across the whole
+        ;; hierarchy.
+        (make-tool-result-part (part-id call)
+                               (princ-to-string e)
                                :errorp t)))))
 
 (defun find-tool-among (call tools)
