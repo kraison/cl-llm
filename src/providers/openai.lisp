@@ -18,41 +18,57 @@
 ;;; Encoding
 
 (defun openai-encode-message (message)
-  "Encode one message. Tool results become role \"tool\" messages, which is why
-this cannot simply map over parts."
-  (let ((parts (message-content message)))
-    (let ((tool-result (find-if (lambda (p) (typep p 'tool-result-part)) parts)))
-      (if tool-result
-          (json:jobject :role "tool"
-                        :tool_call_id (part-tool-use-id tool-result)
-                        :content (princ-to-string (part-content tool-result)))
-          (let ((tool-uses (remove-if-not (lambda (p) (typep p 'tool-use-part)) parts))
-                (text (with-output-to-string (out)
-                        (dolist (part parts)
-                          (when (typep part 'text-part)
-                            (write-string (part-text part) out))))))
-            (json:jobject
-             :role (string-downcase (symbol-name (message-role message)))
-             :content (if (string= text "") nil text)
-             :tool_calls (when tool-uses
-                           (map 'vector
-                                (lambda (part)
-                                  (json:jobject
-                                   :id (part-id part)
-                                   :type "function"
-                                   :function (json:jobject
-                                              :name (part-name part)
-                                              :arguments (json:to-json
-                                                          (or (part-arguments part)
-                                                              (json:jobject))))))
-                                tool-uses))))))))
+  "Encode one message into a LIST of JSON message objects.
+Anthropic bundles every tool result for a turn into ONE message with multiple
+content parts; OpenAI instead requires ONE role \"tool\" message PER
+tool_call_id. So a Lisp message whose parts are tool-result parts (exactly
+what RUN-TOOL-LOOP produces after a parallel tool-call turn) must flat-map to
+several JSON messages here, not one -- which is why this returns a list for
+ENCODE-REQUEST to MAPCAN over, rather than a single object. A message with
+co-present text and tool-result parts is not something the shared tool loop
+ever produces (a tool-result message carries only tool-result parts), so
+that combination is intentionally still resolved in favor of the tool
+results, same as before this fix."
+  (let* ((parts (message-content message))
+         (tool-results (remove-if-not (lambda (p) (typep p 'tool-result-part)) parts)))
+    (if tool-results
+        (mapcar (lambda (tool-result)
+                  (json:jobject :role "tool"
+                                :tool_call_id (part-tool-use-id tool-result)
+                                :content (princ-to-string (part-content tool-result))))
+                tool-results)
+        (let ((tool-uses (remove-if-not (lambda (p) (typep p 'tool-use-part)) parts))
+              (text (with-output-to-string (out)
+                      (dolist (part parts)
+                        (when (typep part 'text-part)
+                          (write-string (part-text part) out))))))
+          (list
+           (json:jobject
+            :role (string-downcase (symbol-name (message-role message)))
+            :content (if (string= text "") nil text)
+            :tool_calls (when tool-uses
+                          (map 'vector
+                               (lambda (part)
+                                 (json:jobject
+                                  :id (part-id part)
+                                  :type "function"
+                                  :function (json:jobject
+                                             :name (part-name part)
+                                             :arguments (json:to-json
+                                                         (or (part-arguments part)
+                                                             (json:jobject))))))
+                               tool-uses))))))))
 
 (defmethod encode-request ((provider openai-compatible-provider) conversation
                            &key stream tools)
   (let* ((parameters (conversation-parameters conversation))
          (system (conversation-system conversation))
-         (messages (map 'list #'openai-encode-message
-                        (conversation-messages conversation))))
+         ;; MAPCAN, not MAP 'LIST: OPENAI-ENCODE-MESSAGE returns a list of
+         ;; zero-or-more JSON messages per Lisp message, so this must flatten
+         ;; rather than map one-to-one. Safe to NCONC -- each call returns a
+         ;; freshly consed list with no shared structure.
+         (messages (mapcan #'openai-encode-message
+                           (conversation-messages conversation))))
     (json:to-json
      (json:jobject
       :model (model-for provider conversation)
@@ -153,7 +169,18 @@ this cannot simply map over parts."
                (delta (json:jget choice "delta"))
                (content (json:jget delta "content"))
                (finish (json:jget choice "finish_reason")))
+          ;; FINISH is checked first, deliberately: PARSE-STREAM-EVENT returns
+          ;; only one (kind . value) pair per chunk, so a chunk that somehow
+          ;; bundles non-empty content with finish_reason together can only
+          ;; report one of the two. In practice OpenAI-compatible servers
+          ;; (llama.cpp, Ollama, vLLM, LM Studio) always send finish_reason on
+          ;; its own trailing chunk with an empty delta, mirroring OpenAI's
+          ;; own chunking, so this ordering costs nothing in the observed
+          ;; case. But losing the terminal stop reason silently (leaving
+          ;; RESPONSE-STOP-REASON NIL) is worse than losing one already-final
+          ;; text delta, so if a chunk ever does bundle both, the stop reason
+          ;; wins.
           (cond
-            ((and content (string/= content "")) (values :text content))
             (finish (values :stop-reason (openai-stop-reason finish)))
+            ((and content (string/= content "")) (values :text content))
             (t (values :ignore nil)))))))
