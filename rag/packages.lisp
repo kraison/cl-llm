@@ -19,6 +19,8 @@
    #:memory-store #:make-memory-store #:store-dimension #:cosine
    #:retriever #:retrieve #:dense-retriever #:make-dense-retriever
    #:retriever-embedder #:retriever-store
+   #:index #:make-index #:index-embedder #:index-store #:index-chunker
+   #:add-documents #:save-index #:load-index
    ;; grows in later tasks
    ))
 
