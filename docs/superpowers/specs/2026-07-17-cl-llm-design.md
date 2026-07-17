@@ -156,6 +156,21 @@ seam where the fake HTTP driver plugs in for tests (§9).
 Every special mirrors a keyword argument of the same name, so the one-liner and
 the fully-specified call are the same API rather than two parallel ones.
 
+`*provider*` defaults to an `anthropic-provider` instance. `*model*` defaults to
+`nil`, meaning `provider-default-model` decides — so the default model is a
+property of the provider rather than a global constant, and a local endpoint is
+not forced to invent an Anthropic model name.
+
+A local endpoint is constructed explicitly, since it has no discoverable
+default:
+
+```lisp
+(let ((*provider* (make-instance 'openai-compatible-provider
+                                 :base-url "http://localhost:11434/v1"
+                                 :model "llama3.1")))
+  (ask "hi"))
+```
+
 ### Tools
 
 `deftool` derives the JSON schema from a typed lambda list and the docstring,
