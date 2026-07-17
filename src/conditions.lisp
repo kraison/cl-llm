@@ -59,7 +59,7 @@
   ((tool-name :initarg :tool-name :initform nil :reader llm-error-tool-name)
    (underlying :initarg :underlying :initform nil :reader llm-error-underlying))
   (:report (lambda (condition stream)
-             (format stream "Tool ~a signalled an error~@[: ~a~]"
+             (format stream "~:[A tool~;Tool ~:*~a~] signalled an error~@[: ~a~]"
                      (llm-error-tool-name condition)
                      (llm-error-underlying condition))))
   (:documentation "A tool function signalled during the tool loop."))
