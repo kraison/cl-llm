@@ -47,3 +47,14 @@
 
 (test jarray-builds-vector
   (is (string= "[1,2]" (json:to-json (json:jarray 1 2)))))
+
+(test jget-type-mismatches-return-nil
+  "A key that does not match the shape at that step (integer into a
+hash-table, string into a vector, etc.) must return NIL, never signal."
+  (let ((h (json:jobject "a" (json:jobject "b" 1))))
+    (is (null (json:jget h "a" 0 "b"))))
+  (let ((h (json:parse "{\"content\":[1,2]}")))
+    (is (null (json:jget h "content" "text"))))
+  (let ((h (json:parse "{\"a\":1}")))
+    (is (null (json:jget h "a" "b")))
+    (is (null (json:jget h "a" 0)))))
