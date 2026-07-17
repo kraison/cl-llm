@@ -14,6 +14,14 @@ supported by construction — the library uses no threads.
 
 Set `ANTHROPIC_API_KEY` in your environment for the default provider.
 
+## Examples
+
+Runnable howtos live in [`examples/`](examples/) — quickstart, streaming,
+conversations, tools, error handling, Ollama Cloud (remote models), the
+evaluation harness, and testing your own code with the mock provider. The
+`evaluation` and `testing-with-mock` examples run offline with no API key. See
+[`examples/README.md`](examples/README.md) for the catalog.
+
 ## Use
 
 ```lisp
