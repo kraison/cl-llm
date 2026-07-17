@@ -102,3 +102,51 @@
     (let ((eval:*eval-map* (lambda (fn list) (incf calls) (mapcar fn list))))
       (eval:run-suite 'map-suite))
     (is (plusp calls) "*eval-map* must be the traversal seam")))
+
+(test run-suite-scorer-llm-eval-error-propagates-not-absorbed
+  "A scorer's LLM-EVAL-ERROR (harness/dataset misuse, e.g. a case with no
+:expected scored by exact-match) must PROPAGATE out of RUN-SUITE, even though
+the ASK call itself succeeded against a working provider. It must NOT be
+absorbed into an error cell -- that would silently discard a good response
+and misclassify a definition mistake as an API failure."
+  (let ((llm:*provider* (echo-mock)))
+    (eval:defsuite no-expected-suite
+      :dataset (list (eval:make-case "hello"))
+      :variants ((:model "m"))
+      :scorers (eval:exact-match))
+    (signals eval:llm-eval-error (eval:run-suite 'no-expected-suite))))
+
+(test run-suite-ask-failure-still-becomes-error-cell
+  "Regression: a genuine ASK failure (an LLM-API-ERROR from the provider, not
+a scorer misuse) must still be recorded as an error cell and the run must
+continue -- only the scorer loop was pulled out of the handler, not the ASK
+call."
+  (let ((llm:*provider*
+          (llm:make-mock-provider
+           :responder (lambda (conversation)
+                        (declare (ignore conversation))
+                        (error 'llm:llm-api-error :status 500 :message "down")))))
+    (eval:defsuite ask-fails-suite
+      :dataset (list (eval:make-case "x" :expected "x"))
+      :variants ((:model "m"))
+      :scorers (eval:exact-match))
+    (let* ((result (eval:run-suite 'ask-fails-suite))
+           (label (eval:variant-label
+                   (first (eval:suite-variants (eval:find-suite 'ask-fails-suite))))))
+      (is (= 1 (length (eval:result-cells result))))
+      (is (= 1 (eval:result-error-count result label)))
+      (is (find-if #'eval:cell-error (eval:result-cells result))))))
+
+(test run-suite-scorer-non-real-score-propagates
+  "Regression: a scorer that produces a non-real SCORE value (a harness bug,
+not noisy model output) also propagates LLM-EVAL-ERROR out of RUN-SUITE
+rather than being absorbed into an error cell."
+  (eval:defscorer broken-scorer (case response)
+    (declare (ignore case response))
+    (eval:score "not-a-number"))
+  (let ((llm:*provider* (echo-mock)))
+    (eval:defsuite broken-scorer-suite
+      :dataset (list (eval:make-case "a" :expected "a"))
+      :variants ((:model "m"))
+      :scorers (broken-scorer))
+    (signals eval:llm-eval-error (eval:run-suite 'broken-scorer-suite))))
