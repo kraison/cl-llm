@@ -7,4 +7,7 @@
   (:export
    #:score #:score-p #:score-value #:score-explanation
    #:llm-eval-error #:eval-error-message
+   #:eval-case #:make-case #:case-input #:case-expected #:case-metadata
+   #:scorer #:scorer-name #:scorer-function #:defscorer
+   #:register-scorer #:find-scorer #:run-scorer #:exact-match
    ))

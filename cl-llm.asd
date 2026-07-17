@@ -77,7 +77,9 @@
   :components ((:module "eval"
                 :serial t
                 :components ((:file "packages")
-                             (:file "score"))))
+                             (:file "score")
+                             (:file "case")
+                             (:file "scorer"))))
   :in-order-to ((test-op (test-op "cl-llm/eval/tests"))))
 
 (defsystem "cl-llm/eval/tests"
@@ -89,7 +91,8 @@
                 :serial t
                 :components ((:file "packages")
                              (:file "suite")
-                             (:file "score"))))
+                             (:file "score")
+                             (:file "scorer"))))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-eval-suite :cl-llm.eval.test))
