@@ -11,7 +11,8 @@
                 :serial t
                 :components ((:file "packages")
                              (:file "conditions")
-                             (:file "json"))))
+                             (:file "json")
+                             (:file "sse"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
 (defsystem "cl-llm/tests"
@@ -24,7 +25,8 @@
                 :components ((:file "packages")
                              (:file "suite")
                              (:file "json")
-                             (:file "conditions"))))
+                             (:file "conditions")
+                             (:file "sse"))))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! (find-symbol* :cl-llm-suite :cl-llm.test))
                (error "cl-llm test suite failed."))))
