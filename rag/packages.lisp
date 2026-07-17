@@ -7,6 +7,10 @@
                     (#:c #:cl-llm.conditions))
   (:export
    #:llm-rag-error #:rag-error-message
+   #:embedder #:embedder-model #:embed
+   #:openai-compatible-embedder #:make-openai-compatible-embedder
+   #:mock-embedder #:make-mock-embedder #:embedder-dimension
+   #:embedding
    ;; grows in later tasks
    ))
 

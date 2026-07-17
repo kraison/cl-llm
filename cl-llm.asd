@@ -112,7 +112,8 @@
   :serial t
   :components ((:module "rag"
                 :serial t
-                :components ((:file "packages"))))
+                :components ((:file "packages")
+                             (:file "embed"))))
   :in-order-to ((test-op (test-op "cl-llm/rag/tests"))))
 
 (defsystem "cl-llm/rag/tests"
@@ -123,7 +124,8 @@
   :components ((:module "tests-rag"
                 :serial t
                 :components ((:file "packages")
-                             (:file "suite"))))
+                             (:file "suite")
+                             (:file "embed"))))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-rag-suite :cl-llm.rag.test))
