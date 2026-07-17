@@ -77,7 +77,14 @@ Create `tests/fake-driver.lisp`:
   (declare (ignore timeout))
   (record-request driver url method headers content)
   (multiple-value-bind (status response-headers body) (next-canned-response driver)
-    (values (make-string-input-stream body) status response-headers)))
+    ;; Mirror dexador: on a non-2xx it has already consumed the body, so it
+    ;; hands back a STRING, not a stream. Returning a stream here would let a
+    ;; test pass against behaviour the real driver never produces.
+    (values (if (<= 200 status 299)
+                (make-string-input-stream body)
+                body)
+            status
+            response-headers)))
 
 (defmacro with-fake-driver ((var &rest responses) &body body)
   "Bind HTTP:*DRIVER* to a fresh fake-driver named VAR, pre-loaded with RESPONSES.
@@ -917,6 +924,16 @@ Signals LLM-AUTH-ERROR if one is required and absent."))
 KIND is one of :TEXT (VALUE is a string delta), :TOOL-USE-START (VALUE is a
 TOOL-USE-PART), :TOOL-ARGUMENTS (VALUE is a partial JSON string), :STOP-REASON
 (VALUE is a keyword), :USAGE (VALUE is a USAGE), :DONE, or :IGNORE."))
+
+(defgeneric chat-request (provider conversation &key tools)
+  (:documentation "Perform a non-streaming request and return a RESPONSE."))
+
+(defgeneric stream-request (provider conversation &key tools)
+  (:documentation "Perform a streaming request and return an open character
+stream of SSE data. The caller owns the stream and must close it."))
+
+(defgeneric encode-tool (provider tool)
+  (:documentation "Encode TOOL as provider-specific JSON."))
 
 (defgeneric model-for (provider conversation)
   (:documentation "The model to use for CONVERSATION on PROVIDER."))

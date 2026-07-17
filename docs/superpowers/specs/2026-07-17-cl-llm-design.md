@@ -204,8 +204,14 @@ either a bare symbol — a required string — or a list carrying a specificatio
 | `(note :type string :optional t)`     | optional string                      |
 
 Supported `:type` values are `string`, `integer`, `number`, `boolean`, and
-`(list <type>)`. `:default` implies optional. `&optional` and `&key` lambda list
-markers are honored and map to non-required schema properties.
+`(list <type>)`. `:default` implies optional. An `&optional` marker makes every
+subsequent parameter non-required, and is inserted into the generated `defun`
+automatically when a parameter declares `:default` or `:optional`.
+
+`&key` and `&rest` are **not** supported and signal at macroexpansion time.
+Tools are invoked positionally from a decoded JSON object, so a `&key` lambda
+list would need a second, divergent calling convention for no gain — `:optional`
+and `:default` already express everything the schema can carry.
 
 This richer specification exists because the bare-symbol form alone would force
 every argument to arrive as a string for the tool body to parse by hand — which
