@@ -173,10 +173,56 @@ default:
 
 ### Tools
 
-`deftool` derives the JSON schema from a typed lambda list and the docstring,
-and expands to a plain `defun` plus a registration form — nothing is hidden.
-Parameters are either a bare symbol (a required string parameter) or a list of
-`(name . allowed-values)` which becomes a schema enum.
+`deftool` defines the **entire tool surface in Lisp**. There is no sidecar
+process, no separate server, no schema file. The macro expands to a plain
+`defun` plus a registration form — nothing is hidden — and the tool loop invokes
+that function **in-process, in the caller's image**. A tool body therefore closes
+over everything an ordinary Lisp function closes over: live database handles,
+open transactions, special bindings in effect at the call site. The model sees
+only the name, the docstring, and the derived JSON schema; cl-llm performs the
+dispatch itself.
+
+```lisp
+(deftool find-related (node-id (depth :type integer :default 1))
+  "Find nodes related to the given node in the knowledge graph."
+  (vivace-graph:with-graph (*graph*)
+    (vivace-graph:lookup-related node-id :depth depth)))
+```
+
+#### Parameter specifications
+
+The schema is derived from the lambda list and docstring. A parameter is
+either a bare symbol — a required string — or a list carrying a specification:
+
+| Form                                  | Schema result                        |
+|---------------------------------------|--------------------------------------|
+| `city`                                | required string                      |
+| `(units :celsius :fahrenheit)`        | required enum                        |
+| `(depth :type integer)`               | required integer                     |
+| `(limit :type integer :default 10)`   | optional integer, default 10         |
+| `(ids :type (list string))`           | required array of strings            |
+| `(note :type string :optional t)`     | optional string                      |
+
+Supported `:type` values are `string`, `integer`, `number`, `boolean`, and
+`(list <type>)`. `:default` implies optional. `&optional` and `&key` lambda list
+markers are honored and map to non-required schema properties.
+
+This richer specification exists because the bare-symbol form alone would force
+every argument to arrive as a string for the tool body to parse by hand — which
+is exactly the schema/implementation drift `deftool` exists to prevent.
+
+#### Tool design guidance (documented, not enforced)
+
+**The model chooses the arguments.** A narrow tool is safe by construction: the
+schema itself bounds what can be requested. A general escape hatch is not — a
+tool such as `(deftool run-query (query-string) ...)` grants the model arbitrary
+query execution against the underlying store, with the schema providing no
+constraint whatsoever.
+
+Both are legitimate, but the difference should be a deliberate choice rather
+than an accident. The documentation will state the guidance plainly: **prefer
+narrow, purpose-specific tools over general escape hatches**, and treat tool
+arguments as untrusted input, because they are.
 
 `ask` with `:tools` runs the **tool loop automatically**: the model requests a
 tool, cl-llm executes it, feeds the result back, and repeats. The loop is
