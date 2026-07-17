@@ -38,3 +38,8 @@
 (test split-text-rejects-nonsensical-overlap
   (signals rag:llm-rag-error (rag:split-text "abc" :size 5 :overlap 5))
   (signals rag:llm-rag-error (rag:split-text "abc" :size 5 :overlap 9)))
+
+(test split-text-rejects-non-positive-size
+  (signals rag:llm-rag-error (rag:split-text "x" :size 0 :overlap -1))
+  (signals rag:llm-rag-error (rag:split-text "x" :size 0))
+  (signals rag:llm-rag-error (rag:split-text "x" :size -5 :overlap -10)))

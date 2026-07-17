@@ -5,8 +5,11 @@
 (defun split-text (text &key (size 1000) (overlap 200))
   "Split TEXT into overlapping windows of ~SIZE characters sharing OVERLAP
 characters with the previous window. Returns a list of (SUBSTRING . START).
-Signals LLM-RAG-ERROR if OVERLAP is not strictly less than SIZE (which would not
-advance)."
+Signals LLM-RAG-ERROR if SIZE is not positive, or if OVERLAP is not strictly
+less than SIZE (which would not advance)."
+  (unless (plusp size)
+    (error 'llm-rag-error
+           :message (format nil "chunk size (~a) must be positive" size)))
   (unless (< overlap size)
     (error 'llm-rag-error
            :message (format nil "chunk overlap (~a) must be less than size (~a)"

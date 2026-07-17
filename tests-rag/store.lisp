@@ -93,5 +93,22 @@
       (is (string= "hello" (rag:chunk-text (rag:hit-chunk (first hits)))))
       (is (string= "d1" (rag:chunk-document-id (rag:hit-chunk (first hits)))))
       (is (equal '(:title "T") (rag:chunk-metadata (rag:hit-chunk (first hits)))))
-      (is (equalp (v 0.5 0.5) (rag:chunk-embedding (rag:hit-chunk (first hits))))))
+      (is (equalp (v 0.5 0.5) (rag:chunk-embedding (rag:hit-chunk (first hits)))))
+      (is (= (rag:store-dimension s) (rag:store-dimension loaded))
+          "round trip re-derives the same store-dimension"))
+    ;; The persisted plist must not carry a stray :DIMENSION key -- it is
+    ;; dead data that LOAD-STORE never reads (dimension is re-derived from
+    ;; the chunks via STORE-ADD), and could silently drift from reality.
+    (let ((data (with-open-file (in path)
+                  (with-standard-io-syntax
+                    (let ((*read-default-float-format* 'double-float))
+                      (read in))))))
+      (is (getf data :chunks) "sanity: :chunks key is present")
+      (is (null (getf data :dimension)) "no stray :dimension key is persisted"))
     (ignore-errors (delete-file path))))
+
+(test load-store-missing-file-signals-llm-rag-error
+  (let ((path (merge-pathnames "rag-store-does-not-exist.dat"
+                               (uiop:temporary-directory))))
+    (ignore-errors (delete-file path))
+    (signals rag:llm-rag-error (rag:load-store path))))

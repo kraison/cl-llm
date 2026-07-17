@@ -87,7 +87,6 @@
     (with-standard-io-syntax
       (let ((*read-default-float-format* 'double-float))
         (prin1 (list :version 1
-                     :dimension (store-dimension store)
                      :chunks (map 'list
                                   (lambda (chunk)
                                     (list (chunk-text chunk)
@@ -100,10 +99,15 @@
 
 (defun load-store (path)
   "Load a memory-store previously written by SAVE-STORE."
-  (let ((data (with-open-file (in path)
-                (with-standard-io-syntax
-                  (let ((*read-default-float-format* 'double-float))
-                    (read in)))))
+  (let ((data (handler-case
+                  (with-open-file (in path)
+                    (with-standard-io-syntax
+                      (let ((*read-default-float-format* 'double-float))
+                        (read in))))
+                (file-error (condition)
+                  (error 'llm-rag-error
+                         :message (format nil "could not load store from ~a: ~a"
+                                          path condition)))))
         (store (make-memory-store)))
     (dolist (row (getf data :chunks) store)
       (destructuring-bind (text doc-id metadata embedding-list) row
