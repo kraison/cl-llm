@@ -412,7 +412,8 @@ misses, so (jget response \"content\" 0 \"text\") is safe on any shape."
       (setf current
             (cond
               ((null current) (return nil))
-              ((hash-table-p current) (gethash (jkey key) current))
+              ((and (hash-table-p current) (or (stringp key) (symbolp key)))
+               (gethash (jkey key) current))
               ((and (vectorp current) (not (stringp current)) (integerp key))
                (when (< -1 key (length current))
                  (aref current key)))
