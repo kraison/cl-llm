@@ -5,5 +5,6 @@
   (:local-nicknames (#:llm #:cl-llm)
                     (#:c #:cl-llm.conditions))
   (:export
-   ;; grows in later tasks
+   #:score #:score-p #:score-value #:score-explanation
+   #:llm-eval-error #:eval-error-message
    ))
