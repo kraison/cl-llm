@@ -88,6 +88,39 @@ The tool loop runs automatically and is bounded by `*max-tool-turns*` (default
 > grants the model arbitrary execution against your store. Prefer narrow,
 > purpose-specific tools, and treat every tool argument as untrusted input.
 
+## Evaluation
+
+`cl-llm/eval` is a separate ASDF system for evaluating prompts and models: a
+dataset of cases run across a grid of variants and scored, with a text report
+at the end. It has its own package, `cl-llm.eval` (conventionally
+local-nicknamed `eval:`, as below), and its own offline test suite
+(`cl-llm/eval/tests`), which — like the core suite — runs entirely against
+`cl-llm:make-mock-provider` and needs no API key or network access.
+
+```lisp
+(eval:defsuite greeting-suite
+  :dataset (list (eval:make-case "hi" :expected "hi")
+                 (eval:make-case "yo" :expected "yo"))
+  :variants ((:model "claude-haiku-4-5" :temperature 0.0 :label "cold")
+             (:model "claude-haiku-4-5" :temperature 1.0 :label "warm"))
+  :scorers (eval:exact-match))
+
+(eval:report (eval:run-suite 'greeting-suite) :detail t)
+```
+
+`run-suite` runs every (case, variant) pair through `cl-llm:ask`, scores each
+response with the suite's scorers, and returns a `suite-result`; a failed
+`ask` call becomes an error cell rather than aborting the run. `report`
+prints a summary table (one row per variant, one column per scorer, each cell
+the mean score — `—` when a variant has no scoreable cells) and, with
+`:detail t`, a per-case breakdown showing each scorer's value and
+explanation. `suite-result` also has its own `print-object`, so evaluating a
+result at the REPL shows the same summary table.
+
+Beyond `exact-match`, `defscorer` defines custom scoring functions and
+`defjudge` builds an LLM-as-judge scorer that prompts a model to grade a
+response and parses back a numeric score.
+
 ### Local models
 
 ```lisp

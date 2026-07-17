@@ -19,4 +19,5 @@
    #:cell #:cell-case #:cell-variant-label #:cell-response #:cell-scores
    #:cell-error #:cell-score
    #:suite-result #:result-suite #:result-cells #:result-mean #:result-error-count
+   #:report
    ))

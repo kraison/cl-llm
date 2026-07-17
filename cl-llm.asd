@@ -82,7 +82,8 @@
                              (:file "scorer")
                              (:file "judge")
                              (:file "suite")
-                             (:file "run"))))
+                             (:file "run")
+                             (:file "report"))))
   :in-order-to ((test-op (test-op "cl-llm/eval/tests"))))
 
 (defsystem "cl-llm/eval/tests"
@@ -97,7 +98,8 @@
                              (:file "score")
                              (:file "scorer")
                              (:file "judge")
-                             (:file "run"))))
+                             (:file "run")
+                             (:file "report"))))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-eval-suite :cl-llm.eval.test))
