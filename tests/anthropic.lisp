@@ -30,7 +30,11 @@
     (is (null (nth-value 1 (gethash "temperature" body)))
         "temperature must not appear at all")
     (is (null (nth-value 1 (gethash "system" body))))
-    (is (null (nth-value 1 (gethash "tools" body))))))
+    (is (null (nth-value 1 (gethash "tools" body))))
+    (is (null (nth-value 1 (gethash "top_p" body)))
+        "top_p must not appear at all")
+    (is (null (nth-value 1 (gethash "stop_sequences" body)))
+        "stop_sequences must not appear at all")))
 
 (test anthropic-encode-system-is-top-level
   (let* ((p (test-anthropic-provider))
@@ -42,10 +46,13 @@
 (test anthropic-encode-parameters
   (let* ((p (test-anthropic-provider))
          (c (llm:make-conversation :messages (list (llm:make-message :user "hi"))
-                                   :parameters '(:temperature 0.2 :max-tokens 100)))
+                                   :parameters '(:temperature 0.2 :max-tokens 100
+                                                 :top-p 0.9 :stop ("STOP" "END"))))
          (body (json:parse (llm:encode-request p c))))
     (is (= 0.2d0 (json:jget body "temperature")))
-    (is (= 100 (json:jget body "max_tokens")))))
+    (is (= 100 (json:jget body "max_tokens")))
+    (is (= 0.9d0 (json:jget body "top_p")))
+    (is (equalp #("STOP" "END") (json:jget body "stop_sequences")))))
 
 (test anthropic-encode-stream-flag
   (let* ((p (test-anthropic-provider))
@@ -59,10 +66,24 @@
          (c (llm:make-conversation
              :messages (list (llm:make-message
                               :user (list (llm:make-tool-result-part "tu_1" "22C"))))))
-         (body (json:parse (llm:encode-request p c))))
+         (body (json:parse (llm:encode-request p c)))
+         (part (json:jget body "messages" 0 "content" 0)))
     (is (string= "tool_result" (json:jget body "messages" 0 "content" 0 "type")))
     (is (string= "tu_1" (json:jget body "messages" 0 "content" 0 "tool_use_id")))
-    (is (string= "22C" (json:jget body "messages" 0 "content" 0 "content")))))
+    (is (string= "22C" (json:jget body "messages" 0 "content" 0 "content")))
+    (is (null (nth-value 1 (gethash "is_error" part)))
+        "is_error must be absent, not false, when errorp is unset -- the jzon nil trap")))
+
+(test anthropic-encode-tool-result-error-flag
+  (let* ((p (test-anthropic-provider))
+         (c (llm:make-conversation
+             :messages (list (llm:make-message
+                              :user (list (llm:make-tool-result-part
+                                           "tu_1" "boom" :errorp t))))))
+         (body (json:parse (llm:encode-request p c)))
+         (part (json:jget body "messages" 0 "content" 0)))
+    (is (eq t (gethash "is_error" part))
+        "is_error must be a real JSON boolean true, not a string")))
 
 (test anthropic-decode-text-response
   (let* ((p (test-anthropic-provider))
