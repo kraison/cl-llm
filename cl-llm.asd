@@ -68,3 +68,27 @@
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! (find-symbol* :cl-llm-live-suite :cl-llm.live))
                (error "cl-llm live suite failed."))))
+
+(defsystem "cl-llm/eval"
+  :description "Evaluation harness for cl-llm: dataset x variants x scorers."
+  :license "MIT"
+  :depends-on ("cl-llm")
+  :serial t
+  :components ((:module "eval"
+                :serial t
+                :components ((:file "packages"))))
+  :in-order-to ((test-op (test-op "cl-llm/eval/tests"))))
+
+(defsystem "cl-llm/eval/tests"
+  :description "Offline test suite for cl-llm/eval."
+  :license "MIT"
+  :depends-on ("cl-llm/eval" "fiveam")
+  :serial t
+  :components ((:module "tests-eval"
+                :serial t
+                :components ((:file "packages")
+                             (:file "suite"))))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-eval-suite :cl-llm.eval.test))
+               (error "cl-llm/eval test suite failed."))))
