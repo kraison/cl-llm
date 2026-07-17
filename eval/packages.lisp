@@ -11,4 +11,7 @@
    #:scorer #:scorer-name #:scorer-function #:defscorer
    #:register-scorer #:find-scorer #:run-scorer #:exact-match
    #:defjudge #:parse-judge-score
+   #:variant #:parse-variant #:variant-label #:variant-args #:variant-prompt-fn
+   #:suite #:defsuite #:suite-name #:suite-dataset-fn #:suite-variants
+   #:suite-scorers #:register-suite #:find-suite
    ))

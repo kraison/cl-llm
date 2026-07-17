@@ -80,7 +80,8 @@
                              (:file "score")
                              (:file "case")
                              (:file "scorer")
-                             (:file "judge"))))
+                             (:file "judge")
+                             (:file "suite"))))
   :in-order-to ((test-op (test-op "cl-llm/eval/tests"))))
 
 (defsystem "cl-llm/eval/tests"
