@@ -43,9 +43,52 @@
 (test retry-gives-up-and-signals-rate-limit
   (with-fake-driver (d (:status 429 :body "{}") (:status 429 :body "{}")
                        (:status 429 :body "{}") (:status 429 :body "{}"))
-    (without-sleeping (ds)
-      (signals c:llm-rate-limit-error
-        (cl-llm::request-with-retry "https://x")))))
+    (let ((delays (without-sleeping (ds)
+                    (signals c:llm-rate-limit-error
+                      (cl-llm::request-with-retry "https://x")))))
+      (is (= 3 (length delays)) "Must sleep exactly 3 times (once per retry)")
+      (is (= 4 (length (fake-requests d)))
+          "Must make exactly 4 requests (1 initial + 3 retries) before giving up"))))
+
+(test retry-parse-retry-after-rejects-negative
+  "A negative Retry-After is not a usable value; treat it as absent so the
+computed exponential backoff is used instead."
+  (is (null (cl-llm::parse-retry-after '(("retry-after" . "-5"))))))
+
+(test retry-parse-retry-after-accepts-zero
+  "Retry-After: 0 means retry immediately -- it is a legitimate value, not
+an absent one, so it must not be rejected."
+  (is (eql 0 (cl-llm::parse-retry-after '(("retry-after" . "0"))))))
+
+(test retry-negative-retry-after-does-not-crash
+  "CL:SLEEP signals a SIMPLE-TYPE-ERROR on a negative argument. A negative
+Retry-After must never reach the sleep function verbatim -- it must fall
+back to the computed exponential backoff instead of crashing the retry
+loop with a raw type error."
+  (with-fake-driver (d (:status 429 :headers '(("retry-after" . "-5")) :body "{}")
+                       (:status 200 :body "{}"))
+    (let ((delays '()))
+      (finishes
+        (let ((cl-llm::*sleep-function*
+                (lambda (seconds)
+                  ;; Mirrors CL:SLEEP's real argument contract (a
+                  ;; non-negative real) without actually sleeping, so a
+                  ;; regression here reproduces the same class of error
+                  ;; SLEEP itself would signal on a negative delay.
+                  (unless (and (realp seconds) (>= seconds 0))
+                    (error 'type-error :datum seconds :expected-type '(real 0)))
+                  (push seconds delays))))
+          (cl-llm::request-with-retry "https://x")))
+      (is (equal '(1) (nreverse delays))
+          "Negative Retry-After must fall back to computed backoff (1s), not -5"))))
+
+(test retry-zero-retry-after-is-honored
+  "Retry-After: 0 must be honoured verbatim as an immediate retry, not
+treated as absent."
+  (with-fake-driver (d (:status 429 :headers '(("retry-after" . "0")) :body "{}")
+                       (:status 200 :body "{}"))
+    (let ((delays (without-sleeping (ds) (cl-llm::request-with-retry "https://x"))))
+      (is (equal '(0) delays) "Retry-After: 0 must be honoured as an immediate retry"))))
 
 (test retry-does-not-retry-400
   (with-fake-driver (d (:status 400 :body "{\"error\":{\"message\":\"bad\"}}"))

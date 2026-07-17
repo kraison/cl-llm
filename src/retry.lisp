@@ -24,9 +24,15 @@
       (min 60 (expt 2 (1- attempt)))))
 
 (defun parse-retry-after (headers)
+  "Parse the Retry-After header as a non-negative integer of seconds. A
+value that cannot be parsed, or that parses to a negative integer, is not
+a usable Retry-After and is treated as absent (NIL) so callers fall back
+to the computed exponential backoff."
   (let ((value (header-value headers "retry-after")))
     (when value
-      (ignore-errors (parse-integer value :junk-allowed t)))))
+      (let ((parsed (ignore-errors (parse-integer value :junk-allowed t))))
+        (when (and parsed (>= parsed 0))
+          parsed)))))
 
 (defun decode-error-body (body)
   "Pull (values MESSAGE TYPE CODE) out of an error BODY.
