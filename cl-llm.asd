@@ -24,7 +24,8 @@
                                            (:file "openai")))
                              (:file "tool-loop")
                              (:file "facade")
-                             (:file "streaming"))))
+                             (:file "streaming")
+                             (:file "mock"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
 (defsystem "cl-llm/tests"
@@ -49,7 +50,8 @@
                              (:file "facade")
                              (:file "tool-loop")
                              (:file "streaming")
-                             (:file "openai"))))
+                             (:file "openai")
+                             (:file "mock"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))
@@ -66,3 +68,39 @@
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! (find-symbol* :cl-llm-live-suite :cl-llm.live))
                (error "cl-llm live suite failed."))))
+
+(defsystem "cl-llm/eval"
+  :description "Evaluation harness for cl-llm: dataset x variants x scorers."
+  :license "MIT"
+  :depends-on ("cl-llm")
+  :serial t
+  :components ((:module "eval"
+                :serial t
+                :components ((:file "packages")
+                             (:file "score")
+                             (:file "case")
+                             (:file "scorer")
+                             (:file "judge")
+                             (:file "suite")
+                             (:file "run")
+                             (:file "report"))))
+  :in-order-to ((test-op (test-op "cl-llm/eval/tests"))))
+
+(defsystem "cl-llm/eval/tests"
+  :description "Offline test suite for cl-llm/eval."
+  :license "MIT"
+  :depends-on ("cl-llm/eval" "fiveam")
+  :serial t
+  :components ((:module "tests-eval"
+                :serial t
+                :components ((:file "packages")
+                             (:file "suite")
+                             (:file "score")
+                             (:file "scorer")
+                             (:file "judge")
+                             (:file "run")
+                             (:file "report"))))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-eval-suite :cl-llm.eval.test))
+               (error "cl-llm/eval test suite failed."))))

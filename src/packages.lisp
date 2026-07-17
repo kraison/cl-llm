@@ -105,4 +105,6 @@
    #:streamed-response #:streamed-response-open-p
    #:open-streamed-response #:close-streamed-response
    #:next-event #:next-delta #:finish-response
-   #:with-streamed-response #:do-deltas))
+   #:with-streamed-response #:do-deltas
+   ;; mock provider
+   #:mock-provider #:make-mock-provider #:mock-provider-responder))
