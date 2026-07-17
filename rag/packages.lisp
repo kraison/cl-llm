@@ -15,6 +15,8 @@
    #:chunk #:make-chunk #:chunk-text #:chunk-document-id #:chunk-metadata #:chunk-embedding
    #:hit #:make-hit #:hit-chunk #:hit-score
    #:split-text
+   #:store-add #:store-search #:store-count #:save-store #:load-store
+   #:memory-store #:make-memory-store #:store-dimension #:cosine
    ;; grows in later tasks
    ))
 
