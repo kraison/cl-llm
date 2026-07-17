@@ -153,6 +153,45 @@ content."
         (is (string= "lo" (llm:next-delta r)))
         (is (null (llm:next-delta r)))))))
 
+(test ask-openai-omits-max-tokens-by-default
+  "CT-1: ASK's :max-tokens keyword defaults to *max-tokens*, which is now NIL,
+so COLLECT-PARAMETERS omits :max-tokens entirely and the OpenAI-compatible
+encoder must send NO max_tokens key at all -- not max_tokens: 4096, which
+silently caps local-model output and sends a field the provider means to
+omit."
+  (with-fake-driver (d (:status 200 :body (openai-response-fixture)))
+    (let ((llm:*provider* (test-openai-provider)))
+      (llm:ask "hi")
+      (is (null (nth-value 1 (gethash "max_tokens" (last-request-body d))))
+          "max_tokens must be genuinely absent, not present as 4096"))))
+
+(test ask-openai-max-tokens-explicit-keyword-wins
+  (with-fake-driver (d (:status 200 :body (openai-response-fixture)))
+    (let ((llm:*provider* (test-openai-provider)))
+      (llm:ask "hi" :max-tokens 500)
+      (is (= 500 (json:jget (last-request-body d) "max_tokens"))))))
+
+(test ask-openai-max-tokens-special-variable-wins
+  (with-fake-driver (d (:status 200 :body (openai-response-fixture)))
+    (let ((llm:*provider* (test-openai-provider))
+          (llm:*max-tokens* 1000))
+      (llm:ask "hi")
+      (is (= 1000 (json:jget (last-request-body d) "max_tokens"))))))
+
+(test ask-streamed-openai-omits-max-tokens-by-default
+  "Streamed ASK (WITH-STREAMED-RESPONSE / OPEN-STREAMED-RESPONSE) must show
+the same absence as non-streaming ASK: *max-tokens* defaults to NIL, so the
+OpenAI-compatible encoder omits max_tokens on the streamed request body too."
+  (with-fake-driver
+      (d (:status 200
+          :body (format nil "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}~%~%~
+                             data: [DONE]~%~%")))
+    (let ((llm:*provider* (test-openai-provider)))
+      (llm:with-streamed-response (r "hi")
+        (llm:do-deltas (delta r) (declare (ignore delta))))
+      (is (null (nth-value 1 (gethash "max_tokens" (last-request-body d))))
+          "streamed request body must omit max_tokens, not send 4096"))))
+
 (test openai-stream-done-sentinel-terminates
   (let* ((p (test-openai-provider))
          (event (sse:make-sse-event nil "[DONE]")))

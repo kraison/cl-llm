@@ -13,8 +13,36 @@
   (is (typep llm:*provider* 'llm:anthropic-provider)
       "*provider* must default to an anthropic-provider")
   (is (null llm:*model*) "*model* defaults to NIL so the provider decides")
-  (is (= 4096 llm:*max-tokens*))
+  (is (null llm:*max-tokens*)
+      "*max-tokens* defaults to NIL, like every other body special, so the
+provider decides -- CT-1: the old (= 4096 ...) default leaked into the
+OpenAI-compatible encoder, which sends max_tokens only when the caller set
+one. Anthropic's required 4096 default now lives as a literal fallback in
+the Anthropic encoder itself, not here.")
   (is (= 8 llm:*max-tool-turns*)))
+
+(test ask-anthropic-defaults-max-tokens-to-4096
+  "CT-1: *max-tokens* is NIL by default, but ASK over an Anthropic provider
+must still carry max_tokens: 4096, because ASK binds its :max-tokens keyword
+default to *max-tokens* and the Anthropic encoder falls back to the literal
+4096 when both the explicit parameter and the special are unset."
+  (with-fake-driver (d (:status 200 :body (anthropic-response-fixture)))
+    (with-test-provider
+      (llm:ask "hi")
+      (is (= 4096 (json:jget (last-request-body d) "max_tokens"))))))
+
+(test ask-max-tokens-explicit-keyword-wins-on-anthropic
+  (with-fake-driver (d (:status 200 :body (anthropic-response-fixture)))
+    (with-test-provider
+      (llm:ask "hi" :max-tokens 500)
+      (is (= 500 (json:jget (last-request-body d) "max_tokens"))))))
+
+(test ask-max-tokens-special-variable-wins-on-anthropic
+  (with-fake-driver (d (:status 200 :body (anthropic-response-fixture)))
+    (with-test-provider
+      (let ((llm:*max-tokens* 1000))
+        (llm:ask "hi"))
+      (is (= 1000 (json:jget (last-request-body d) "max_tokens"))))))
 
 (test ask-returns-text-and-response
   (with-fake-driver (d (:status 200 :body (anthropic-response-fixture)))

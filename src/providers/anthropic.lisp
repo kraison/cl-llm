@@ -2,9 +2,15 @@
 
 (in-package #:cl-llm)
 
-(defvar *max-tokens* 4096
-  "Default max_tokens. Anthropic requires this field, so it has a real default
-rather than being omitted.")
+(defvar *max-tokens* nil
+  "Max-tokens override. NIL means let the provider decide, mirroring how
+*MODEL* defaults to NIL so PROVIDER-DEFAULT-MODEL decides. Anthropic still
+requires max_tokens on every request, but that requirement is Anthropic's
+alone -- ENCODE-REQUEST below falls back to a literal 4096 when neither an
+explicit :max-tokens parameter nor this special is set, so the required
+default lives with the provider that needs it instead of leaking into every
+other provider (notably the OpenAI-compatible one, where max_tokens is
+optional and must be omitted when unset).")
 
 ;;; Encoding
 
@@ -38,7 +44,7 @@ rather than being omitted.")
     (json:to-json
      (json:jobject
       :model (model-for provider conversation)
-      :max_tokens (or (getf parameters :max-tokens) *max-tokens*)
+      :max_tokens (or (getf parameters :max-tokens) *max-tokens* 4096)
       :messages (map 'vector
                      (lambda (message) (encode-message provider message))
                      (conversation-messages conversation))
