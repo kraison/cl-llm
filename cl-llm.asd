@@ -16,6 +16,7 @@
                              (:file "http")
                              (:file "retry")
                              (:file "core")
+                             (:file "tools")
                              (:file "protocol")
                              (:module "providers"
                               :serial t
@@ -39,7 +40,8 @@
                              (:file "retry")
                              (:file "core")
                              (:file "protocol")
-                             (:file "anthropic"))))
+                             (:file "anthropic")
+                             (:file "tools"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))

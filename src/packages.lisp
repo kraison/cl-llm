@@ -91,4 +91,8 @@
    #:provider-model #:provider-default-model #:provider-endpoint
    #:provider-headers #:provider-api-key #:provider-base-url
    #:encode-request #:decode-response #:parse-stream-event
-   #:chat-request #:stream-request))
+   #:chat-request #:stream-request
+   ;; tools
+   #:tool #:deftool #:find-tool #:register-tool #:unregister-tool
+   #:tool-name #:tool-description #:tool-schema #:tool-function
+   #:encode-tool #:call-tool))

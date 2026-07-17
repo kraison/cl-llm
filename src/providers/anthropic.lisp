@@ -101,6 +101,11 @@ condition escape as something the caller cannot handle generically."
              :payload (if (> (length body) 200) (subseq body 0 200) body)
              :message (format nil "Could not parse the response from ~a as JSON" url)))))
 
+(defmethod encode-tool ((provider anthropic-provider) tool)
+  (json:jobject :name (tool-name tool)
+                :description (tool-description tool)
+                :input_schema (tool-schema tool)))
+
 (defmethod chat-request ((provider anthropic-provider) conversation &key tools)
   (let ((url (provider-endpoint provider)))
     (multiple-value-bind (body status)
