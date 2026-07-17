@@ -228,10 +228,10 @@ git commit -m "feat: mock-provider for deterministic offline testing"
 ### Task 2: `cl-llm/eval` system skeleton and green harness
 
 **Files:**
-- Create: `eval/packages.lisp`, `eval/suite-def.lisp` (a placeholder suite-run file so the tests module has something; see note), `tests-eval/packages.lisp`, `tests-eval/suite.lisp`
+- Create: `eval/packages.lisp`, `tests-eval/packages.lisp`, `tests-eval/suite.lisp`
 - Modify: `cl-llm.asd` (add the `cl-llm/eval` and `cl-llm/eval/tests` systems)
 
-Note on directory names: the eval **source** lives in `eval/`, the eval **tests** in `tests-eval/` to avoid colliding with the core's `tests/`.
+Note on directory names: the eval **source** lives in `eval/`, the eval **tests** in `tests-eval/` to avoid colliding with the core's `tests/`. An ASDF module containing only `packages.lisp` is loadable, so no placeholder source file is needed — later tasks add their files to the module.
 
 **Interfaces:**
 - Consumes: `cl-llm` (the whole package).
@@ -253,19 +253,7 @@ Create `eval/packages.lisp`:
    ))
 ```
 
-- [ ] **Step 2: Write a placeholder eval source file**
-
-The `cl-llm/eval` system needs at least one source file after `packages`. Create `eval/suite-def.lisp` as a stub that later tasks will NOT use (Task 6 creates the real `suite.lisp`); it exists only so Task 2 produces a loadable system. Its whole content:
-
-```lisp
-;;;; eval/suite-def.lisp -- placeholder; real content arrives in later tasks.
-
-(in-package #:cl-llm.eval)
-```
-
-(Later tasks add real files; this stub keeps Task 2's system loadable and is harmless.)
-
-- [ ] **Step 3: Write the eval test harness**
+- [ ] **Step 2: Write the eval test harness**
 
 Create `tests-eval/packages.lisp`:
 
@@ -298,7 +286,7 @@ Create `tests-eval/suite.lisp`:
   (is (find-package '#:cl-llm)))
 ```
 
-- [ ] **Step 4: Add the ASDF systems**
+- [ ] **Step 3: Add the ASDF systems**
 
 Append to `cl-llm.asd`:
 
@@ -310,8 +298,7 @@ Append to `cl-llm.asd`:
   :serial t
   :components ((:module "eval"
                 :serial t
-                :components ((:file "packages")
-                             (:file "suite-def"))))
+                :components ((:file "packages"))))
   :in-order-to ((test-op (test-op "cl-llm/eval/tests"))))
 
 (defsystem "cl-llm/eval/tests"
@@ -329,7 +316,7 @@ Append to `cl-llm.asd`:
                (error "cl-llm/eval test suite failed."))))
 ```
 
-- [ ] **Step 5: Run the eval suite to verify it passes**
+- [ ] **Step 4: Run the eval suite to verify it passes**
 
 Run:
 
@@ -341,7 +328,7 @@ cd /Users/kraison/work/cl-llm && sbcl --non-interactive \
 
 Expected: FiveAM prints `Pass: 2 (100%)` and the process exits 0.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add cl-llm.asd eval/ tests-eval/
@@ -353,7 +340,7 @@ git commit -m "feat: cl-llm/eval system skeleton with green harness"
 ### Task 3: `score` and `llm-eval-error`
 
 **Files:**
-- Create: `eval/score.lisp`, add `(:file "score")` to the `cl-llm/eval` eval module (after `packages`, before `suite-def`)
+- Create: `eval/score.lisp`, add `(:file "score")` to the `cl-llm/eval` eval module (after `packages`)
 - Test: `tests-eval/score.lisp` (add `(:file "score")` to the tests-eval module)
 - Modify: `eval/packages.lisp` (export `score`, `make-score`, `score-value`, `score-explanation`, `llm-eval-error`; note the constructor is exported as `score` per the spec's `(score value &key explanation)`)
 
@@ -457,7 +444,7 @@ In `eval/packages.lisp`, add to the `cl-llm.eval` `:export` list:
 ```
 
 In `cl-llm.asd`, the `cl-llm/eval` eval module components become
-`packages, score, suite-def`; `cl-llm/eval/tests` tests-eval module gains
+`packages, score`; `cl-llm/eval/tests` tests-eval module gains
 `(:file "score")` after `suite`.
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -673,7 +660,7 @@ In `eval/packages.lisp`, add:
 ```
 
 In `cl-llm.asd`, the eval module components become
-`packages, score, case, scorer, suite-def`; tests-eval gains `(:file "scorer")`.
+`packages, score, case, scorer`; tests-eval gains `(:file "scorer")`.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
@@ -889,7 +876,8 @@ In `eval/packages.lisp`, add:
 ```
 
 In `cl-llm.asd`, the eval module components become
-`packages, score, case, scorer, judge, suite-def`; tests-eval gains `(:file "judge")`.
+`packages, score, case, scorer, judge`; `cl-llm/eval/tests` tests-eval module
+gains `(:file "judge")`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -915,10 +903,9 @@ git commit -m "feat: defjudge and the judge-reply parser"
 ### Task 6: variants, `suite`, `defsuite`
 
 **Files:**
-- Modify: `eval/suite-def.lisp` (replace the placeholder with the real content), `cl-llm.asd` (no change — `suite-def` already listed), `eval/packages.lisp`
+- Create: `eval/suite.lisp`
+- Modify: `cl-llm.asd` (add `(:file "suite")` to the eval module after `judge`), `eval/packages.lisp`
 - Test: `tests-eval/suite.lisp` (extend — it currently only has the harness test)
-
-Note: the real suite content replaces the `suite-def.lisp` placeholder created in Task 2. Keep the filename `suite-def.lisp` so the ASDF component list is unchanged.
 
 **Interfaces:**
 - Consumes: `find-scorer` (Task 4).
@@ -1009,10 +996,10 @@ Expected: FAIL — `eval:parse-variant` is undefined.
 
 - [ ] **Step 3: Write the implementation**
 
-Replace `eval/suite-def.lisp` with:
+Create `eval/suite.lisp`:
 
 ```lisp
-;;;; eval/suite-def.lisp -- variants and suites.
+;;;; eval/suite.lisp -- variants and suites.
 
 (in-package #:cl-llm.eval)
 
@@ -1085,7 +1072,7 @@ is a list of scorer designators, resolved now."
                    :scorers (list ,@(mapcar (lambda (s) `(find-scorer ',s)) scorers)))))
 ```
 
-- [ ] **Step 4: Export**
+- [ ] **Step 4: Export and wire up**
 
 In `eval/packages.lisp`, add:
 
@@ -1094,6 +1081,11 @@ In `eval/packages.lisp`, add:
    #:suite #:defsuite #:suite-name #:suite-dataset-fn #:suite-variants
    #:suite-scorers #:register-suite #:find-suite
 ```
+
+In `cl-llm.asd`, add `(:file "suite")` to the `cl-llm/eval` eval module after
+`judge`, so the components are `packages, score, case, scorer, judge, suite`.
+No new `tests-eval` file is added — the suite tests extend the existing
+`tests-eval/suite.lisp` (already in the tests-eval module from Task 2).
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -1110,7 +1102,7 @@ Expected: PASS — all suite tests green.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add cl-llm.asd eval/packages.lisp eval/suite-def.lisp tests-eval/suite.lisp
+git add cl-llm.asd eval/packages.lisp eval/suite.lisp tests-eval/suite.lisp
 git commit -m "feat: variants, suites, and defsuite"
 ```
 
@@ -1120,7 +1112,7 @@ git commit -m "feat: variants, suites, and defsuite"
 
 **Files:**
 - Create: `eval/run.lisp`
-- Modify: `cl-llm.asd` (add `run` to the eval module after `suite-def`), `eval/packages.lisp`
+- Modify: `cl-llm.asd` (add `run` to the eval module after `suite`), `eval/packages.lisp`
 - Test: `tests-eval/run.lisp`
 
 **Interfaces:**
@@ -1365,7 +1357,7 @@ In `eval/packages.lisp`, add:
 ```
 
 In `cl-llm.asd`, the eval module components become
-`packages, score, case, scorer, judge, suite-def, run`; tests-eval gains `(:file "run")`.
+`packages, score, case, scorer, judge, suite, run`; tests-eval gains `(:file "run")`.
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -1551,7 +1543,7 @@ In `eval/packages.lisp`, add:
 ```
 
 In `cl-llm.asd`, the eval module components become
-`packages, score, case, scorer, judge, suite-def, run, report`; tests-eval gains
+`packages, score, case, scorer, judge, suite, run, report`; tests-eval gains
 `(:file "report")`.
 
 - [ ] **Step 5: Run tests to verify they pass**
