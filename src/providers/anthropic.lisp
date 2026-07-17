@@ -116,3 +116,54 @@ condition escape as something the caller cannot handle generically."
                                                      :tools tools))
       (declare (ignore status))
       (decode-response provider (parse-body-or-signal body url)))))
+
+;;; Streaming
+
+(defmethod parse-stream-event ((provider anthropic-provider) event)
+  (let* ((data (sse:sse-event-data event))
+         (payload (handler-case (json:parse data)
+                    (error ()
+                      (error 'c:llm-parse-error :payload data
+                             :message "Malformed SSE data from Anthropic"))))
+         (type (json:jget payload "type")))
+    (cond
+      ((equal type "content_block_delta")
+       (let ((delta-type (json:jget payload "delta" "type")))
+         (cond
+           ((equal delta-type "text_delta")
+            (values :text (json:jget payload "delta" "text")))
+           ((equal delta-type "input_json_delta")
+            (values :tool-arguments (json:jget payload "delta" "partial_json")))
+           (t (values :ignore nil)))))
+      ((equal type "content_block_start")
+       (let ((block (json:jget payload "content_block")))
+         (if (equal (json:jget block "type") "tool_use")
+             (values :tool-use-start
+                     (make-tool-use-part (json:jget block "id")
+                                         (json:jget block "name")
+                                         nil))
+             (values :ignore nil))))
+      ((equal type "message_start")
+       (values :usage (decode-usage (json:jget payload "message"))))
+      ((equal type "message_delta")
+       ;; Anthropic reports output-token usage as a sibling of stop_reason in
+       ;; this same event, not on its own event -- hand it back as a third
+       ;; value so ACCUMULATE-EVENT can merge it without a separate :USAGE
+       ;; event kind.
+       (values :stop-reason
+               (anthropic-stop-reason (json:jget payload "delta" "stop_reason"))
+               (decode-usage payload)))
+      ((equal type "message_stop") (values :done nil))
+      ((equal type "error")
+       (error 'c:llm-api-error
+              :message (json:jget payload "error" "message")
+              :error-type (json:jget payload "error" "type")))
+      (t (values :ignore nil)))))
+
+(defmethod stream-request ((provider anthropic-provider) conversation &key tools)
+  (request-with-retry (provider-endpoint provider)
+                      :method :post
+                      :headers (provider-headers provider)
+                      :content (encode-request provider conversation
+                                               :stream t :tools tools)
+                      :stream t))

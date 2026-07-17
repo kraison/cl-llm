@@ -22,7 +22,8 @@
                               :serial t
                               :components ((:file "anthropic")))
                              (:file "tool-loop")
-                             (:file "facade"))))
+                             (:file "facade")
+                             (:file "streaming"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
 (defsystem "cl-llm/tests"
@@ -45,7 +46,8 @@
                              (:file "anthropic")
                              (:file "tools")
                              (:file "facade")
-                             (:file "tool-loop"))))
+                             (:file "tool-loop")
+                             (:file "streaming"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))

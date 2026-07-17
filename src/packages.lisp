@@ -100,4 +100,9 @@
    ;; facade
    #:ask #:send
    #:*provider* #:*model* #:*temperature* #:*top-p* #:*stop*
-   #:*system* #:*tools* #:*max-tool-turns*))
+   #:*system* #:*tools* #:*max-tool-turns*
+   ;; streaming
+   #:streamed-response #:streamed-response-open-p
+   #:open-streamed-response #:close-streamed-response
+   #:next-event #:next-delta #:finish-response
+   #:with-streamed-response #:do-deltas))
