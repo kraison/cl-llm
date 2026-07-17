@@ -61,3 +61,36 @@ Each response is an argument list for ENQUEUE-RESPONSE."
      ,@(mapcar (lambda (response) `(enqueue-response ,var ,@response)) responses)
      (let ((http:*driver* ,var))
        ,@body)))
+
+;;; Structural guard against a forgotten WITH-FAKE-DRIVER.
+;;;
+;;; HTTP:*DRIVER* defaults to a live DEXADOR-DRIVER (see src/http.lisp) --
+;;; that default is correct for production use, but if a later task's test
+;;; forgets WITH-FAKE-DRIVER, hitting that default means a real outbound
+;;; network call instead of an immediate, obvious failure. To make the
+;;; "offline by default" guarantee structural rather than conventional, the
+;;; test system below rebinds HTTP:*DRIVER* to NO-FAKE-DRIVER for the whole
+;;; suite; WITH-FAKE-DRIVER's LET rebinding overrides it per-test as usual.
+
+(defclass no-fake-driver (http:driver)
+  ()
+  (:documentation "Guards against a forgotten WITH-FAKE-DRIVER: every method
+signals immediately instead of allowing a request through to a real
+driver."))
+
+(defmethod http:perform-request ((driver no-fake-driver) url
+                                 &key method headers content timeout)
+  (declare (ignore url method headers content timeout))
+  (error "cl-llm test suite: no fake driver bound -- wrap this test in WITH-FAKE-DRIVER."))
+
+(defmethod http:perform-stream-request ((driver no-fake-driver) url
+                                        &key method headers content timeout)
+  (declare (ignore url method headers content timeout))
+  (error "cl-llm test suite: no fake driver bound -- wrap this test in WITH-FAKE-DRIVER."))
+
+(defvar *production-driver* http:*driver*
+  "HTTP:*DRIVER*'s real, production default -- captured here before the
+suite-wide override below replaces it, so tests can still confirm the
+genuine default is a DEXADOR-DRIVER.")
+
+(setf http:*driver* (make-instance 'no-fake-driver))

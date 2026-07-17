@@ -46,7 +46,8 @@
            #:dexador-driver
            #:*driver*
            #:perform-request
-           #:perform-stream-request))
+           #:perform-stream-request
+           #:normalize-response-headers))
 
 (defpackage #:cl-llm
   (:use #:cl)
