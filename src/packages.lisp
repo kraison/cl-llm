@@ -28,7 +28,8 @@
            #:to-json
            #:jget
            #:jobject
-           #:jarray))
+           #:jarray
+           #:jvalue))
 
 (defpackage #:cl-llm.sse
   (:use #:cl)

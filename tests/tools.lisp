@@ -163,3 +163,139 @@ hash-table or NIL."
     (eval '(llm:deftool tool-boom () "Always fails." (error "boom")))
     (let ((tool (llm:find-tool 'tool-boom)))
       (signals c:llm-tool-error (cl-llm::call-tool tool nil)))))
+
+;;; Code review Findings 1-3 on the argument-binding path.
+;;;
+;;; All three are silent-corruption bugs, not loud errors: an omitted
+;;; argument becomes NIL via GETF instead of the DEFUN's declared default; a
+;;; NIL :default serializes as JSON "false"; and every model-supplied key is
+;;; interned into :KEYWORD before being filtered, which is unbounded growth
+;;; driven by untrusted input.
+
+;;; Finding 1: omitted arguments must get their declared default (or signal
+;;; on a missing required argument), never a silently-substituted NIL.
+
+(test call-tool-fills-omitted-optional-with-its-declared-default
+  "An omitted optional with a declared :default must receive that default,
+the same value the DEFUN's lambda list would supply -- not NIL."
+  (with-clean-registry
+    (eval '(llm:deftool tool-limit ((limit :type integer :default 10))
+            "Report the limit."
+            limit))
+    (let ((tool (llm:find-tool 'tool-limit))
+          (args (make-hash-table :test 'equal)))
+      (is (= 10 (cl-llm::call-tool tool args))
+          "omitting LIMIT must yield its declared default 10, not NIL"))))
+
+(test call-tool-signals-on-missing-required-argument
+  "A required parameter the model did not supply must signal LLM-TOOL-ERROR
+naming the tool and the missing parameter -- the tool body must never run
+with a silently-NIL required argument."
+  (with-clean-registry
+    (eval '(llm:deftool tool-lookup ((node-id :type string) (depth :type integer :default 1))
+            "Look up a node."
+            (format nil "lookup ~a at depth ~a" node-id depth)))
+    (let ((tool (llm:find-tool 'tool-lookup))
+          (args (make-hash-table :test 'equal))
+          (ran nil))
+      (setf (gethash "depth" args) 3)
+      (handler-case
+          (progn (cl-llm::call-tool tool args) (setf ran t))
+        (c:llm-tool-error (e)
+          (is (string= "tool-lookup" (c:llm-error-tool-name e)))
+          (is (search "node-id" (c:llm-error-underlying e))
+              "the error must name the missing parameter")))
+      (is (not ran) "the tool body must never run without its required argument"))))
+
+(test call-tool-optional-not-truncated-when-earlier-optional-omitted
+  "If an EARLIER optional is omitted but a LATER one is supplied, the earlier
+one must still get its declared default and the later its supplied value --
+the argument list must not simply be truncated to the supplied keys."
+  (with-clean-registry
+    (eval '(llm:deftool tool-two-optionals
+            ((first-val :type integer :default 1) (second-val :type integer :default 2))
+            "Report both."
+            (list first-val second-val)))
+    (let ((tool (llm:find-tool 'tool-two-optionals))
+          (args (make-hash-table :test 'equal)))
+      (setf (gethash "second-val" args) 99)
+      (is (equal '(1 99) (cl-llm::call-tool tool args))
+          "FIRST-VAL must still default to 1 while SECOND-VAL binds to the ~
+           supplied 99"))))
+
+(test call-tool-distinguishes-json-false-from-absent
+  "A supplied value of JSON false (which reads as NIL) must be distinguishable
+from an omitted argument: the former must bind to NIL, the latter to the
+declared default."
+  (with-clean-registry
+    (eval '(llm:deftool tool-flag ((flag :type boolean :default t))
+            "Report the flag."
+            flag))
+    (let ((tool (llm:find-tool 'tool-flag))
+          (supplied-false (make-hash-table :test 'equal))
+          (omitted (make-hash-table :test 'equal)))
+      (setf (gethash "flag" supplied-false) nil)
+      (is (eq nil (cl-llm::call-tool tool supplied-false))
+          "an explicitly-supplied JSON false must bind to NIL, not the default")
+      (is (eq t (cl-llm::call-tool tool omitted))
+          "an omitted FLAG must bind to its declared default T"))))
+
+(test call-tool-omitted-optional-without-default-yields-nil
+  "An optional declared without :default (via :optional t) must yield NIL
+when omitted, matching its DEFUN default."
+  (with-clean-registry
+    (eval '(llm:deftool tool-note ((note :type string :optional t))
+            "Report the note."
+            note))
+    (let ((tool (llm:find-tool 'tool-note))
+          (args (make-hash-table :test 'equal)))
+      (is (eq nil (cl-llm::call-tool tool args))))))
+
+;;; Finding 2: a NIL :default must not serialize as JSON "false".
+
+(test schema-nil-default-omits-the-default-key
+  "A NIL :default (e.g. an array-typed parameter with no natural default)
+must not appear in the schema at all -- writing straight into the schema
+hash-table bypasses JOBJECT/JVALUE's nil-omission convention and previously
+serialized as the nonsense \"default\": false."
+  (let* ((schema (cl-llm::derive-schema '((tags :type (list string) :default nil))))
+         (prop (json:jget schema "properties" "tags")))
+    (multiple-value-bind (value presentp) (gethash "default" prop)
+      (declare (ignore value))
+      (is (not presentp)
+          "a NIL :default must omit the \"default\" key entirely"))))
+
+(test schema-falsy-non-nil-defaults-still-serialize
+  "0 and \"\" are not NIL and must survive as real schema defaults."
+  (let ((schema (cl-llm::derive-schema '((count :type integer :default 0)
+                                         (label :type string :default "")))))
+    (is (= 0 (json:jget schema "properties" "count" "default")))
+    (is (string= "" (json:jget schema "properties" "label" "default")))))
+
+(test schema-keyword-false-default-round-trips-as-json-false
+  "A :default :false must serialize as a real JSON boolean false (surviving a
+round trip through the same JOBJECT/JVALUE convention the rest of the
+codebase uses), not error and not silently uppercase to \"FALSE\"."
+  (let* ((schema (cl-llm::derive-schema '((flag :type boolean :default :false))))
+         (round-tripped (json:parse (json:to-json schema)))
+         (flag-schema (json:jget round-tripped "properties" "flag")))
+    (multiple-value-bind (value presentp) (gethash "default" flag-schema)
+      (is (eq t presentp) "the default key must survive serialization")
+      (is (eq nil value) "JSON false decodes back to NIL"))))
+
+;;; Finding 3: unrecognized model-supplied keys must never be interned.
+
+(test call-tool-does-not-intern-unknown-model-supplied-keys
+  "An unrecognized key from the model must be ignored without ever being
+interned into the :KEYWORD package -- keywords are not garbage-collected, and
+tool arguments are untrusted input."
+  (with-clean-registry
+    (eval '(llm:deftool tool-echo (city) "Echo city." city))
+    (let* ((tool (llm:find-tool 'tool-echo))
+           (args (make-hash-table :test 'equal))
+           (junk-name (symbol-name (gensym "JUNK-TOOL-ARG-"))))
+      (setf (gethash "city" args) "Boston")
+      (setf (gethash junk-name args) "ignored")
+      (is (string= "Boston" (cl-llm::call-tool tool args)))
+      (is (not (find-symbol junk-name :keyword))
+          "an unrecognized argument key must never be interned into :KEYWORD"))))

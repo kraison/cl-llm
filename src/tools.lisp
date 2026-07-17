@@ -26,8 +26,24 @@ uses this -- rather than re-deriving order from the schema's \"required\" list
 plus an alphabetical sort of whatever remains -- because a hash-table's
 iteration order is unspecified and an alphabetical sort does not match the
 Lisp function's actual (declaration-order) lambda list. Both would silently
-swap two optional parameters declared out of alphabetical order."))
+swap two optional parameters declared out of alphabetical order.")
+   (parameter-specs :initarg :parameter-specs :reader tool-parameter-specs
+                     :initform nil
+                     :documentation "PARAMETER-SPEC structs, one per declared
+parameter, in the same declaration order as PARAMETER-NAMES. Recorded by
+DEFTOOL at macroexpansion time so POSITIONAL-ARGUMENTS never has to
+re-derive requiredness or default values from the JSON schema -- which
+cannot represent \"no default\" and \"default is NIL\" distinguishably once
+the value has round-tripped through JSON."))
   (:documentation "A Lisp function the model may call, plus its schema."))
+
+(defstruct (parameter-spec (:constructor make-parameter-spec (name required-p default)))
+  "One DEFTOOL parameter's binding contract: its downcased NAME, whether the
+model must supply it (REQUIRED-P), and the Lisp-side value to bind when it is
+omitted (DEFAULT -- meaningless when REQUIRED-P is true)."
+  (name "" :type string)
+  (required-p t)
+  (default nil))
 
 (defvar *tools-registry* (make-hash-table :test 'equal)
   "Maps tool name (string) to TOOL.")
@@ -76,6 +92,30 @@ A spec list is distinguished by its second element being :type, :default, or
        (cdr spec)
        (not (member (second spec) '(:type :default :optional)))))
 
+(defun parameter-spec-of (spec)
+  "Return the PARAMETER-SPEC describing one deftool parameter SPEC.
+This is the single source of truth for both schema derivation and call-time
+binding, computed once at DEFTOOL macroexpansion time -- rather than each
+re-deriving requiredness or defaults independently (which is how a JSON
+schema and the actual Lisp call convention drift apart)."
+  (cond
+    ;; Bare symbol: required string.
+    ((symbolp spec)
+     (make-parameter-spec (string-downcase (string spec)) t nil))
+    ;; Enum: (units :celsius :fahrenheit)
+    ((enum-spec-p spec)
+     (make-parameter-spec (string-downcase (string (first spec))) t nil))
+    ;; Spec list: (depth :type integer :default 1 :optional t)
+    ((consp spec)
+     (destructuring-bind (name &key (type 'string) (default nil default-p)
+                                    (optional nil))
+         spec
+       (declare (ignore type))
+       (make-parameter-spec (string-downcase (string name))
+                             (not (or optional default-p))
+                             default)))
+    (t (error "Malformed tool parameter specification: ~s" spec))))
+
 (defun parameter-schema (spec)
   "Return (values NAME SCHEMA REQUIRED-P) for one parameter SPEC."
   (cond
@@ -96,8 +136,15 @@ A spec list is distinguished by its second element being :type, :default, or
                                     (optional nil))
          spec
        (let ((schema (type-schema type)))
-         (when default-p
-           (setf (gethash "default" schema) default))
+         ;; A NIL default (whether never declared, or declared explicitly as
+         ;; :default nil) must not appear in the schema at all: writing it
+         ;; straight into the hash-table bypasses JOBJECT/JVALUE's
+         ;; nil-omission convention, and jzon would serialize it as the
+         ;; nonsense "default": false (see src/json.lisp's header). Routing
+         ;; a real default through JVALUE lets :true/:false serialize as
+         ;; proper JSON booleans instead of erroring or uppercasing.
+         (when default
+           (setf (gethash "default" schema) (json:jvalue default)))
          (values (string-downcase (string name))
                  schema
                  (not (or optional default-p))))))
@@ -204,32 +251,52 @@ when to call this tool")
                        :description ,docstring
                        :schema (derive-schema ',parameters)
                        :function #',name
-                       :parameter-names ',(parameter-names parameters)))
+                       :parameter-names ',(parameter-names parameters)
+                       :parameter-specs (mapcar #'parameter-spec-of
+                                                 (remove '&optional ',parameters))))
        ',name)))
 
 ;;; Calling
 
-(defun positional-arguments (tool plist)
-  "Order PLIST's values to match TOOL's declared parameter order.
+(defun positional-arguments (tool arguments)
+  "Order ARGUMENTS (a hash-table of decoded JSON arguments, string keys, or
+NIL) to match TOOL's declared parameter order, per TOOL's PARAMETER-SPECS.
 The model returns a JSON object; the Lisp function takes positional
 arguments, so DEFTOOL's declaration order -- recorded on TOOL at
-macroexpansion time via PARAMETER-NAMES, not reconstructed from the schema's
-hash-table property order -- is the contract."
-  (loop for name in (tool-parameter-names tool)
-        collect (getf plist (intern (string-upcase name) :keyword))))
+macroexpansion time, not reconstructed from the schema's hash-table property
+order -- is the contract.
+
+Each declared parameter is looked up by its own (string) name via GETHASH's
+second, present-p, return value -- not the truthiness of the value -- so a
+supplied JSON false (which reads as NIL) is distinguishable from an omitted
+argument. An omitted required parameter signals LLM-TOOL-ERROR naming the
+tool and the missing parameter, rather than silently passing NIL into the
+tool body. An omitted optional gets its declared default -- the same value
+DEFUN's lambda list would supply -- never a bare NIL substituted for it.
+Matching is done directly against ARGUMENTS' string keys, so no
+model-supplied key, recognized or not, is ever interned (see the SECURITY
+note at the top of this file: tool arguments are untrusted input, and
+keywords are not garbage-collected)."
+  (loop for spec in (tool-parameter-specs tool)
+        collect
+        (multiple-value-bind (value presentp)
+            (if arguments (gethash (parameter-spec-name spec) arguments) (values nil nil))
+          (cond
+            (presentp value)
+            ((parameter-spec-required-p spec)
+             (error 'c:llm-tool-error
+                    :tool-name (tool-name tool)
+                    :underlying (format nil "Missing required parameter ~s."
+                                        (parameter-spec-name spec))))
+            (t (parameter-spec-default spec))))))
 
 (defun call-tool (tool arguments)
   "Invoke TOOL with ARGUMENTS, a hash-table of decoded JSON arguments.
-Signals LLM-TOOL-ERROR if the tool body signals, so a misbehaving tool cannot
-crash the loop opaquely."
-  (let ((values '()))
-    (maphash (lambda (key value)
-               (push (intern (string-upcase key) :keyword) values)
-               (push value values))
-             (or arguments (make-hash-table :test 'equal)))
-    (handler-case
-        (apply (tool-function tool) (positional-arguments tool (nreverse values)))
-      (c:llm-error (e) (error e))
-      (error (e)
-        (error 'c:llm-tool-error :tool-name (tool-name tool)
-                                 :underlying (princ-to-string e))))))
+Signals LLM-TOOL-ERROR if the tool body signals, or if a required argument is
+missing, so a misbehaving model or tool cannot crash the loop opaquely."
+  (handler-case
+      (apply (tool-function tool) (positional-arguments tool arguments))
+    (c:llm-error (e) (error e))
+    (error (e)
+      (error 'c:llm-tool-error :tool-name (tool-name tool)
+                               :underlying (princ-to-string e)))))
