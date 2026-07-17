@@ -64,6 +64,7 @@ Create `cl-llm.asd`:
   :depends-on ("dexador" "com.inuoe.jzon" "uiop")
   :serial t
   :components ((:module "src"
+                :serial t
                 :components ((:file "packages"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
@@ -73,6 +74,7 @@ Create `cl-llm.asd`:
   :depends-on ("cl-llm" "fiveam")
   :serial t
   :components ((:module "tests"
+                :serial t
                 :components ((:file "packages")
                              (:file "suite"))))
   :perform (test-op (op c)
@@ -410,7 +412,8 @@ misses, so (jget response \"content\" 0 \"text\") is safe on any shape."
       (setf current
             (cond
               ((null current) (return nil))
-              ((hash-table-p current) (gethash (jkey key) current))
+              ((and (hash-table-p current) (or (stringp key) (symbolp key)))
+               (gethash (jkey key) current))
               ((and (vectorp current) (not (stringp current)) (integerp key))
                (when (< -1 key (length current))
                  (aref current key)))
@@ -593,7 +596,7 @@ Create `src/conditions.lisp`:
   ((tool-name :initarg :tool-name :initform nil :reader llm-error-tool-name)
    (underlying :initarg :underlying :initform nil :reader llm-error-underlying))
   (:report (lambda (condition stream)
-             (format stream "Tool ~a signalled an error~@[: ~a~]"
+             (format stream "~:[A tool~;Tool ~:*~a~] signalled an error~@[: ~a~]"
                      (llm-error-tool-name condition)
                      (llm-error-underlying condition))))
   (:documentation "A tool function signalled during the tool loop."))
