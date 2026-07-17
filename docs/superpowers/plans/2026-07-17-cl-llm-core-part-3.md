@@ -231,24 +231,25 @@ In `src/packages.lisp`, add to the `cl-llm` `:export` list:
 
 - [ ] **Step 5: Add the files to the ASDF systems**
 
-`cl-llm` src gains `(:file "facade")` after the `providers` module. Note that
-`facade.lisp` references `find-tool`, `run-tool-loop`, and `*max-tool-turns*`,
-which arrive in Tasks 12 and 13; until then the system compiles with
-style-warnings and the facade tests that use `:tools` are not yet written.
+`cl-llm` src gains `(:file "facade")` after the `providers` module.
 
-To keep the build green now, add this temporary definition at the top of
-`src/facade.lisp`, to be **deleted in Task 13**:
+**Execution order:** Task 12 (`tools.lisp`) is implemented BEFORE this task, so
+`find-tool` genuinely exists here — no stub is needed or wanted.
+
+`facade.lisp` forward-references `run-tool-loop`, which arrives in Task 13. That
+is ordinary in Common Lisp: compiling `facade.lisp` emits an undefined-function
+style warning that resolves when `tool-loop.lisp` loads. Nothing calls
+`run-tool-loop` until `:tools` is passed, and no test in this task passes
+`:tools`, so the suite is green regardless.
+
+Add this defvar near the top of `src/facade.lisp` — it is a facade tunable and
+lives here permanently, not in `tool-loop.lisp`:
 
 ```lisp
-;;; Placeholder until Task 13 lands the real tool loop.
 (defvar *max-tool-turns* 8
-  "Maximum model-tool round trips before the loop gives up.")
-(defun find-tool (designator) designator)
-(defun run-tool-loop (provider conversation tools max-turns)
-  (declare (ignore tools max-turns))
-  (let ((response (chat-request provider conversation)))
-    (add-message conversation (response-message response))
-    response))
+  "Maximum model/tool round trips in one SEND before signalling LLM-TOOL-ERROR.
+The bound is not a nicety: without it a model that keeps requesting tools loops
+forever, burning tokens.")
 ```
 
 Also add `#:*max-tool-turns*` to the `cl-llm` `:export` list.
@@ -1126,7 +1127,7 @@ git commit -m "feat: deftool with typed lambda-list schema derivation"
 
 **Files:**
 - Create: `src/tool-loop.lisp`
-- Modify: `cl-llm.asd` (add `(:file "tool-loop")` after `streaming`), `src/facade.lisp` (**delete the Task 10 placeholders**)
+- Modify: `cl-llm.asd` (add `(:file "tool-loop")` after `providers/anthropic`, before `facade`)
 - Test: `tests/tool-loop.lisp`
 
 **Interfaces:**
@@ -1257,23 +1258,14 @@ cd /Users/kraison/work/cl-llm && sbcl --non-interactive \
   --eval '(asdf:test-system :cl-llm)'
 ```
 
-Expected: FAIL — the Task 10 placeholder `run-tool-loop` ignores tools, so
-`tool-loop-executes-tool-and-returns-final-answer` fails.
+Expected: FAIL — `run-tool-loop` is undefined (it is forward-referenced by
+`facade.lisp` from Task 10 but has no definition yet), so every test that passes
+`:tools` errors.
 
-- [ ] **Step 3: Delete the placeholders from `src/facade.lisp`**
+- [ ] **Step 3: Write the implementation**
 
-Remove this block added in Task 10:
-
-```lisp
-;;; Placeholder until Task 13 lands the real tool loop.
-(defvar *max-tool-turns* 8 ...)
-(defun find-tool (designator) designator)
-(defun run-tool-loop (provider conversation tools max-turns) ...)
-```
-
-- [ ] **Step 4: Write the implementation**
-
-Create `src/tool-loop.lisp`:
+Create `src/tool-loop.lisp`. Note that `*max-tool-turns*` is **already defined
+in `facade.lisp`** (Task 10) — do not redefine it here.
 
 ```lisp
 ;;;; tool-loop.lisp -- the bounded automatic tool loop.
@@ -1283,9 +1275,6 @@ Create `src/tool-loop.lisp`:
 ;;;; merely unlikely.
 
 (in-package #:cl-llm)
-
-(defvar *max-tool-turns* 8
-  "Maximum model/tool round trips in one SEND before signalling LLM-TOOL-ERROR.")
 
 (defun execute-tool-call (call tools)
   "Execute one TOOL-USE-PART, returning a TOOL-RESULT-PART.
@@ -1334,13 +1323,13 @@ RESPONSE whose stop reason is not :TOOL-USE."
                                       max-turns))))
 ```
 
-- [ ] **Step 5: Export and wire up the ASDF systems**
+- [ ] **Step 4: Export and wire up the ASDF systems**
 
 `#:*max-tool-turns*` is already exported (Task 10). `cl-llm` src gains
 `(:file "tool-loop")` after `streaming`. `cl-llm/tests` gains `(:file "tool-loop")`
 at the end.
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run:
 
@@ -1352,7 +1341,7 @@ cd /Users/kraison/work/cl-llm && sbcl --non-interactive \
 
 Expected: PASS — all 9 tool-loop tests green, and every earlier test still green.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add cl-llm.asd src/facade.lisp src/tool-loop.lisp tests/tool-loop.lisp

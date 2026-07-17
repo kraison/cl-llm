@@ -6,3 +6,4 @@
 *.lx32fsl
 *.lx64fsl
 .DS_Store
+.superpowers/
