@@ -18,23 +18,45 @@
 (defun any-errors-p (result)
   (some #'cell-error (result-cells result)))
 
+(defun scorer-column-width (result labels name)
+  "Column width for scorer NAME: the wider of its header and the widest
+formatted mean over LABELS, so the header and every value share one width."
+  (reduce #'max labels
+          :key (lambda (label) (length (format-mean (result-mean result label name))))
+          :initial-value (length name)))
+
+(defun errors-column-width (result labels)
+  "Column width for the errors column: the wider of the \"errors\" header and
+the widest formatted error count over LABELS."
+  (reduce #'max labels
+          :key (lambda (label) (length (princ-to-string (result-error-count result label))))
+          :initial-value (length "errors")))
+
 (defun render-summary (result stream)
-  "Render the summary table: variants x scorers, cells = mean."
+  "Render the summary table: variants x scorers, cells = mean. Every column
+(variant label, each scorer, errors) is sized from the data -- the wider of
+its header and its widest cell -- so headers and values always line up."
   (let* ((labels (variant-labels result))
          (scorers (scorer-names result))
          (errors-p (any-errors-p result))
          (label-width (reduce #'max labels :key #'length
-                                            :initial-value (length "variant"))))
+                                            :initial-value (length "variant")))
+         (scorer-widths (mapcar (lambda (name) (scorer-column-width result labels name))
+                                 scorers))
+         (errors-width (and errors-p (errors-column-width result labels))))
     (format stream "~&~va" label-width "variant")
-    (dolist (name scorers) (format stream "  ~10a" name))
-    (when errors-p (format stream "  ~6a" "errors"))
+    (loop for name in scorers
+          for width in scorer-widths
+          do (format stream "  ~va" width name))
+    (when errors-p (format stream "  ~va" errors-width "errors"))
     (terpri stream)
     (dolist (label labels)
       (format stream "~va" label-width label)
-      (dolist (name scorers)
-        (format stream "  ~10a" (format-mean (result-mean result label name))))
+      (loop for name in scorers
+            for width in scorer-widths
+            do (format stream "  ~va" width (format-mean (result-mean result label name))))
       (when errors-p
-        (format stream "  ~6d" (result-error-count result label)))
+        (format stream "  ~va" errors-width (princ-to-string (result-error-count result label))))
       (terpri stream))))
 
 (defmethod print-object ((result suite-result) stream)
