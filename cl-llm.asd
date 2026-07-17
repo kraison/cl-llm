@@ -20,7 +20,8 @@
                              (:file "protocol")
                              (:module "providers"
                               :serial t
-                              :components ((:file "anthropic")))
+                              :components ((:file "anthropic")
+                                           (:file "openai")))
                              (:file "tool-loop")
                              (:file "facade")
                              (:file "streaming"))))
@@ -47,7 +48,8 @@
                              (:file "tools")
                              (:file "facade")
                              (:file "tool-loop")
-                             (:file "streaming"))))
+                             (:file "streaming")
+                             (:file "openai"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))

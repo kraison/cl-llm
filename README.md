@@ -15,6 +15,17 @@ threads).
 (cl-llm:ask "Explain CLOS in one sentence")
 ```
 
+## Providers
+
+- **Anthropic** (`anthropic-provider`): the Messages API.
+- **OpenAI-compatible** (`openai-compatible-provider`): the chat-completions
+  shape used by llama.cpp, Ollama, vLLM, and LM Studio. Requires `:base-url`
+  and `:model`; an API key is optional (local servers usually accept none).
+  Non-streaming tool use is fully supported. Streaming tool calls are not:
+  `parse-stream-event` terminates cleanly on a `tool_calls` delta but does not
+  assemble it into a tool-use part, so streamed responses that need tool use
+  should fall back to `chat-request`.
+
 ## Testing
 
 ```sh
