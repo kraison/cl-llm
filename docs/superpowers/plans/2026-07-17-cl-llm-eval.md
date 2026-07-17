@@ -810,11 +810,9 @@ Returns (values VALUE RATIONALE). A number in [0,1] is taken as-is; a number in
   (multiple-value-bind (start end) (number-bounds text)
     (if (null start)
         (values nil text)
-        (let ((number (ignore-errors
-                       (let ((*read-default-float-format* 'double-float))
-                         (read-from-string (subseq text start end))))))
+        (let ((number (ignore-errors (read-from-string (subseq text start end)))))
           (if (realp number)
-              (values (max 0 (min 1 (if (> number 1) (/ number 100) number)))
+              (values (max 0 (min 1 (if (> number 1) (/ number 100.0) number)))
                       (string-trim " -:.," (concatenate 'string
                                                         (subseq text 0 start)
                                                         (subseq text end))))
