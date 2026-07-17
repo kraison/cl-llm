@@ -21,6 +21,7 @@
    #:retriever-embedder #:retriever-store
    #:index #:make-index #:index-embedder #:index-store #:index-chunker
    #:add-documents #:save-index #:load-index
+   #:assemble-context #:rag-ask #:make-retrieval-tool #:*grounding-instructions*
    ;; grows in later tasks
    ))
 
