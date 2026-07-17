@@ -19,14 +19,56 @@
     (is (= 2 (rag:store-count s)))))
 
 (test store-search-ranks-by-cosine
+  ;; The true nearest match ("east") is inserted LAST, not first, so a
+  ;; broken implementation that skips sorting and just truncates to
+  ;; insertion order would fail this test.
   (let ((s (rag:make-memory-store)))
-    (rag:store-add s (list (rag:make-chunk "east" :embedding (v 1 0))
-                           (rag:make-chunk "north" :embedding (v 0 1))
-                           (rag:make-chunk "northeast" :embedding (v 1 1))))
+    (rag:store-add s (list (rag:make-chunk "north" :embedding (v 0 1))
+                           (rag:make-chunk "northeast" :embedding (v 1 1))
+                           (rag:make-chunk "east" :embedding (v 1 0))))
     (let ((hits (rag:store-search s (v 1 0) 2)))
       (is (= 2 (length hits)))
       (is (string= "east" (rag:chunk-text (rag:hit-chunk (first hits)))))
       (is (>= (rag:hit-score (first hits)) (rag:hit-score (second hits)))))))
+
+(test store-add-atomic-on-invalid-embedding
+  ;; A mid-batch chunk with no embedding must abort the WHOLE batch --
+  ;; the earlier, already-valid chunks must not be indexed either.
+  (let ((s (rag:make-memory-store)))
+    (signals rag:llm-rag-error
+      (rag:store-add s (list (rag:make-chunk "good1" :embedding (v 1 0))
+                             (rag:make-chunk "bad" :embedding nil)
+                             (rag:make-chunk "good2" :embedding (v 0 1)))))
+    (is (= 0 (rag:store-count s)))))
+
+(test store-add-atomic-on-self-inconsistent-batch
+  ;; A batch that disagrees with itself on dimension (into an empty store,
+  ;; so there's no store dimension yet to check against) must be rejected
+  ;; in full, not partially indexed up to the bad chunk.
+  (let ((s (rag:make-memory-store)))
+    (signals rag:llm-rag-error
+      (rag:store-add s (list (rag:make-chunk "a" :embedding (v 1 0))
+                             (rag:make-chunk "b" :embedding (v 1 0 0)))))
+    (is (= 0 (rag:store-count s)))))
+
+(test store-add-atomic-on-store-dimension-conflict
+  ;; A batch that conflicts with an already-populated store's dimension
+  ;; must leave that store exactly as it was.
+  (let ((s (rag:make-memory-store)))
+    (rag:store-add s (list (rag:make-chunk "a" :embedding (v 1 0))))
+    (let ((count-before (rag:store-count s)))
+      (signals rag:llm-rag-error
+        (rag:store-add s (list (rag:make-chunk "b" :embedding (v 1 0))
+                               (rag:make-chunk "c" :embedding (v 1 0 0)))))
+      (is (= count-before (rag:store-count s))))))
+
+(test store-add-valid-batch-adds-all
+  ;; Regression: a fully-valid multi-chunk batch still adds every chunk.
+  (let ((s (rag:make-memory-store)))
+    (rag:store-add s (list (rag:make-chunk "a" :embedding (v 1 0))
+                           (rag:make-chunk "b" :embedding (v 0 1))
+                           (rag:make-chunk "c" :embedding (v 1 1))))
+    (is (= 3 (rag:store-count s)))))
 
 (test store-dimension-mismatch-signals
   (let ((s (rag:make-memory-store)))

@@ -39,12 +39,34 @@
                                    d (store-dimension store)))))))
 
 (defmethod store-add ((store memory-store) chunks)
-  (dolist (chunk chunks)
-    (let ((e (chunk-embedding chunk)))
-      (unless e
-        (error 'llm-rag-error :message "cannot index a chunk with no embedding"))
-      (check-dimension store e)
-      (vector-push-extend chunk (store-chunks store))))
+  ;; Atomic per call: validate the ENTIRE batch first, then mutate the
+  ;; store only if every chunk passed. This avoids leaving a partial add
+  ;; behind when a chunk in the middle of the batch is bad -- a caller
+  ;; that retries the same batch after fixing the offending chunk must
+  ;; not find the earlier chunks already indexed (and double-indexed).
+  (when chunks
+    (let ((dimension (store-dimension store)))
+      ;; Pass 1: check every chunk without touching the store. DIMENSION
+      ;; starts as the store's existing dimension (if any); otherwise the
+      ;; first chunk of this batch establishes it for the rest of the batch.
+      (dolist (chunk chunks)
+        (let ((e (chunk-embedding chunk)))
+          (unless e
+            (error 'llm-rag-error :message "cannot index a chunk with no embedding"))
+          (let ((d (length e)))
+            (if dimension
+                (unless (= d dimension)
+                  (error 'llm-rag-error
+                         :message (format nil "embedding dimension ~a does not match the ~
+                                               store's dimension ~a (indexing and querying ~
+                                               must use the same embedding model)"
+                                          d dimension)))
+                (setf dimension d)))))
+      ;; Pass 2: the whole batch is valid -- commit it.
+      (dolist (chunk chunks)
+        (vector-push-extend chunk (store-chunks store)))
+      (when (null (store-dimension store))
+        (setf (store-dimension store) dimension))))
   store)
 
 (defmethod store-search ((store memory-store) query-vector k)
