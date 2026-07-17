@@ -22,6 +22,9 @@ PROMPT-FN of (case) -> prompt string."
 (defun parse-variant (plist)
   "Turn a variant PLIST into a VARIANT, stripping the eval-only keys :label and
 :prompt-fn from the args forwarded to ASK."
+  (when (oddp (length plist))
+    (error 'llm-eval-error
+           :message (format nil "malformed variant plist (odd length): ~s" plist)))
   (let ((args '()) (label nil) (prompt-fn nil))
     (loop for (key value) on plist by #'cddr
           do (case key
