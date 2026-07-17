@@ -43,13 +43,19 @@ forever, burning tokens.")
 Both the user message and the assistant reply are appended to CONVERSATION.
 When TOOLS is non-nil the tool loop runs to completion before returning."
   (let ((provider (or (conversation-provider conversation) *provider*))
-        (resolved (resolve-tools tools)))
+        (resolved (resolve-tools tools))
+        (before (conversation-messages conversation))
+        (completed nil))
     (add-message conversation (make-message :user content))
-    (if resolved
-        (run-tool-loop provider conversation resolved max-tool-turns)
-        (let ((response (chat-request provider conversation)))
-          (add-message conversation (response-message response))
-          response))))
+    (unwind-protect
+         (prog1 (if resolved
+                    (run-tool-loop provider conversation resolved max-tool-turns)
+                    (let ((response (chat-request provider conversation)))
+                      (add-message conversation (response-message response))
+                      response))
+           (setf completed t))
+      (unless completed
+        (setf (conversation-messages conversation) before)))))
 
 (defun ask (prompt &key (provider *provider*)
                         (model *model*)
