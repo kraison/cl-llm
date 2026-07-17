@@ -77,4 +77,10 @@
    #:response #:response-content #:response-stop-reason #:response-model
    #:response-usage #:response-raw #:response-text #:response-tool-calls
    #:response-message
-   #:usage #:usage-input-tokens #:usage-output-tokens))
+   #:usage #:usage-input-tokens #:usage-output-tokens
+   ;; providers and protocol
+   #:provider #:anthropic-provider #:openai-compatible-provider
+   #:provider-model #:provider-default-model #:provider-endpoint
+   #:provider-headers #:provider-api-key #:provider-base-url
+   #:encode-request #:decode-response #:parse-stream-event
+   #:chat-request #:stream-request))
