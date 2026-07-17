@@ -60,6 +60,7 @@
   :depends-on ("cl-llm" "fiveam")
   :serial t
   :components ((:module "live"
+                :serial t
                 :components ((:file "packages")
                              (:file "live"))))
   :perform (test-op (op c)
