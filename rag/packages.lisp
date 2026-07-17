@@ -17,6 +17,8 @@
    #:split-text
    #:store-add #:store-search #:store-count #:save-store #:load-store
    #:memory-store #:make-memory-store #:store-dimension #:cosine
+   #:retriever #:retrieve #:dense-retriever #:make-dense-retriever
+   #:retriever-embedder #:retriever-store
    ;; grows in later tasks
    ))
 

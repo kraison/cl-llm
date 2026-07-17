@@ -116,7 +116,8 @@
                              (:file "embed")
                              (:file "document")
                              (:file "chunk")
-                             (:file "store"))))
+                             (:file "store")
+                             (:file "retrieve"))))
   :in-order-to ((test-op (test-op "cl-llm/rag/tests"))))
 
 (defsystem "cl-llm/rag/tests"
@@ -130,7 +131,8 @@
                              (:file "suite")
                              (:file "embed")
                              (:file "document")
-                             (:file "store"))))
+                             (:file "store")
+                             (:file "retrieve"))))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-rag-suite :cl-llm.rag.test))
