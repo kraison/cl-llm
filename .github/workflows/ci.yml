@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  offline-tests:
+    name: Offline suite (SBCL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SBCL and Quicklisp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sbcl curl
+          curl -sSLO https://beta.quicklisp.org/quicklisp.lisp
+          sbcl --non-interactive \
+               --load quicklisp.lisp \
+               --eval '(quicklisp-quickstart:install)'
+
+      - name: Run the offline test suite
+        run: |
+          sbcl --non-interactive \
+               --load ~/quicklisp/setup.lisp \
+               --eval '(push (truename ".") asdf:*central-registry*)' \
+               --eval '(ql:quickload :cl-llm/tests)' \
+               --eval '(asdf:test-system :cl-llm)'

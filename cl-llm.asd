@@ -53,3 +53,15 @@
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))
+
+(defsystem "cl-llm/live"
+  :description "Live-endpoint tests for cl-llm. Requires CL_LLM_LIVE=1."
+  :license "MIT"
+  :depends-on ("cl-llm" "fiveam")
+  :serial t
+  :components ((:module "live"
+                :components ((:file "packages")
+                             (:file "live"))))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run! (find-symbol* :cl-llm-live-suite :cl-llm.live))
+               (error "cl-llm live suite failed."))))
