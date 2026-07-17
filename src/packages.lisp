@@ -60,4 +60,6 @@
    #:llm-auth-error #:llm-timeout-error #:llm-parse-error #:llm-tool-error
    #:llm-error-status #:llm-error-body #:llm-error-url #:llm-error-code
    #:llm-error-type #:llm-error-message #:llm-error-retry-after
-   #:llm-error-payload #:llm-error-tool-name #:llm-error-underlying))
+   #:llm-error-payload #:llm-error-tool-name #:llm-error-underlying
+   #:*retries*
+   #:*timeout*))
