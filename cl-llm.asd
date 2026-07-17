@@ -24,7 +24,8 @@
                                            (:file "openai")))
                              (:file "tool-loop")
                              (:file "facade")
-                             (:file "streaming"))))
+                             (:file "streaming")
+                             (:file "mock"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
 (defsystem "cl-llm/tests"
@@ -49,7 +50,8 @@
                              (:file "facade")
                              (:file "tool-loop")
                              (:file "streaming")
-                             (:file "openai"))))
+                             (:file "openai")
+                             (:file "mock"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))
