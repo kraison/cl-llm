@@ -2,6 +2,7 @@
 
 (defpackage #:cl-llm.eval
   (:use #:cl)
+  (:shadow #:cell-error)
   (:local-nicknames (#:llm #:cl-llm)
                     (#:c #:cl-llm.conditions))
   (:export
@@ -14,4 +15,8 @@
    #:variant #:parse-variant #:variant-label #:variant-args #:variant-prompt-fn
    #:suite #:defsuite #:suite-name #:suite-dataset-fn #:suite-variants
    #:suite-scorers #:register-suite #:find-suite
+   #:*eval-map* #:run-suite
+   #:cell #:cell-case #:cell-variant-label #:cell-response #:cell-scores
+   #:cell-error #:cell-score
+   #:suite-result #:result-suite #:result-cells #:result-mean #:result-error-count
    ))
