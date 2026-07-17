@@ -16,7 +16,10 @@
                              (:file "http")
                              (:file "retry")
                              (:file "core")
-                             (:file "protocol"))))
+                             (:file "protocol")
+                             (:module "providers"
+                              :serial t
+                              :components ((:file "anthropic"))))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
 (defsystem "cl-llm/tests"
@@ -35,7 +38,8 @@
                              (:file "http")
                              (:file "retry")
                              (:file "core")
-                             (:file "protocol"))))
+                             (:file "protocol")
+                             (:file "anthropic"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))

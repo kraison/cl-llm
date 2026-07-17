@@ -70,6 +70,7 @@
    #:llm-error-payload #:llm-error-tool-name #:llm-error-underlying
    #:*retries*
    #:*timeout*
+   #:*max-tokens*
    ;; content parts
    #:content-part #:text-part #:tool-use-part #:tool-result-part
    #:part-text #:part-id #:part-name #:part-arguments
