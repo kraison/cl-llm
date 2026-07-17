@@ -52,6 +52,15 @@ stream of SSE data. The caller owns the stream and must close it."))
 (defgeneric model-for (provider conversation)
   (:documentation "The model to use for CONVERSATION on PROVIDER."))
 
+(defun strip-trailing-slash (base-url)
+  "BASE-URL with exactly one trailing slash removed, if present. Users
+routinely paste a base URL straight from a local server's docs, trailing
+slash and all; without this, endpoint concatenation produces a double slash."
+  (if (and (plusp (length base-url))
+           (char= #\/ (char base-url (1- (length base-url)))))
+      (subseq base-url 0 (1- (length base-url)))
+      base-url))
+
 (defmethod model-for ((provider provider) conversation)
   (or (and conversation (conversation-model conversation))
       (provider-model provider)
@@ -71,7 +80,7 @@ stream of SSE data. The caller owns the stream and must close it."))
 
 (defmethod provider-endpoint ((provider anthropic-provider) &key stream)
   (declare (ignore stream))
-  (concatenate 'string (provider-base-url provider) "/v1/messages"))
+  (concatenate 'string (strip-trailing-slash (provider-base-url provider)) "/v1/messages"))
 
 (defmethod provider-api-key ((provider anthropic-provider))
   (or (provider-api-key-slot provider)
@@ -89,8 +98,9 @@ stream of SSE data. The caller owns the stream and must close it."))
 
 (defclass openai-compatible-provider (provider)
   ((base-url :initarg :base-url :reader provider-base-url
-             :initform (error "openai-compatible-provider requires :base-url, ~
-                               e.g. \"http://localhost:11434/v1\".")))
+             :initform (error 'c:llm-api-error
+                        :message "openai-compatible-provider requires :base-url, ~
+                                  e.g. \"http://localhost:11434/v1\".")))
   (:documentation "Any endpoint speaking the OpenAI chat-completions API."))
 
 (defmethod provider-default-model ((provider openai-compatible-provider))
@@ -100,7 +110,7 @@ stream of SSE data. The caller owns the stream and must close it."))
 
 (defmethod provider-endpoint ((provider openai-compatible-provider) &key stream)
   (declare (ignore stream))
-  (concatenate 'string (provider-base-url provider) "/chat/completions"))
+  (concatenate 'string (strip-trailing-slash (provider-base-url provider)) "/chat/completions"))
 
 (defmethod provider-api-key ((provider openai-compatible-provider))
   "Optional: local servers accept any key or none."

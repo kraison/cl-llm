@@ -54,8 +54,15 @@
                     (#:http #:cl-llm.http)
                     (#:sse #:cl-llm.sse)
                     (#:c #:cl-llm.conditions))
+  (:import-from #:cl-llm.conditions
+                #:llm-error #:llm-http-error #:llm-api-error #:llm-rate-limit-error
+                #:llm-auth-error #:llm-timeout-error #:llm-parse-error #:llm-tool-error
+                #:llm-error-status #:llm-error-body #:llm-error-url #:llm-error-code
+                #:llm-error-type #:llm-error-message #:llm-error-retry-after
+                #:llm-error-payload #:llm-error-tool-name #:llm-error-underlying)
   (:export
-   ;; conditions (re-exported from cl-llm.conditions)
+   ;; conditions (genuinely re-exported from cl-llm.conditions via :import-from
+   ;; above -- these ARE the cl-llm.conditions symbols, not distinct ones)
    #:llm-error #:llm-http-error #:llm-api-error #:llm-rate-limit-error
    #:llm-auth-error #:llm-timeout-error #:llm-parse-error #:llm-tool-error
    #:llm-error-status #:llm-error-body #:llm-error-url #:llm-error-code

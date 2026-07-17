@@ -27,8 +27,29 @@
     (is (string= "http://localhost:11434/v1/chat/completions" (llm:provider-endpoint p)))
     (is (string= "llama3.1" (llm:provider-default-model p)))))
 
+(test anthropic-base-url-trailing-slash-is-stripped
+  "A trailing slash is exactly what a user pastes from a local server's docs
+and must not produce a double slash in the endpoint URL."
+  (let ((p (make-instance 'llm:anthropic-provider :base-url "http://localhost:11434/")))
+    (is (string= "http://localhost:11434/v1/messages" (llm:provider-endpoint p)))))
+
+(test openai-compatible-base-url-trailing-slash-is-stripped
+  (let ((p (make-instance 'llm:openai-compatible-provider
+                          :base-url "http://localhost:11434/v1/" :model "llama3.1")))
+    (is (string= "http://localhost:11434/v1/chat/completions" (llm:provider-endpoint p)))))
+
 (test openai-compatible-requires-base-url
-  (signals error (make-instance 'llm:openai-compatible-provider)))
+  (signals c:llm-api-error (make-instance 'llm:openai-compatible-provider)))
+
+(test openai-compatible-missing-base-url-message-is-comprehensible
+  "The error must still name :base-url and give the localhost example, even
+though it now signals a library condition instead of a bare SIMPLE-ERROR."
+  (handler-case
+      (make-instance 'llm:openai-compatible-provider)
+    (c:llm-api-error (e)
+      (let ((text (princ-to-string e)))
+        (is (search "base-url" text))
+        (is (search "http://localhost:11434/v1" text))))))
 
 (test anthropic-api-key-from-explicit-initarg
   (let ((p (make-instance 'llm:anthropic-provider :api-key "sk-test")))

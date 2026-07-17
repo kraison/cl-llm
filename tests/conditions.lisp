@@ -43,6 +43,24 @@ even when a secret-shaped value is present in the body."
     (is (string= "get-weather" (c:llm-error-tool-name e)))
     (is (search "get-weather" (princ-to-string e)))))
 
+(test public-condition-api-catches-and-reads
+  "The public CL-LLM package must genuinely re-export the condition symbols
+from CL-LLM.CONDITIONS -- not merely intern same-named symbols -- so that a
+consumer using only the LLM: nickname can catch and inspect errors this
+library signals. This is the exact pattern the README documents."
+  (is (eq 'llm:llm-error 'c:llm-error)
+      "LLM:LLM-ERROR must be EQ to C:LLM-ERROR (a true re-export), not a distinct symbol")
+  (is (eq 'llm:llm-error-status 'c:llm-error-status))
+  (let ((caught nil))
+    (handler-case
+        (error 'llm:llm-auth-error :status 401 :message "nope")
+      (llm:llm-error (e)
+        (setf caught e)))
+    (is (not (null caught))
+        "handler-case on LLM:LLM-ERROR must catch a signalled LLM-AUTH-ERROR")
+    (is (= 401 (llm:llm-error-status caught))
+        "LLM:LLM-ERROR-STATUS must be callable on the condition via the public package")))
+
 (test conditions-tool-error-report-without-tool-name
   "When TOOL-NAME is NIL (e.g. the bounded tool loop giving up after
 max-tool-turns), the report must still read as a sensible sentence and
