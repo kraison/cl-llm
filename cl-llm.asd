@@ -8,6 +8,7 @@
   :depends-on ("dexador" "com.inuoe.jzon" "uiop")
   :serial t
   :components ((:module "src"
+                :serial t
                 :components ((:file "packages"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
@@ -17,6 +18,7 @@
   :depends-on ("cl-llm" "fiveam")
   :serial t
   :components ((:module "tests"
+                :serial t
                 :components ((:file "packages")
                              (:file "suite"))))
   :perform (test-op (op c)
