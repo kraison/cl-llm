@@ -175,4 +175,5 @@
   :components ((:file "packages")
                (:file "suite"))
   :perform (test-op (o c)
-             (uiop:symbol-call :fiveam :run! :cl-llm-rag-vivace)))
+             (unless (uiop:symbol-call :fiveam :run! :cl-llm-rag-vivace)
+               (error "cl-llm/rag/vivace tests failed."))))
