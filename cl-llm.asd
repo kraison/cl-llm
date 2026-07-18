@@ -174,7 +174,8 @@
   :pathname "tests-vivace/"
   :components ((:file "packages")
                (:file "suite")
-               (:file "schema"))
+               (:file "schema")
+               (:file "store-scan"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run! :cl-llm-rag-vivace)
                (error "cl-llm/rag/vivace tests failed."))))
