@@ -1,0 +1,68 @@
+;;;; tests-vivace/store-cache.lisp
+
+(in-package #:cl-llm.rag.vivace/tests)
+(in-suite :cl-llm-rag-vivace)
+
+(defparameter *corpus*
+  '(("tm62"  . "the TM-62 is a Soviet anti-tank blast mine with a pressure fuze")
+    ("pfm1"  . "the PFM-1 is a small scatterable butterfly anti-personnel mine")
+    ("ozm72" . "the OZM-72 is a bounding fragmentation mine")))
+
+(defun load-corpus (store embedder)
+  (rag:store-add store
+                 (loop for (doc . text) in *corpus*
+                       collect (rag:make-chunk text :document-id doc
+                                               :embedding (rag:embed embedder text)))))
+
+(test cached-store-add-search-count
+  (with-temp-graph (g)
+    (let ((emb (rag:make-mock-embedder))
+          (store (v:make-graph-store g :strategy :cache)))
+      (load-corpus store emb)
+      (is (= 3 (rag:store-count store)))
+      (let ((hits (rag:store-search store (rag:embed emb "anti-tank mine") 1)))
+        (is (string= "tm62" (rag:chunk-document-id (rag:hit-chunk (first hits)))))))))
+
+(test scan-and-cache-return-identical-rankings
+  "The load-bearing invariant: strategy is invisible through the contract."
+  (let ((emb (rag:make-mock-embedder))
+        (queries '("anti-tank mine" "butterfly" "fragmentation bounding")))
+    (flet ((rankings (strategy)
+             (with-temp-graph (g)
+               (let ((store (v:make-graph-store g :strategy strategy)))
+                 (load-corpus store emb)
+                 (loop for q in queries
+                       collect (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h)))
+                                       (rag:store-search store (rag:embed emb q) 3)))))))
+      (is (equal (rankings :scan) (rankings :cache))))))
+
+(test scan-and-cache-agree-on-tied-scores
+  "Exact-tie parity: two chunks with IDENTICAL embeddings (so store-search
+must break the tie itself) must rank identically for the scan strategy (live
+graph scan, in the graph's own vertex iteration order) and the cache strategy
+(hydrated from the graph into insertion order), regardless of what order the
+graph itself happens to yield its vertices in. Populating the graph once via
+a writer store and then opening two FRESH strategy views on top of it (rather
+than two independent single-batch STORE-ADD calls) is what actually exercises
+the divergence: within one STORE-ADD batch, SCAN-GRAPH-STORE's PUSH-based
+collection and the graph's own traversal order happen to cancel out, masking
+the bug; hydrating a cache view from an already-populated graph does not get
+that accidental cancellation."
+  (let* ((emb (rag:make-mock-embedder))
+         (shared-embedding (rag:embed emb "anti-tank blast mine")))
+    (with-temp-graph (g)
+      ;; Populate the graph once, directly, with two exactly-tied chunks.
+      (let ((writer (v:make-graph-store g :strategy :scan)))
+        (rag:store-add writer
+                       (list (rag:make-chunk "tied chunk b" :document-id "tie-b"
+                                              :embedding shared-embedding)
+                             (rag:make-chunk "tied chunk a" :document-id "tie-a"
+                                              :embedding shared-embedding))))
+      ;; Open independent fresh views of the SAME graph under each strategy.
+      (let ((scan-view (v:make-graph-store g :strategy :scan))
+            (cache-view (v:make-graph-store g :strategy :cache)))
+        (flet ((ids (store k)
+                 (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h)))
+                         (rag:store-search store shared-embedding k))))
+          (is (equal (ids scan-view 1) (ids cache-view 1)))
+          (is (equal (ids scan-view 2) (ids cache-view 2))))))))

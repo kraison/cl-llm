@@ -25,9 +25,14 @@
     (rag:add-documents index
                        (list (rag:make-document "anti-tank mines and their fuzes" :id "mines")
                              (rag:make-document "field medical evacuation procedures" :id "medevac")))
+    ;; The query shares literal tokens with the "mines" document (the mock
+    ;; embedder is a bag-of-words hash with no stemming, so "mine"/"fuze"
+    ;; would NOT overlap with "mines"/"fuzes" and both candidates would score
+    ;; an exact 0.0 tie against "medevac" -- a degenerate, order-dependent
+    ;; assertion rather than a real ranking check).
     (is (string= "mines"
                  (rag:chunk-document-id
-                  (rag:hit-chunk (first (rag:retrieve index "tank mine fuze" :k 1))))))))
+                  (rag:hit-chunk (first (rag:retrieve index "anti-tank mines fuzes" :k 1))))))))
 
 ;;; A call-counting embedder wrapping a real MOCK-EMBEDDER, used to pin the
 ;;; performance contract that ADD-DOCUMENTS embeds all chunks across all
