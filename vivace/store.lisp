@@ -131,3 +131,15 @@ hydrates from any chunks already in the graph. Never opens or closes GRAPH."
       ;; reach the graph before the cache's :after catches it.
       (setf (graph-store-dimension store) (rag:store-dimension (cache-index store)))))
   store)
+
+(defun path->graph-name (path)
+  "A stable keyword graph name derived from PATH's last directory component."
+  (intern (string-upcase (car (last (pathname-directory (pathname path))))) :keyword))
+
+(defun open-graph-store (path &key (strategy :cache) (type 'rag-chunk) dimension
+                                   (name (path->graph-name path)))
+  "Open a standalone persistent graph at PATH and return a store over it. For the
+RAG-only case with no field-data graph to share. The caller owns closing the graph
+(via graph-store-graph)."
+  (make-graph-store (gdb:open-graph name (pathname path))
+                    :type type :strategy strategy :dimension dimension))
