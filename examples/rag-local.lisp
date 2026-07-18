@@ -68,8 +68,8 @@ corpus into it. The chat model is chosen separately, via *provider* in RUN."
           do (format t "  ~,3f  [~a]~%"
                      (rag:hit-score hit)
                      (getf (rag:chunk-metadata (rag:hit-chunk hit)) :title)))
-    ;; => 0.71x  [TM-62M]
-    ;;    0.6xx  [PFM-1]        ; a real embedder ranks the anti-tank mine first
+    ;; => 0.775  [TM-62M]       ; a real embedder ranks the anti-tank mine first
+    ;;    0.746  [PFM-1]         ; (nomic-embed-text; exact scores vary by model version)
 
     ;; 2. Grounded answer from the real model, constrained to the retrieved
     ;;    sources. A caller :system persona is composed WITH the grounding rules,
@@ -83,7 +83,7 @@ corpus into it. The chat model is chosen separately, via *provider* in RUN."
               (mapcar (lambda (h) (getf (rag:chunk-metadata (rag:hit-chunk h)) :title))
                       hits)))
     ;; => The TM-62M uses a pressure-activated fuze [1].
-    ;;      sources: TM-62M, PFM-1, OZM-72
+    ;;      sources: TM-62M, OZM-72, PFM-1
 
     ;; 3. Abstention: an out-of-corpus question. A well-behaved model declines
     ;;    rather than inventing an answer -- the behavior the grounding prompt asks
