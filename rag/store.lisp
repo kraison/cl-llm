@@ -69,12 +69,22 @@
         (setf (store-dimension store) dimension))))
   store)
 
+(defun hit< (a b)
+  "Deterministic ranking order: higher score first; ties broken by DOCUMENT-ID
+so scan and cache strategies (which iterate chunks in different orders) agree
+on an exact tie."
+  (let ((sa (hit-score a)) (sb (hit-score b)))
+    (cond ((> sa sb) t)
+          ((< sa sb) nil)
+          (t (string< (or (chunk-document-id (hit-chunk a)) "")
+                      (or (chunk-document-id (hit-chunk b)) ""))))))
+
 (defmethod store-search ((store memory-store) query-vector k)
   (when (plusp (store-count store))
     (check-dimension store query-vector))
   (let ((hits (loop for chunk across (store-chunks store)
                     collect (make-hit chunk (cosine query-vector (chunk-embedding chunk))))))
-    (subseq (sort hits #'> :key #'hit-score) 0 (min k (length hits)))))
+    (subseq (stable-sort hits #'hit<) 0 (min k (length hits)))))
 
 (defmethod store-count ((store memory-store))
   (length (store-chunks store)))

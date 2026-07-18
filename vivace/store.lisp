@@ -53,6 +53,16 @@ the graph. Returns the dimension the batch establishes. Signals rag:llm-rag-erro
     (map-chunk-vertices store (lambda (v) (declare (ignore v)) (incf n)))
     n))
 
+(defun hit< (a b)
+  "Deterministic ranking order: higher score first; ties broken by DOCUMENT-ID.
+Mirrors CL-LLM.RAG's memory-store comparator so scan and cache stores (which
+iterate chunks in different orders) agree on an exact tie."
+  (let ((sa (rag:hit-score a)) (sb (rag:hit-score b)))
+    (cond ((> sa sb) t)
+          ((< sa sb) nil)
+          (t (string< (or (rag:chunk-document-id (rag:hit-chunk a)) "")
+                      (or (rag:chunk-document-id (rag:hit-chunk b)) ""))))))
+
 (defmethod rag:store-search ((store scan-graph-store) query-vector k)
   (when (and (graph-store-dimension store)
              (/= (length query-vector) (graph-store-dimension store)))
@@ -66,7 +76,7 @@ the graph. Returns the dimension the batch establishes. Signals rag:llm-rag-erro
        (let ((chunk (vertex->chunk vertex)))
          (push (rag:make-hit chunk (rag:cosine query-vector (rag:chunk-embedding chunk)))
                hits))))
-    (subseq (sort hits #'> :key #'rag:hit-score) 0 (min k (length hits)))))
+    (subseq (stable-sort hits #'hit<) 0 (min k (length hits)))))
 
 (defmethod hydrate ((store scan-graph-store))
   ;; Record the dimension from the first existing chunk, if any. Do NOT do a
