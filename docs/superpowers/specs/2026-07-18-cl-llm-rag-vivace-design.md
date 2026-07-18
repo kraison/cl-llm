@@ -221,7 +221,21 @@ VG's geohash spatial index (a geometry slot marked `:index t` auto-indexes by
 location) is available for C's "ordnance within N km of this grid" joins. A builds
 the substrate; C builds the joins.
 
-## 12. Constraints
+## 12. Deferred: subclassing RAG objects
+
+Carrying extra data by **subclassing** `document`/`chunk`/`hit` was considered and
+**deferred** — v1 uses the objects as-is (the `metadata` plist is the extension
+point). If a real need emerges, the change splits in two: (a) a `cl-llm/rag` core
+change to make the objects subclassable and the pipeline construct them (cleanest
+as a generic `chunk-document` specialised on a document subclass, so dispatch emits
+the right chunk subclass); and (b) a graph-store serialization story — either a
+**blob** slot holding the whole chunk object (arbitrary subclasses, works with the
+current structs, extra slots not individually queryable) or **MOP slot-mirroring**
+(every slot queryable, best for C's joins/spatial, but needs CLOS + MOP + dynamic
+schema). Revisit alongside slice C, when the set of graph-queryable fields is
+concrete — guessing them now is where the MOP machinery would be over-built.
+
+## 13. Constraints
 
 Lisp sources use spaces only, never tabs. MIT. SBCL-first. **This is the one system
 that is not thread-free** — it depends on `graph-db`, which uses threads and
