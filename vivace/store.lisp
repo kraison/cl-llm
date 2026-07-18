@@ -99,7 +99,35 @@ hydrates from any chunks already in the graph. Never opens or closes GRAPH."
     (hydrate store)
     store))
 
-;; Placeholder until Task 4 implements the cached strategy.
+(defclass cached-graph-store (graph-store)
+  ((index :initarg :index :reader cache-index))
+  (:documentation "Composes a rag:memory-store as an in-RAM search index."))
+
 (defun make-cached-graph-store (graph type dimension)
-  (declare (ignore graph type dimension))
-  (error "cached-graph-store is implemented in Task 4"))
+  (make-instance 'cached-graph-store
+                 :graph graph :type type :dimension dimension
+                 :index (rag:make-memory-store)))
+
+;; store-add's primary method (on graph-store) validates + writes to the graph;
+;; this :after mirrors the same chunks into the in-RAM index for search.
+(defmethod rag:store-add :after ((store cached-graph-store) chunks)
+  (when chunks
+    (rag:store-add (cache-index store) chunks)))
+
+(defmethod rag:store-count ((store cached-graph-store))
+  (rag:store-count (cache-index store)))
+
+(defmethod rag:store-search ((store cached-graph-store) query-vector k)
+  (rag:store-search (cache-index store) query-vector k))
+
+(defmethod hydrate ((store cached-graph-store))
+  (let ((chunks '()))
+    (map-chunk-vertices store (lambda (v) (push (vertex->chunk v) chunks)))
+    (when chunks
+      (rag:store-add (cache-index store) (nreverse chunks))
+      ;; Sync the abstract dimension slot so the primary store-add's dimension
+      ;; check (which runs BEFORE the graph write) validates post-hydrate adds
+      ;; against the hydrated dimension -- otherwise a wrong-dimension chunk could
+      ;; reach the graph before the cache's :after catches it.
+      (setf (graph-store-dimension store) (rag:store-dimension (cache-index store)))))
+  store)
