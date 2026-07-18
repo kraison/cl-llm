@@ -250,16 +250,22 @@ a reopened graph."
     ;;     graph already has the type AND the constructor is already generated.
     (unless (and (gdb:lookup-node-type-by-name tsym :vertex :graph graph)
                  (fboundp (intern (format nil "MAKE-~A" (string type)) :graph-db)))
-      (let ((*package* (find-package :graph-db)))
-        (handler-bind ((warning #'muffle-warning))
-          (eval `(gdb:def-vertex ,tsym ()
-                   ((,(intern "TEXT" :graph-db) :type string)
-                    (,(intern "DOCUMENT-ID" :graph-db))
-                    (,(intern "METADATA" :graph-db))
-                    (,(intern "EMBEDDING" :graph-db)
-                     :type (simple-array double-float (*))))
-                   ,(gdb:graph-name graph)))))
-      (gdb::update-schema graph))
+      ;; gdb:*graph* MUST be bound here: def-vertex's auto-instantiate step and
+      ;; graph-db::update-schema's internal instantiate-node-type both call
+      ;; lookup-node-type-by-name with an implicit :graph (gdb:*graph*) default
+      ;; rather than threading GRAPH through -- unbound it resolves to NIL and
+      ;; crashes in (schema NIL). Dynamic let, restored on exit.
+      (let ((gdb:*graph* graph))
+        (let ((*package* (find-package :graph-db)))
+          (handler-bind ((warning #'muffle-warning))
+            (eval `(gdb:def-vertex ,tsym ()
+                     ((,(intern "TEXT" :graph-db) :type string)
+                      (,(intern "DOCUMENT-ID" :graph-db))
+                      (,(intern "METADATA" :graph-db))
+                      (,(intern "EMBEDDING" :graph-db)
+                       :type (simple-array double-float (*))))
+                     ,(gdb:graph-name graph)))))
+        (gdb::update-schema graph)))
     tsym))
 
 (defun chunk->vertex (graph type chunk)
@@ -631,8 +637,12 @@ reopened graph hydrates from it."
                     (is (= 1 (rag:store-count store2)))          ; hydrated
                     (let ((hit (first (rag:store-search store2 (rag:embed emb "TM-62") 1))))
                       (is (string= "tm62" (rag:chunk-document-id (rag:hit-chunk hit))))
-                      (is (equal '(simple-array double-float (*))
-                                 (type-of (rag:chunk-embedding (rag:hit-chunk hit)))))))
+                      ;; Load-bearing: after a real disk reopen the slot deserializes
+                      ;; to a T-vector, so this passes only because vertex->chunk
+                      ;; coerces via rag:as-embedding. Use typep, NOT (type-of ...):
+                      ;; SBCL's type-of reports a concrete dimension, never (*).
+                      (is (typep (rag:chunk-embedding (rag:hit-chunk hit))
+                                 '(simple-array double-float (*))))))
                (gdb:close-graph g2))))
       (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
 
