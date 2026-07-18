@@ -70,8 +70,10 @@ this back to always passing the keywords."
     (list :read-timeout timeout :connect-timeout timeout)))
 
 (defmacro with-translated-errors ((url) &body body)
-  "Translate dexador's non-2xx conditions into return values, and both
-connect-phase and read-phase timeouts into LLM-TIMEOUT-ERROR.
+  "Translate dexador's non-2xx conditions into return values, both
+connect-phase and read-phase timeouts into LLM-TIMEOUT-ERROR, and
+connection-level socket failures (refused, reset, unreachable, DNS
+failure) into LLM-HTTP-ERROR.
 
 USOCKET:TIMEOUT-ERROR covers connect-phase timeouts (usocket wraps those
 via WITH-MAPPED-CONDITIONS). It does NOT cover read-phase timeouts:
@@ -80,7 +82,21 @@ SB-SYS:IO-TIMEOUT directly when it expires mid-response -- that condition
 is not a subtype of USOCKET:TIMEOUT-ERROR, so it needs its own handler.
 That handler is SBCL-specific; on other implementations (ECL, Clozure)
 the #+SBCL reader conditional drops the whole clause, leaving connect-phase
-translation intact and the macro still compiling cleanly."
+translation intact and the macro still compiling cleanly.
+
+A connection that is refused, reset, or otherwise unreachable is not a
+timeout -- usocket signals a subtype of USOCKET:SOCKET-ERROR for those
+(e.g. USOCKET:CONNECTION-REFUSED-ERROR), and a subtype of USOCKET:NS-ERROR
+for DNS resolution failures (that hierarchy is disjoint from
+SOCKET-ERROR). Both are transport failures with no HTTP status, so they
+translate to LLM-HTTP-ERROR (a transport-or-status failure; a NIL :STATUS
+is documented as fine) rather than being conflated with LLM-TIMEOUT-ERROR.
+
+USOCKET:TIMEOUT-ERROR is itself a subtype of USOCKET:SOCKET-ERROR, so the
+SOCKET-ERROR clause below must come after the TIMEOUT-ERROR clause --
+HANDLER-CASE tries clauses in order, and the more specific timeout
+handler must win. DEX:HTTP-REQUEST-FAILED is not a usocket condition at
+all, so there is no overlap with the first clause either."
   (let ((error-var (gensym "E")))
     `(handler-case (progn ,@body)
        (dex:http-request-failed (,error-var)
@@ -93,7 +109,11 @@ translation intact and the macro still compiling cleanly."
        #+sbcl
        (sb-sys:io-timeout (,error-var)
          (declare (ignore ,error-var))
-         (error 'c:llm-timeout-error :url ,url)))))
+         (error 'c:llm-timeout-error :url ,url))
+       (usocket:socket-error (,error-var)
+         (error 'c:llm-http-error :url ,url :body (princ-to-string ,error-var)))
+       (usocket:ns-error (,error-var)
+         (error 'c:llm-http-error :url ,url :body (princ-to-string ,error-var))))))
 
 (defmethod perform-request ((driver dexador-driver) url
                             &key (method :post) headers content timeout)

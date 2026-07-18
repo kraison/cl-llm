@@ -151,6 +151,45 @@ Everything signals under `cl-llm:llm-error`: `llm-http-error`, `llm-api-error`,
 `Retry-After`, bounded by `*retries*`. A `retry-request` restart is established
 around every request.
 
+## Retrieval (RAG)
+
+`cl-llm/rag` is a separate ASDF system: chunking, embedding, a vector store,
+and grounded answering on top of `cl-llm`. It has its own package,
+`cl-llm.rag` (conventionally local-nicknamed `rag:`, as below), and its own
+offline test suite (`cl-llm/rag/tests`), which runs entirely against
+`rag:make-mock-embedder` and `cl-llm:make-mock-provider` — no API key or
+network access needed.
+
+```lisp
+(let ((index (rag:make-index
+              :embedder (rag:make-openai-compatible-embedder
+                         :base-url "http://localhost:11434/v1"
+                         :model "nomic-embed-text"))))
+  (rag:add-documents index
+                     (list (rag:make-document
+                            "The TM-62 is a Soviet anti-tank blast mine with a pressure fuze."
+                            :id "tm62" :metadata (list :title "TM-62"))))
+  (multiple-value-bind (answer hits) (rag:rag-ask index "What fuze does the TM-62 use?")
+    (values answer hits)))
+```
+
+`make-index` combines an embedder, a chunker, and a vector store;
+`add-documents` chunks, embeds (in a single batch call), and stores.
+`rag-ask` retrieves the top `:k` chunks, assembles them into a numbered,
+cited context block (`assemble-context`), and asks the model to answer using
+ONLY that context — citing sources by number and saying "not in the provided
+sources" instead of guessing when the retrieved passages don't support an
+answer. That grounding instruction (`*grounding-instructions*`) is always
+included, even when a caller supplies its own `:system` prompt; the two are
+composed, never one replacing the other. `rag-ask` returns
+`(values answer hits)`, so callers can show citations alongside the retrieved
+sources. For agentic use, `make-retrieval-tool` wraps an index as a
+`cl-llm:tool` the model can call to fetch its own cited context.
+
+A separate live suite (`cl-llm/rag/live`) exercises a real embeddings
+endpoint (e.g. Ollama with `nomic-embed-text`) and skips cleanly with
+`CL_LLM_LIVE` unset — the same gating convention as `cl-llm/live`.
+
 ## Testing
 
 ```sh
@@ -175,7 +214,6 @@ credentials are never blocked.
 
 Under development. Currently **not** implemented:
 
-- Embeddings, RAG, and vector storage
 - Hosted fine-tuning jobs
 - Local training / LoRA (planned; see the design doc)
 - Multimodal input — the content model supports it, the providers do not yet

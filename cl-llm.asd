@@ -104,3 +104,54 @@
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-eval-suite :cl-llm.eval.test))
                (error "cl-llm/eval test suite failed."))))
+
+(defsystem "cl-llm/rag"
+  :description "Retrieval-augmented generation for cl-llm."
+  :license "MIT"
+  :depends-on ("cl-llm")
+  :serial t
+  :components ((:module "rag"
+                :serial t
+                :components ((:file "packages")
+                             (:file "embed")
+                             (:file "document")
+                             (:file "chunk")
+                             (:file "store")
+                             (:file "retrieve")
+                             (:file "index")
+                             (:file "answer"))))
+  :in-order-to ((test-op (test-op "cl-llm/rag/tests"))))
+
+(defsystem "cl-llm/rag/tests"
+  :description "Offline test suite for cl-llm/rag."
+  :license "MIT"
+  :depends-on ("cl-llm/rag" "fiveam")
+  :serial t
+  :components ((:module "tests-rag"
+                :serial t
+                :components ((:file "packages")
+                             (:file "suite")
+                             (:file "embed")
+                             (:file "document")
+                             (:file "store")
+                             (:file "retrieve")
+                             (:file "index")
+                             (:file "answer"))))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-rag-suite :cl-llm.rag.test))
+               (error "cl-llm/rag test suite failed."))))
+
+(defsystem "cl-llm/rag/live"
+  :description "Live embeddings tests for cl-llm/rag. Requires CL_LLM_LIVE=1."
+  :license "MIT"
+  :depends-on ("cl-llm/rag" "fiveam")
+  :serial t
+  :components ((:module "live-rag"
+                :serial t
+                :components ((:file "packages")
+                             (:file "live"))))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-rag-live-suite :cl-llm.rag.live))
+               (error "cl-llm/rag live suite failed."))))
