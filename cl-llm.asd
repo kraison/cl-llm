@@ -155,3 +155,29 @@
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-rag-live-suite :cl-llm.rag.live))
                (error "cl-llm/rag live suite failed."))))
+
+(defsystem "cl-llm/rag/vivace"
+  :description "vivace-graph (graph-db) backed vector store for cl-llm/rag."
+  :license "MIT"
+  :depends-on ("cl-llm/rag" "graph-db")
+  :serial t
+  :pathname "vivace/"
+  :components ((:file "packages")
+               (:file "schema")
+               (:file "store")))
+
+(defsystem "cl-llm/rag/vivace/tests"
+  :description "Offline (in-memory-graph) tests for cl-llm/rag/vivace."
+  :license "MIT"
+  :depends-on ("cl-llm/rag/vivace" "cl-llm/rag" "fiveam")
+  :serial t
+  :pathname "tests-vivace/"
+  :components ((:file "packages")
+               (:file "suite")
+               (:file "schema")
+               (:file "store-scan")
+               (:file "store-cache")
+               (:file "integration"))
+  :perform (test-op (o c)
+             (unless (uiop:symbol-call :fiveam :run! :cl-llm-rag-vivace)
+               (error "cl-llm/rag/vivace tests failed."))))
