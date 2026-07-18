@@ -28,9 +28,11 @@ can add join edges without reshaping it.
 
 ### In scope (v1)
 
-- A **`graph-store`** satisfying the five `vector-store` generics (`store-add`,
-  `store-search`, `store-count`, `save-store`, `load-store`) backed by a
-  caller-owned `graph-db` graph.
+- A **`graph-store`** satisfying the four `vector-store` **generic** operations
+  (`store-add`, `store-search`, `store-count`, `save-store`) backed by a
+  caller-owned `graph-db` graph. (Note: `rag:load-store` is a plain function in
+  RAG core — not a generic — that always builds a `memory-store`, so the graph
+  store cannot specialize it; standalone reopen is `open-graph-store` instead, §7.)
 - **Two selectable search strategies**, identical through the contract:
   - **`scan-graph-store`** — `store-search` maps over the chunk vertices and
     computes exact cosine. Lowest RAM; vectors stay in the graph.
@@ -152,7 +154,10 @@ graph-store            abstract: a borrowed graph, a vertex-type, a dimension
     against each (coerced) embedding, return the top *k* as `rag:hit`s.
   - `cached-graph-store`: delegate to the composed `memory-store`.
   - **Parity is a hard requirement**: both strategies return identical rankings for
-    the same corpus and query. This is the load-bearing test.
+    the same corpus and query. This is the load-bearing test. To make parity *total*
+    (not tie-order-dependent), both `store-search` sites `stable-sort` by score with
+    a deterministic `document-id` tie-break — so exact score ties resolve identically
+    across strategies.
 - **`store-count`**: scan counts vertices of `type`; cache reads the
   `memory-store`'s count.
 - Every `rag:hit`'s chunk carries its provenance (`document-id`, `metadata`),
@@ -163,11 +168,14 @@ graph-store            abstract: a borrowed graph, a vertex-type, a dimension
 A VG graph is self-durable (transaction log + snapshots), so these matter only for
 the standalone case; in the shared/field-data case the caller never calls them.
 
-- **`save-store (store path)`** triggers a VG snapshot/checkpoint so the on-disk
-  image is current, then returns the store. It **does not close** the borrowed
-  graph. `path` is advisory — the graph knows its own location.
-- **`load-store (path)`** opens a graph at `path` and returns a store with defaults
-  (`:cache`, `rag-chunk`), so `rag:load-index` keeps working standalone. Primary
+- **`save-store (store path)`** — implemented as a no-op that returns the store
+  (the graph is self-durable via its own transaction log; an explicit checkpoint is
+  the caller's `graph-db close-graph`/`snapshot`). It **does not close** the
+  borrowed graph.
+- **Standalone reopen is `open-graph-store (path …)`**, NOT `load-store`. As built,
+  `rag:load-store` is a plain function in RAG core (not a generic) that always
+  returns a `memory-store`, so a graph store cannot hook it; `open-graph-store`
+  opens the graph via `gdb:open-graph` and returns a store over it. Primary
   construction is always `make-graph-store` over a graph you already hold.
 
 ## 8. Error model
