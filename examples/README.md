@@ -30,6 +30,7 @@ Each example is its own package (`examples/<name>`) so they don't clash.
 | [tools.lisp](tools.lisp) | `deftool` + the automatic tool loop; tools run in-process | yes |
 | [rag-quickstart.lisp](rag-quickstart.lisp) | `cl-llm/rag`: index → retrieve → grounded, cited, abstaining answers | **no** — offline via mocks |
 | [rag-local.lisp](rag-local.lisp) | The same RAG pipeline with a real local Ollama embedder + persistence | yes (Ollama + an embed model) |
+| [rag-crosslingual.lisp](rag-crosslingual.lisp) | Index Russian & Ukrainian sources, ask in English — cross-lingual retrieval via `bge-m3` | yes (Ollama + `bge-m3`) |
 | [errors-and-retries.lisp](errors-and-retries.lisp) | The condition hierarchy, timeouts, the `retry-request` restart | some (parts are offline) |
 | [evaluation.lisp](evaluation.lisp) | `defsuite` / scorers / judge / `report` | **no** — runs offline via the mock |
 | [testing-with-mock.lisp](testing-with-mock.lisp) | `mock-provider`: test your own cl-llm code with no network | **no** — offline |
