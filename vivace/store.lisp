@@ -158,10 +158,9 @@ hydrates from any chunks already in the graph. Never opens or closes GRAPH."
   (rag:store-search (cache-index store) query-vector k))
 
 (defmethod hydrate ((store cached-graph-store))
-  (let ((chunks '()))
-    (map-chunk-vertices store (lambda (v) (push (vertex->chunk v) chunks)))
+  (let ((chunks (graph-store-chunks store)))
     (when chunks
-      (rag:store-add (cache-index store) (nreverse chunks))
+      (rag:store-add (cache-index store) chunks)
       ;; Sync the abstract dimension slot so the primary store-add's dimension
       ;; check (which runs BEFORE the graph write) validates post-hydrate adds
       ;; against the hydrated dimension -- otherwise a wrong-dimension chunk could
