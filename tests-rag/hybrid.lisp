@@ -69,3 +69,12 @@
          (ids (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h))) fused)))
     (is (= 4 (length fused)))
     (is (equal '("a" "b" "x" "y") ids))))
+
+(test backfill-max-backfill-zero-yields-dense-topk
+  ;; max-backfill 0 disables backfill entirely: even a dense-missed sparse doc is NOT admitted;
+  ;; result is exactly dense's top-k. (Boundary of the cap.)
+  (let* ((dense (%hits '("a" "b" "c")))
+         (sparse (%hits '("x" "y")))
+         (fused (rag:dense-preserving-fusion dense sparse 3 :max-backfill 0))
+         (ids (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h))) fused)))
+    (is (equal '("a" "b" "c") ids))))

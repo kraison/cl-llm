@@ -61,11 +61,11 @@ scores are never mixed into one ranked list)."
           (seen (make-hash-table :test 'equal)))
       (block collect
         (dolist (h sparse-hits)
+          (when (>= (length recoveries) max-backfill) (return-from collect))
           (let ((doc (chunk-document-id (hit-chunk h))))
             (unless (or (gethash doc dense-docs) (gethash doc seen))
               (setf (gethash doc seen) t)
-              (push h recoveries)
-              (when (>= (length recoveries) max-backfill) (return-from collect))))))
+              (push h recoveries)))))
       (setf recoveries (nreverse recoveries))
       (let* ((n (min (length recoveries) k))
              (head (subseq dense-hits 0 (min (- k n) (length dense-hits))))
