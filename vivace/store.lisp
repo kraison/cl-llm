@@ -48,6 +48,23 @@ the graph. Returns the dimension the batch establishes. Signals rag:llm-rag-erro
   (gdb:map-vertices fn (graph-store-graph store)
                     :vertex-type (chunk-type-symbol (graph-store-type store))))
 
+(defmethod rag:store-delete-document ((store graph-store) document-id)
+  "Soft-delete every chunk vertex whose DOCUMENT-ID matches, atomically.
+Collect the victims first (do NOT mutate the graph while map-vertices iterates),
+then mark-deleted them in one transaction (mark-deleted joins the active tx)."
+  (let ((victims '()))
+    (map-chunk-vertices
+     store
+     (lambda (vertex)
+       (when (equal (%slot vertex "DOCUMENT-ID") document-id)
+         (push vertex victims))))
+    (when victims
+      (let ((gdb:*graph* (graph-store-graph store)))
+        (gdb:with-transaction ()
+          (dolist (v victims)
+            (gdb:mark-deleted v)))))
+    (length victims)))
+
 (defmethod rag:store-count ((store scan-graph-store))
   (let ((n 0))
     (map-chunk-vertices store (lambda (v) (declare (ignore v)) (incf n)))
@@ -123,6 +140,10 @@ hydrates from any chunks already in the graph. Never opens or closes GRAPH."
 (defmethod rag:store-add :after ((store cached-graph-store) chunks)
   (when chunks
     (rag:store-add (cache-index store) chunks)))
+
+;; keep the in-RAM index (which store-count/store-search read) in step with the graph delete
+(defmethod rag:store-delete-document :after ((store cached-graph-store) document-id)
+  (rag:store-delete-document (cache-index store) document-id))
 
 (defmethod rag:store-count ((store cached-graph-store))
   (rag:store-count (cache-index store)))

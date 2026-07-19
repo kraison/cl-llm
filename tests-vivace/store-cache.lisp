@@ -66,3 +66,24 @@ that accidental cancellation."
                          (rag:store-search store shared-embedding k))))
           (is (equal (ids scan-view 1) (ids cache-view 1)))
           (is (equal (ids scan-view 2) (ids cache-view 2))))))))
+
+(test cache-store-delete-syncs-cache-and-graph
+  (let* ((dir (format nil "/tmp/cl-llm-vg-del-cache-~a/" (get-internal-real-time)))
+         (emb (rag:make-mock-embedder)))
+    (unwind-protect
+         (let* ((g (gdb:make-graph :cl-llm-vg-del-cache (pathname dir)))
+                (store (v:make-graph-store g :strategy :cache)))
+           (rag:store-add store (list (rag:make-chunk "a1" :document-id "A"
+                                        :embedding (rag:embed emb "a1"))
+                                      (rag:make-chunk "b1" :document-id "B"
+                                        :embedding (rag:embed emb "b1"))))
+           (is (= 2 (rag:store-count store)))
+           (is (= 1 (rag:store-delete-document store "A")))
+           (is (= 1 (rag:store-count store)) "cache count reflects the delete")   ; :after synced RAM index
+           ;; a FRESH store over the same graph hydrates without the deleted doc -> graph delete stuck
+           (let ((store2 (v:make-graph-store g :strategy :cache)))
+             (is (= 1 (rag:store-count store2)))
+             (is (string= "B" (rag:chunk-document-id
+                               (rag:hit-chunk (first (rag:store-search store2 (rag:embed emb "b1") 5)))))))
+           (gdb:close-graph g))
+      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore))))

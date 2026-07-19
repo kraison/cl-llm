@@ -35,3 +35,23 @@
                               :embedding (rag:as-embedding '(1d0 2d0 3d0))))))
       ;; failed batch left the store unchanged
       (is (= 1 (rag:store-count store))))))
+
+(test scan-store-delete-document
+  (let* ((dir (format nil "/tmp/cl-llm-vg-del-scan-~a/" (get-internal-real-time)))
+         (emb (rag:make-mock-embedder)))
+    (unwind-protect
+         (let* ((g (gdb:make-graph :cl-llm-vg-del-scan (pathname dir)))
+                (store (v:make-graph-store g :strategy :scan)))
+           (rag:store-add store (list (rag:make-chunk "a1" :document-id "A"
+                                        :embedding (rag:embed emb "a1"))
+                                      (rag:make-chunk "a2" :document-id "A"
+                                        :embedding (rag:embed emb "a2"))
+                                      (rag:make-chunk "b1" :document-id "B"
+                                        :embedding (rag:embed emb "b1"))))
+           (is (= 3 (rag:store-count store)))
+           (is (= 2 (rag:store-delete-document store "A")))
+           (is (= 1 (rag:store-count store)))                    ; re-scan excludes soft-deleted
+           (let ((hits (rag:store-search store (rag:embed emb "a1") 5)))
+             (is (every (lambda (h) (string= "B" (rag:chunk-document-id (rag:hit-chunk h)))) hits)))
+           (gdb:close-graph g))
+      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore))))
