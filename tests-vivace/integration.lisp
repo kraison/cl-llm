@@ -35,6 +35,37 @@ reopened graph hydrates from it."
                (gdb:close-graph g2))))
       (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
 
+(test open-graph-store-reopens-in-a-fresh-image
+  "REGRESSION: open-graph-store must declare the chunk vertex class BEFORE gdb:open-graph, so a
+persisted store reopens in a FRESH image (a process restart) where the class is not defined yet.
+persistent-reopen-and-hydrate above only exercises a SAME-image reopen (the class persists from
+the first make-graph-store), so it never caught this.  Simulate a fresh image by undefining the
+chunk class + constructor after close, then reopen via open-graph-store."
+  (let ((dir (format nil "/tmp/cl-llm-vg-freshimg-~a/" (get-internal-real-time)))
+        (emb (rag:make-mock-embedder))
+        (tsym (intern "RAG-CHUNK" :graph-db))
+        (ctor (intern "MAKE-RAG-CHUNK" :graph-db)))
+    (unwind-protect
+         (progn
+           (let ((g (gdb:make-graph :cl-llm-vg-freshimg (pathname dir))))
+             (rag:store-add (v:make-graph-store g :strategy :cache)
+                            (list (rag:make-chunk "the TM-62 mine" :document-id "tm62"
+                                   :embedding (rag:embed emb "the TM-62 mine"))))
+             (gdb:close-graph g))
+           ;; simulate a fresh image: the chunk class + constructor do not exist yet
+           (when (find-class tsym nil) (setf (find-class tsym) nil))
+           (when (fboundp ctor) (fmakunbound ctor))
+           (is (null (find-class tsym nil)) "precondition: chunk class is undefined")
+           ;; open-graph-store must re-declare the class before open, then hydrate from disk
+           (let ((store (v:open-graph-store dir :name :cl-llm-vg-freshimg :strategy :cache)))
+             (unwind-protect
+                  (is (= 1 (rag:store-count store))
+                      "a fresh-image reopen hydrates the persisted chunk")
+               (gdb:close-graph (v:graph-store-graph store)))))
+      ;; restore the class for any later test even if the reopen (regression) failed
+      (ignore-errors (v:ensure-chunk-class 'rag-chunk :cl-llm-vg-freshimg))
+      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
+
 (test graph-store-drops-into-the-rag-pipeline
   "make-index :store (make-graph-store g) -> add-documents -> rag-ask (mock)."
   (with-temp-graph (g)

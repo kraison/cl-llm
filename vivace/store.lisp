@@ -151,5 +151,10 @@ hydrates from any chunks already in the graph. Never opens or closes GRAPH."
   "Open a standalone persistent graph at PATH and return a store over it. For the
 RAG-only case with no field-data graph to share. The caller owns closing the graph
 (via graph-store-graph)."
+  ;; Declare the chunk vertex class BEFORE gdb:open-graph: open-graph instantiates the persisted
+  ;; chunks, which requires the class to exist.  make-graph-store's ensure-chunk-schema would
+  ;; declare it -- but AFTER open, which is too late on a FRESH image (a restart), where the class
+  ;; does not exist yet.  ensure-chunk-class is idempotent, so this is a no-op in a warm image.
+  (ensure-chunk-class type name)
   (make-graph-store (gdb:open-graph name (pathname path))
                     :type type :strategy strategy :dimension dimension))

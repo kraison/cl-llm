@@ -13,32 +13,48 @@
 (defun %slot (vertex name)
   (slot-value vertex (intern name :graph-db)))
 
-(defun ensure-chunk-schema (graph type)
-  "Idempotently declare the chunk vertex TYPE into GRAPH's live schema. Runs the
-generated constructor/lookup/predicate into the graph-db package, registers the
-type-meta under GRAPH's name, and instantiates it. Safe to call repeatedly and on
-a reopened graph."
+(defun ensure-chunk-class (type graph-name)
+  "Define the chunk vertex TYPE's CLOS class + generated constructor/predicate, registered
+under GRAPH-NAME, WITHOUT needing an open graph.  This MUST run before GDB:OPEN-GRAPH reads a
+persisted graph that holds chunks of this type: open-graph instantiates the stored vertices,
+which requires the class to already exist.  Declaring the type only in ENSURE-CHUNK-SCHEMA is
+too late for that -- ensure-chunk-schema runs *after* open, so in a fresh image (a process
+restart) the class does not exist yet when open-graph needs it.  Idempotent: a no-op once the
+constructor is generated.  Returns the graph-db type symbol.
+
+A consumer that opens its OWN persistent graph via GDB:OPEN-GRAPH (rather than OPEN-GRAPH-STORE)
+should call this first, e.g. (ensure-chunk-class 'my-chunk :my-graph) before (gdb:open-graph ...).
+
+NB: def-vertex both defines the CLOS class/constructor (global, image-wide) AND registers the
+type-meta under GRAPH-NAME (per graph-name).  We therefore run it unconditionally -- it is
+idempotent (warnings muffled), and skipping once the constructor is fbound would drop the
+per-graph-name registration a caller may be relying on."
   (let ((tsym (chunk-type-symbol type)))
-    ;; (a) Ensure the constructor exists in this image, AND the meta is registered
-    ;;     under this graph's name (def-vertex does both). Skip only when this
-    ;;     graph already has the type AND the constructor is already generated.
+    (let ((*package* (find-package :graph-db)))
+      (handler-bind ((warning #'muffle-warning))
+        (eval `(gdb:def-vertex ,tsym ()
+                 ((,(intern "TEXT" :graph-db) :type string)
+                  (,(intern "DOCUMENT-ID" :graph-db))
+                  (,(intern "METADATA" :graph-db))
+                  (,(intern "EMBEDDING" :graph-db)
+                   :type (simple-array double-float (*))))
+                 ,graph-name))))
+    tsym))
+
+(defun ensure-chunk-schema (graph type)
+  "Idempotently declare the chunk vertex TYPE into GRAPH's live schema: defines the class (see
+ENSURE-CHUNK-CLASS), registers the type-meta under GRAPH's name, and instantiates it. Safe to
+call repeatedly and on a reopened graph."
+  (let ((tsym (chunk-type-symbol type)))
+    ;; Skip only when this graph already has the type AND the constructor is already generated.
     (unless (and (gdb:lookup-node-type-by-name tsym :vertex :graph graph)
                  (fboundp (intern (format nil "MAKE-~A" (string type)) :graph-db)))
-      ;; gdb:*graph* must be bound here: def-vertex's own auto-instantiate step
-      ;; (triggered when a graph of this name is already registered) and
-      ;; graph-db::update-schema's internal instantiate-node-type both call
-      ;; lookup-node-type-by-name with an implicit :graph (gdb:*graph*)
-      ;; default rather than threading GRAPH through explicitly.
+      ;; gdb:*graph* must be bound here: def-vertex's own auto-instantiate step (triggered when a
+      ;; graph of this name is already registered) and graph-db::update-schema's internal
+      ;; instantiate-node-type both call lookup-node-type-by-name with an implicit :graph
+      ;; (gdb:*graph*) default rather than threading GRAPH through explicitly.
       (let ((gdb:*graph* graph))
-        (let ((*package* (find-package :graph-db)))
-          (handler-bind ((warning #'muffle-warning))
-            (eval `(gdb:def-vertex ,tsym ()
-                     ((,(intern "TEXT" :graph-db) :type string)
-                      (,(intern "DOCUMENT-ID" :graph-db))
-                      (,(intern "METADATA" :graph-db))
-                      (,(intern "EMBEDDING" :graph-db)
-                       :type (simple-array double-float (*))))
-                     ,(gdb:graph-name graph)))))
+        (ensure-chunk-class type (gdb:graph-name graph))
         (gdb::update-schema graph)))
     tsym))
 
