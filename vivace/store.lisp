@@ -48,6 +48,12 @@ the graph. Returns the dimension the batch establishes. Signals rag:llm-rag-erro
   (gdb:map-vertices fn (graph-store-graph store)
                     :vertex-type (chunk-type-symbol (graph-store-type store))))
 
+(defun graph-store-chunks (store)
+  "All chunks currently in STORE's graph, as rag:chunk objects (for building a secondary index)."
+  (let ((out '()))
+    (map-chunk-vertices store (lambda (v) (push (vertex->chunk v) out)))
+    (nreverse out)))
+
 (defmethod rag:store-delete-document ((store graph-store) document-id)
   "Soft-delete every chunk vertex whose DOCUMENT-ID matches, atomically.
 Collect the victims first (do NOT mutate the graph while map-vertices iterates),

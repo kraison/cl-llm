@@ -120,6 +120,7 @@
                              (:file "retrieve")
                              (:file "index")
                              (:file "sparse")
+                             (:file "hybrid")
                              (:file "answer"))))
   :in-order-to ((test-op (test-op "cl-llm/rag/tests"))))
 
@@ -138,6 +139,7 @@
                              (:file "retrieve")
                              (:file "index")
                              (:file "sparse")
+                             (:file "hybrid")
                              (:file "answer"))))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!
