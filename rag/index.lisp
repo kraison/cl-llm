@@ -23,12 +23,25 @@ endpoint. STORE defaults to a fresh memory-store; CHUNKER defaults to SPLIT-TEXT
                             :metadata (append (document-metadata document)
                                               (list :position position)))))
 
+(defparameter *embed-batch* 128
+  "Maximum chunks per EMBED request in ADD-DOCUMENTS.  Batches embedding so a very large document
+cannot overflow the embedding server with one huge request (some servers 400 on a too-large batch,
+e.g. Ollama's /embeddings on a ~900-chunk book).  A small corpus (chunks <= this) still embeds in
+one call; only large docs split.  Tunable.")
+
 (defun add-documents (index documents)
-  "Chunk each document, embed all chunks in one batch, and store them."
+  "Chunk each document, embed all chunks (in batches of at most *EMBED-BATCH* to bound request
+size), and store them.  Embedding is batched but the STORE-ADD is a single atomic write of the
+whole chunk set, so a failure mid-embed stores nothing."
   (let ((chunks (loop for d in documents
                       nconc (document-chunks d (index-chunker index)))))
     (when chunks
-      (let ((vectors (embed (index-embedder index) (mapcar #'chunk-text chunks))))
+      (let ((embedder (index-embedder index))
+            (vectors '())
+            (n (length chunks)))
+        (loop for i from 0 below n by *embed-batch*
+              for group = (subseq chunks i (min n (+ i *embed-batch*)))
+              do (setf vectors (nconc vectors (embed embedder (mapcar #'chunk-text group)))))
         (loop for chunk in chunks for vector in vectors
               do (setf (chunk-embedding chunk) vector))
         (store-add (index-store index) chunks))))

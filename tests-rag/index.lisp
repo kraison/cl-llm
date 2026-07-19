@@ -79,6 +79,27 @@ calls instead of one."
     (let ((hit (first (rag:retrieve index "TM-62 pressure fuze" :k 1))))
       (is (string= "d1" (rag:chunk-document-id (rag:hit-chunk hit)))))))
 
+(test add-documents-batches-embeds-to-bound-request-size
+  "ADD-DOCUMENTS embeds in batches of at most *EMBED-BATCH* chunks, so a very large
+document cannot overflow the embedding endpoint with one huge request (a real embedding
+server 400s on a too-large batch).  The common small-corpus case still uses ONE call."
+  (let* ((chunker (lambda (text) (rag:split-text text :size 40 :overlap 10)))
+         (ce (make-counting-embedder))
+         (rag:*embed-batch* 3)
+         (index (rag:make-index :embedder ce :chunker chunker))
+         (doc (rag:make-document
+               (format nil "~{chunk ~A of the ordnance manual describes fuze wells and pressure plates ~}"
+                       (loop for i from 1 to 20 collect i))
+               :id "big")))
+    (rag:add-documents index (list doc))
+    (let ((n (rag:store-count (rag:index-store index))))
+      (is (> n 3) "the corpus must exceed one batch, else batching is untested")
+      ;; embed called ceil(n / *embed-batch*) times -- bounded, never one giant request
+      (is (= (ceiling n rag:*embed-batch*) (counting-embedder-call-count ce)))
+      ;; every chunk still got a real, working embedding (retrieval finds the doc)
+      (is (string= "big" (rag:chunk-document-id
+                          (rag:hit-chunk (first (rag:retrieve index "pressure plates fuze wells" :k 1)))))))))
+
 (test add-documents-with-no-chunks-does-not-call-embed
   "An empty document list, or documents that yield no chunks, must not call
 EMBED at all -- guarding the (WHEN CHUNKS ...) batch guard against embedding
