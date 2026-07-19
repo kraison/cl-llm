@@ -87,3 +87,39 @@ that accidental cancellation."
                                (rag:hit-chunk (first (rag:store-search store2 (rag:embed emb "b1") 5)))))))
            (gdb:close-graph g))
       (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore))))
+
+(test cache-store-delete-then-readd-no-resurrection
+  "The resurrection-critical invariant: soft-deleted chunks must never be
+double-counted or come back to life when a document with the same id is
+re-added with different content. If STORE-DELETE-DOCUMENT's :after cache sync
+(or the graph's own soft-delete + hydrate exclusion) ever regressed, the old
+A1/A2 chunks would still be indexed alongside the new chunk and STORE-COUNT
+would read 3, not 1 -- and a fresh hydrate over the same graph would leak the
+old text back into search results."
+  (let* ((dir (format nil "/tmp/cl-llm-vg-del-readd-cache-~a/" (get-internal-real-time)))
+         (emb (rag:make-mock-embedder)))
+    (unwind-protect
+         (let* ((g (gdb:make-graph :cl-llm-vg-del-readd-cache (pathname dir)))
+                (store (v:make-graph-store g :strategy :cache)))
+           (rag:store-add store (list (rag:make-chunk "a1 original" :document-id "A"
+                                        :embedding (rag:embed emb "a1 original"))
+                                      (rag:make-chunk "a2 original" :document-id "A"
+                                        :embedding (rag:embed emb "a2 original"))))
+           (is (= 2 (rag:store-count store)))
+           (is (= 2 (rag:store-delete-document store "A")))
+           (is (= 0 (rag:store-count store)))
+           ;; re-add the SAME document-id "A" with DIFFERENT text and only ONE chunk
+           (rag:store-add store (list (rag:make-chunk "a3 replacement text" :document-id "A"
+                                        :embedding (rag:embed emb "a3 replacement text"))))
+           (is (= 1 (rag:store-count store))
+               "old soft-deleted A chunks must not be resurrected or double-counted")
+           ;; a FRESH store over the SAME still-open graph must hydrate to the
+           ;; same count and only ever see the new live chunk's text -- the old
+           ;; soft-deleted chunks stay invisible to hydrate.
+           (let* ((store2 (v:make-graph-store g :strategy :cache))
+                  (hits (rag:store-search store2 (rag:embed emb "a3 replacement text") 5)))
+             (is (= 1 (rag:store-count store2)))
+             (is (= 1 (length hits)))
+             (is (string= "a3 replacement text" (rag:chunk-text (rag:hit-chunk (first hits))))))
+           (gdb:close-graph g))
+      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore))))

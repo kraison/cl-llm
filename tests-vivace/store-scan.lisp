@@ -55,3 +55,13 @@
              (is (every (lambda (h) (string= "B" (rag:chunk-document-id (rag:hit-chunk h)))) hits)))
            (gdb:close-graph g))
       (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore))))
+
+(test scan-store-delete-absent-document-is-a-noop
+  (with-temp-graph (g)
+    (let* ((emb (rag:make-mock-embedder))
+           (store (v:make-graph-store g :strategy :scan)))
+      (rag:store-add store (list (mk-chunk emb "the TM-62 is an anti-tank mine" :doc "tm62")
+                                 (mk-chunk emb "the PFM-1 is a butterfly mine" :doc "pfm1")))
+      (is (= 2 (rag:store-count store)))
+      (is (= 0 (rag:store-delete-document store "does-not-exist")))
+      (is (= 2 (rag:store-count store))))))
