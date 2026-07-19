@@ -77,13 +77,19 @@ Three store classes exist; deletion needs a **primary method on the base `graph-
           (dolist (v victims) (gdb:mark-deleted v)))))
     (length victims)))
 ```
-**Transaction primitive — verify during implementation:** `gdb:mark-deleted` is documented as wrapping
-its own transaction. Calling it inside an explicit `gdb:with-transaction` must nest cleanly (join the
-outer tx) for the batch to be atomic; if graph-db does not support that nesting, call the lower-level
-exported `gdb:delete-node` per victim inside the single `with-transaction` instead (the victims come
-from a fresh scan, so they are all live — the `deleted-p` guard `mark-deleted` adds is not needed).
-Consult the graph-db MVCC contract guide (referenced from vivace-graph-v3's memory) to pick correctly.
-The intent is fixed: **all of a document's chunks are marked deleted in a single transaction.**
+**Transaction primitive — RESOLVED against the graph-db source.** `gdb:mark-deleted` → `delete-vertex`
+→ `delete-node`, whose `:around` wraps `ensure-transaction`:
+```lisp
+(defmacro ensure-transaction ((transaction-manager) &body body)
+  `(if *transaction* (call-next-method) (with-transaction (,transaction-manager) ,@body)))
+```
+So calling `gdb:mark-deleted` **inside** an explicit `gdb:with-transaction` sees `*transaction*` already
+bound and joins the outer transaction — every victim is marked deleted in one atomic transaction, exactly
+as the sketch above. The victims come from a fresh `map-vertices` scan (which skips already-deleted
+vertices), so `delete-vertex`'s `deleted-p` guard never fires. `mark-deleted` is therefore the right
+primitive; there is no need to drop to `delete-node`. (`with-transaction` defaults its manager to
+`(transaction-manager *graph*)`, so `gdb:*graph*` must be bound to the store's graph around the block —
+the sketch does this, mirroring `store-add`.)
 
 **Cache-sync `:after` on `cached-graph-store`** — apply the same delete to the composed
 `rag:memory-store` so `store-count`/`store-search` (which read the RAM index) stop returning the
