@@ -3,6 +3,10 @@
 
 (defparameter *rrf-k* 60 "Reciprocal Rank Fusion constant (standard 60).")
 
+(defparameter *backfill-max* 2
+  "Dense-preserving fusion: the maximum number of sparse-only recoveries (distinct documents) that
+may fill reserved tail slots per query.")
+
 (defun %chunk-key (chunk)
   "Fusion identity for a chunk: (document-id . text).  NOT EQ -- dense and sparse stores hold
 DIFFERENT chunk objects for the same underlying slice (each vertex->chunk makes a new one)."
@@ -27,23 +31,24 @@ ordered by fused score.  A chunk's representative hit is taken from the FIRST li
   ((embedder :initarg :embedder :reader retriever-embedder)
    (dense-store :initarg :dense-store :reader hybrid-dense-store)
    (sparse-store :initarg :sparse-store :reader hybrid-sparse-store)
-   (candidate-k :initarg :candidate-k :initform 20 :reader hybrid-candidate-k))
-  (:documentation "Fuses dense (embedding cosine) + sparse (BM25) retrieval via RRF."))
+   (candidate-k :initarg :candidate-k :initform 20 :reader hybrid-candidate-k)
+   (fusion :initarg :fusion :initform :rrf :reader hybrid-fusion))
+  (:documentation "Fuses dense (embedding cosine) + sparse (BM25) retrieval.  FUSION selects the
+strategy: :rrf (Reciprocal Rank Fusion -- reorders by fused rank) or :backfill (dense-preserving --
+keeps dense's order, sparse only recovers documents dense never surfaced)."))
 
-(defun make-hybrid-retriever (&key embedder dense-store sparse-store (candidate-k 20))
+(defun make-hybrid-retriever (&key embedder dense-store sparse-store (candidate-k 20) (fusion :rrf))
   (make-instance 'hybrid-retriever :embedder embedder :dense-store dense-store
-                 :sparse-store sparse-store :candidate-k candidate-k))
+                 :sparse-store sparse-store :candidate-k candidate-k :fusion fusion))
 
 (defmethod retrieve ((r hybrid-retriever) query &key (k 5))
   (let* ((kc (max k (hybrid-candidate-k r)))
          (dense (store-search (hybrid-dense-store r) (embed (retriever-embedder r) query) kc))
-         (sparse (sparse-search (hybrid-sparse-store r) query kc))
-         (fused (reciprocal-rank-fusion (list dense sparse))))
-    (subseq fused 0 (min k (length fused)))))
-
-(defparameter *backfill-max* 2
-  "Dense-preserving fusion: the maximum number of sparse-only recoveries (distinct documents) that
-may fill reserved tail slots per query.")
+         (sparse (sparse-search (hybrid-sparse-store r) query kc)))
+    (ecase (hybrid-fusion r)
+      (:rrf (let ((fused (reciprocal-rank-fusion (list dense sparse))))
+              (subseq fused 0 (min k (length fused)))))
+      (:backfill (dense-preserving-fusion dense sparse k :max-backfill *backfill-max*)))))
 
 (defun dense-preserving-fusion (dense-hits sparse-hits k &key (max-backfill *backfill-max*))
   "Fuse by PRESERVING dense's ranking and only BACKFILLING documents dense never surfaced.

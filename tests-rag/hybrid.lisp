@@ -78,3 +78,20 @@
          (fused (rag:dense-preserving-fusion dense sparse 3 :max-backfill 0))
          (ids (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h))) fused)))
     (is (equal '("a" "b" "c") ids))))
+
+(test hybrid-retriever-backfill-fusion-runs-end-to-end
+  ;; a :backfill retriever dispatches through dense-preserving-fusion and returns the
+  ;; exact-designation document (smoke test of the fusion slot + retrieve dispatch).
+  (let* ((emb (rag:make-mock-embedder :dimension 8))
+         (chunks (list (rag:make-chunk "the TM-62M anti-tank mine" :document-id "tm62m"
+                                       :embedding (rag:embed emb "the TM-62M anti-tank mine"))
+                       (rag:make-chunk "general safety notes" :document-id "notes"
+                                       :embedding (rag:embed emb "general safety notes"))))
+         (dense (rag:make-memory-store))
+         (sparse (rag:make-sparse-store)))
+    (rag:store-add dense chunks) (rag:store-add sparse chunks)
+    (let* ((r (rag:make-hybrid-retriever :embedder emb :dense-store dense :sparse-store sparse
+                                         :fusion :backfill))
+           (hits (rag:retrieve r "TM-62M" :k 2))
+           (ids (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h))) hits)))
+      (is (member "tm62m" ids :test #'string=)))))
