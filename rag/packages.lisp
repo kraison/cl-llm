@@ -25,6 +25,7 @@
    #:tokenize #:bm25-idf #:bm25-term-score #:*bm25-k1* #:*bm25-b*
    #:sparse-store #:make-sparse-store #:sparse-search
    #:hybrid-retriever #:make-hybrid-retriever #:reciprocal-rank-fusion #:*rrf-k*
+   #:dense-preserving-fusion #:*backfill-max*
    ;; grows in later tasks
    ))
 

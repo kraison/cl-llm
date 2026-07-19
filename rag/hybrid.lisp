@@ -40,3 +40,37 @@ ordered by fused score.  A chunk's representative hit is taken from the FIRST li
          (sparse (sparse-search (hybrid-sparse-store r) query kc))
          (fused (reciprocal-rank-fusion (list dense sparse))))
     (subseq fused 0 (min k (length fused)))))
+
+(defparameter *backfill-max* 2
+  "Dense-preserving fusion: the maximum number of sparse-only recoveries (distinct documents) that
+may fill reserved tail slots per query.")
+
+(defun dense-preserving-fusion (dense-hits sparse-hits k &key (max-backfill *backfill-max*))
+  "Fuse by PRESERVING dense's ranking and only BACKFILLING documents dense never surfaced.
+DENSE-HITS is dense's full candidate list (cosine order); SPARSE-HITS is BM25 order.  A document is
+dense-missed iff none of its chunks appear anywhere in DENSE-HITS.  Up to MAX-BACKFILL dense-missed
+documents -- deduped by document-id, in sparse rank order, each contributing its TOP sparse chunk --
+fill the last slots; the first (k - n) hits are dense's, in dense order.  When no document qualifies
+(n=0) the result is EXACTLY dense's top-k, unchanged.  Returned hits carry a synthetic descending
+score monotonic with final position (dense cosine and sparse BM25 are incomparable scales, so native
+scores are never mixed into one ranked list)."
+  (let ((dense-docs (make-hash-table :test 'equal)))
+    (dolist (h dense-hits)
+      (setf (gethash (chunk-document-id (hit-chunk h)) dense-docs) t))
+    (let ((recoveries '())
+          (seen (make-hash-table :test 'equal)))
+      (block collect
+        (dolist (h sparse-hits)
+          (let ((doc (chunk-document-id (hit-chunk h))))
+            (unless (or (gethash doc dense-docs) (gethash doc seen))
+              (setf (gethash doc seen) t)
+              (push h recoveries)
+              (when (>= (length recoveries) max-backfill) (return-from collect))))))
+      (setf recoveries (nreverse recoveries))
+      (let* ((n (min (length recoveries) k))
+             (head (subseq dense-hits 0 (min (- k n) (length dense-hits))))
+             (chosen (append head (subseq recoveries 0 n)))
+             (total (length chosen)))
+        (loop for h in chosen
+              for i from 0
+              collect (make-hit (hit-chunk h) (float (- total i) 1d0)))))))
