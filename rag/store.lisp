@@ -10,6 +10,10 @@
   (:documentation "How many chunks are indexed."))
 (defgeneric save-store (store path)
   (:documentation "Persist STORE to PATH."))
+(defgeneric store-delete-document (store document-id)
+  (:documentation "Remove every indexed chunk whose DOCUMENT-ID matches (EQUAL).
+Returns the number of chunks removed (0 if none matched -- deleting an absent
+document is a no-op, never an error)."))
 
 (defun cosine (a b)
   "Cosine similarity of two embedding vectors, 0 on a zero-norm vector."
@@ -88,6 +92,15 @@ on an exact tie."
 
 (defmethod store-count ((store memory-store))
   (length (store-chunks store)))
+
+(defmethod store-delete-document ((store memory-store) document-id)
+  "Rebuild the backing vector in place, dropping chunks whose DOCUMENT-ID matches."
+  (let* ((chunks (store-chunks store))
+         (kept (remove document-id chunks :key #'chunk-document-id :test #'equal))
+         (removed (- (length chunks) (length kept))))
+    (setf (fill-pointer chunks) 0)
+    (loop for c across kept do (vector-push-extend c chunks))
+    removed))
 
 ;;; Persistence: a readable s-expression with exact double-float round-trip.
 

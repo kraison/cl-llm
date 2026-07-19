@@ -112,3 +112,31 @@
                                (uiop:temporary-directory))))
     (ignore-errors (delete-file path))
     (signals rag:llm-rag-error (rag:load-store path))))
+
+(test store-delete-document-removes-matching-chunks
+  (let ((s (rag:make-memory-store)))
+    (rag:store-add s (list (rag:make-chunk "a1" :document-id "A" :embedding (v 1 0))
+                           (rag:make-chunk "a2" :document-id "A" :embedding (v 1 1))
+                           (rag:make-chunk "b1" :document-id "B" :embedding (v 0 1))))
+    (is (= 3 (rag:store-count s)))
+    (is (= 2 (rag:store-delete-document s "A")) "returns the number removed")
+    (is (= 1 (rag:store-count s)))
+    ;; only B remains -- a search never returns an A chunk
+    (let ((hits (rag:store-search s (v 1 0) 5)))
+      (is (= 1 (length hits)))
+      (is (string= "B" (rag:chunk-document-id (rag:hit-chunk (first hits))))))))
+
+(test store-delete-absent-document-is-a-noop
+  (let ((s (rag:make-memory-store)))
+    (rag:store-add s (list (rag:make-chunk "b1" :document-id "B" :embedding (v 0 1))))
+    (is (= 0 (rag:store-delete-document s "NOPE")))
+    (is (= 1 (rag:store-count s)))))
+
+(test store-delete-then-readd-refreshes
+  ;; the mine-action refresh scenario: same doc-id, different chunks
+  (let ((s (rag:make-memory-store)))
+    (rag:store-add s (list (rag:make-chunk "old" :document-id "A" :embedding (v 1 0))))
+    (rag:store-delete-document s "A")
+    (rag:store-add s (list (rag:make-chunk "new" :document-id "A" :embedding (v 0 1))))
+    (is (= 1 (rag:store-count s)))
+    (is (string= "new" (rag:chunk-text (rag:hit-chunk (first (rag:store-search s (v 0 1) 1))))))))
