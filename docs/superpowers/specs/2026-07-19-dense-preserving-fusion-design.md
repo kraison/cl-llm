@@ -128,6 +128,20 @@ Re-measure recall over the vetted 24-case gold set with `knowledge-index` now `:
   **separate, pre-existing gap** — it does not surface in sparse either, is orthogonal to fusion,
   and is explicitly **out of scope** here.
 
+**Caveat — "no per-case regression" is structural only for `n = 0`.** When no document qualifies
+(`n = 0`) the result is *provably* dense's top-k unchanged. When a recovery exists (`n ≥ 1`), the
+last `n` dense slots are displaced to make room; if a *gold* document sat in that displaced dense
+tail while a *different* dense-missed gold document is recovered, that specific gold doc regresses
+out of top-k even though aggregate recall is unchanged or higher. On the current 24-case gold set
+this never happens (measured: zero per-case regression at k=5 and k=8), but that is an **empirical**
+property of this gold set, not an invariant. **Re-measure recall@k whenever the gold set changes**,
+and do not treat "no per-case regression" as a structural promise for `n ≥ 1`.
+
+**Measurement note.** Backfill is **k-dependent** — the reserved recovery slots sit at the *tail of
+the requested k*, so `retrieve @k` is **not** the first k of `retrieve @k'` (k' > k). Recall@k must
+be measured by retrieving **separately at each k**, never by slicing a single deeper retrieval by
+rank (doing so understates backfill's recall at small k).
+
 ## 5. Non-goals (YAGNI)
 
 - **No removal of RRF** — it stays as the default `:rrf` fusion and a general-purpose option; this
