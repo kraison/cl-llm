@@ -119,6 +119,7 @@
                              (:file "store")
                              (:file "retrieve")
                              (:file "index")
+                             (:file "sparse")
                              (:file "answer"))))
   :in-order-to ((test-op (test-op "cl-llm/rag/tests"))))
 
@@ -136,6 +137,7 @@
                              (:file "store")
                              (:file "retrieve")
                              (:file "index")
+                             (:file "sparse")
                              (:file "answer"))))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!
