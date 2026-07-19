@@ -23,3 +23,31 @@
            (- (rag:bm25-term-score idf 2 10d0 10d0) (rag:bm25-term-score idf 1 10d0 10d0))))
     ;; a longer-than-average doc is penalized vs an average-length one at equal tf
     (is (< (rag:bm25-term-score idf 2 20d0 10d0) (rag:bm25-term-score idf 2 10d0 10d0)))))
+
+(test sparse-store-add-count-search
+  (let ((s (rag:make-sparse-store)))
+    (rag:store-add s (list (rag:make-chunk "The TM-62M anti-tank mine has a metal body" :document-id "a")
+                           (rag:make-chunk "The PFM-1 is a scatterable mine" :document-id "b")
+                           (rag:make-chunk "general notes about mines and safety" :document-id "c")))
+    (is (= 3 (rag:store-count s)))
+    ;; an exact-designation query surfaces the doc that literally contains it, first
+    (let ((hits (rag:sparse-search s "TM-62M" 3)))
+      (is (>= (length hits) 1))
+      (is (string= "a" (rag:chunk-document-id (rag:hit-chunk (first hits))))))
+    ;; a query term in every doc ("mine") must not outweigh a rare exact term
+    (let ((hits (rag:sparse-search s "PFM-1 mine" 3)))
+      (is (string= "b" (rag:chunk-document-id (rag:hit-chunk (first hits))))))))
+
+(test sparse-store-delete-document
+  (let ((s (rag:make-sparse-store)))
+    (rag:store-add s (list (rag:make-chunk "TM-62M mine" :document-id "a")
+                           (rag:make-chunk "PFM-1 mine" :document-id "b")))
+    (is (= 1 (rag:store-delete-document s "a")))
+    (is (= 1 (rag:store-count s)))
+    (is (null (rag:sparse-search s "TM-62M" 3)))))           ; "a" gone -> no match for its term
+
+(test sparse-search-empty-and-no-overlap
+  (let ((s (rag:make-sparse-store)))
+    (is (null (rag:sparse-search s "anything" 3)))          ; empty store
+    (rag:store-add s (list (rag:make-chunk "TM-62M" :document-id "a")))
+    (is (null (rag:sparse-search s "zzz-nonexistent" 3)))))  ; no term overlap -> no hits

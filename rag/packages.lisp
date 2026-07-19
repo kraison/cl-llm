@@ -23,6 +23,7 @@
    #:add-documents #:save-index #:load-index
    #:assemble-context #:rag-ask #:make-retrieval-tool #:*grounding-instructions*
    #:tokenize #:bm25-idf #:bm25-term-score #:*bm25-k1* #:*bm25-b*
+   #:sparse-store #:make-sparse-store #:sparse-search
    ;; grows in later tasks
    ))
 
