@@ -159,3 +159,44 @@ error escaping from the JSON layer."
   (let ((v (rag:as-embedding '(0.0 0.0 0.0))))
     (is (typep v '(simple-array single-float (*))))
     (is (every #'zerop v))))
+
+;;; NaN / infinity rejection.
+;;;
+;;; These construct the non-finite value directly from its representation
+;;; (a bit pattern on SBCL, EXT:NAN on ECL) rather than by an arithmetic
+;;; expression like (/ 0.0 0.0) -- constructing it via arithmetic would
+;;; itself trap under SBCL's default float traps, before the value ever
+;;; reaches AS-EMBEDDING, and so would not exercise the code under test.
+;;; Each constructor needs both an #+sbcl and an #+ecl branch: a reader
+;;; conditional with only one branch silently reads as nothing on the
+;;; implementation it omits, and the test would then quietly turn into a
+;;; call on an empty list rather than fail loudly.
+
+(defun make-nan-single-float ()
+  #+sbcl (sb-kernel:make-single-float #x7fc00000)
+  #+ecl (coerce (ext:nan) 'single-float)
+  #-(or sbcl ecl) (error "no portable NaN constructor for this Lisp implementation"))
+
+(defun positive-infinity-single-float ()
+  #+sbcl sb-ext:single-float-positive-infinity
+  #+ecl ext:single-float-positive-infinity
+  #-(or sbcl ecl) (error "no portable infinity constructor for this Lisp implementation"))
+
+(defun negative-infinity-single-float ()
+  #+sbcl sb-ext:single-float-negative-infinity
+  #+ecl ext:single-float-negative-infinity
+  #-(or sbcl ecl) (error "no portable infinity constructor for this Lisp implementation"))
+
+(test as-embedding-nan-component-signals-llm-rag-error
+  "A NaN component must surface as RAG:LLM-RAG-ERROR, not a raw arithmetic
+error escaping from the float arithmetic inside AS-EMBEDDING."
+  (signals rag:llm-rag-error
+    (rag:as-embedding (list (make-nan-single-float) 3.0))))
+
+(test as-embedding-positive-infinity-component-signals-llm-rag-error
+  (signals rag:llm-rag-error
+    (rag:as-embedding (list (positive-infinity-single-float) 3.0))))
+
+(test as-embedding-negative-infinity-component-signals-llm-rag-error
+  (signals rag:llm-rag-error
+    (rag:as-embedding (list (negative-infinity-single-float) 3.0))))

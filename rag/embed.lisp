@@ -12,29 +12,50 @@
     (dotimes (i (length v) (sqrt sum))
       (incf sum (* (aref v i) (aref v i))))))
 
+(defun non-finite-embedding-error ()
+  (error 'llm-rag-error
+         :message "embedding contains a non-finite or out-of-range value; refusing to index it"))
+
+(defun finite-single-float-p (x)
+  "T if the single-float X is neither NaN nor +/-infinity.
+Order matters: (= X X) is NIL for a NaN and is evaluated with an unordered
+comparison that does not itself trap on a quiet NaN, so it is safe to check
+first and short-circuit before the magnitude bound below -- which uses an
+ORDERED comparison (<=) that WOULD trap on a NaN operand if one reached it."
+  (and (= x x)
+       (<= (- most-positive-single-float) x most-positive-single-float)))
+
 (defun as-embedding (sequence)
   "Coerce SEQUENCE to a (simple-array single-float (*)) and L2-normalise it.
 Normalising at ingest is what lets cosine similarity reduce to a plain dot
-product at query time.  A zero vector has no direction and is returned as-is."
-  (let* ((n (length sequence))
-         (v (make-array n :element-type 'single-float)))
-    (let ((i 0))
-      (map nil (lambda (x)
-                 (setf (aref v i) (coerce x 'single-float))
-                 (incf i))
-           sequence))
-    (let ((norm (embedding-norm v)))
-      ;; A malformed provider response is the realistic source of NaN/Inf.  Reject
-      ;; at ingest: a non-finite component poisons the norm, and every downstream
-      ;; comparison against it silently returns false, so the vector would rank
-      ;; last forever instead of failing.  (NaN /= NaN is the tell.)
-      (unless (= norm norm)
-        (error 'llm-rag-error
-               :message "embedding contains NaN or infinity; refusing to index it"))
-      (unless (zerop norm)
-        (dotimes (i n)
-          (setf (aref v i) (/ (aref v i) norm))))
-      v)))
+product at query time.  A zero vector has no direction and is returned as-is.
+
+A NaN or infinite component is rejected with LLM-RAG-ERROR rather than
+allowed to poison the stored vector.  Two independent guards are needed:
+implementations with IEEE float traps enabled (SBCL, by default) signal an
+ARITHMETIC-ERROR partway through the arithmetic below -- e.g. squaring a NaN,
+or computing inf/inf while normalising an infinite component -- before any
+explicit check would run, so that is caught and re-signalled as
+LLM-RAG-ERROR.  Implementations without traps enabled (e.g. ECL) instead
+compute silently to a NaN or infinite NORM, which self-equality alone does
+NOT catch (infinity is self-equal under IEEE 754); FINITE-SINGLE-FLOAT-P's
+magnitude bound is what rejects that case."
+  (handler-case
+      (let* ((n (length sequence))
+             (v (make-array n :element-type 'single-float)))
+        (let ((i 0))
+          (map nil (lambda (x)
+                     (setf (aref v i) (coerce x 'single-float))
+                     (incf i))
+               sequence))
+        (let ((norm (embedding-norm v)))
+          (unless (finite-single-float-p norm)
+            (non-finite-embedding-error))
+          (unless (zerop norm)
+            (dotimes (i n)
+              (setf (aref v i) (/ (aref v i) norm))))
+          v))
+    (arithmetic-error () (non-finite-embedding-error))))
 
 (defclass embedder ()
   ((model :initarg :model :initform nil :reader embedder-model))
