@@ -129,6 +129,67 @@ ITSELF (not on (as-embedding e)) catches it."
             "already-single-float, non-unit-norm embedding was not migrated: norm ~a"
             (rag:embedding-norm e))))))
 
+;;; Write-side enforcement: VALIDATE-CHUNKS normalises every embedding via
+;;; RAG:AS-EMBEDDING before it reaches CHUNK->VERTEX, so a chunk added via
+;;; STORE-ADD after HYDRATE can never leave a non-conforming value on the
+;;; EMBEDDING slot -- closing the gap where SCAN-GRAPH-STORE's STORE-SEARCH
+;;; direct-slot (simple-array single-float (*)) declaration would otherwise
+;;; TYPE-ERROR on exactly this vertex, at query time, far from the STORE-ADD
+;;; call that wrote it.
+
+(defun make-nan-single-float ()
+  #+sbcl (sb-kernel:make-single-float #x7fc00000)
+  #+ecl (coerce (ext:nan) 'single-float)
+  #-(or sbcl ecl) (error "no portable NaN constructor for this Lisp implementation"))
+
+(test scan-store-add-after-hydrate-normalises-raw-embedding
+  "A chunk added via STORE-ADD after HYDRATE, with a raw un-normalised
+double-float embedding, must (a) not signal, (b) leave a conforming
+normalised (simple-array single-float (*)) on the STORED slot -- asserted
+via %SLOT directly, not via VERTEX->CHUNK, which re-normalises on every read
+and would mask a broken write the same way it would mask a broken
+migration -- and (c) be searchable afterwards without a TYPE-ERROR. (c) is
+the actual regression this guards: before write-side normalisation, this
+exact vertex would blow up STORE-SEARCH's direct-slot scoring at query
+time."
+  (with-temp-graph (g)
+    (let ((store (v:make-graph-store g :strategy :scan)))
+      ;; HYDRATE has already run (inside MAKE-GRAPH-STORE, on an empty
+      ;; graph); this STORE-ADD happens strictly after it and is never
+      ;; touched by MIGRATE-EMBEDDINGS.
+      (let ((raw (make-array 2 :element-type 'double-float
+                                :initial-contents '(3.0d0 4.0d0))))
+        (finishes
+          (rag:store-add store (list (rag:make-chunk "legacy-write"
+                                       :document-id "doc-raw"
+                                       :embedding raw)))))
+      (let ((vertices '()))
+        (v::map-chunk-vertices store (lambda (vx) (push vx vertices)))
+        (let* ((target (find "doc-raw" vertices
+                             :key (lambda (vx) (v::%slot vx "DOCUMENT-ID"))
+                             :test #'equal))
+               (e (v::%slot target "EMBEDDING")))
+          (is (typep e '(simple-array single-float (*)))
+              "stored embedding was not coerced to single-float: ~S" (type-of e))
+          (is (< (abs (- 1.0 (rag:embedding-norm e))) 1e-5)
+              "stored embedding was not normalised: norm ~a" (rag:embedding-norm e))))
+      ;; the actual bug: STORE-SEARCH must not TYPE-ERROR on this vertex.
+      (let ((hits (finishes (rag:store-search store (rag:as-embedding '(1.0 0.0)) 5))))
+        (is (= 1 (length hits)))
+        (is (string= "doc-raw" (rag:chunk-document-id (rag:hit-chunk (first hits)))))))))
+
+(test scan-store-add-rejects-nan-embedding-as-llm-rag-error
+  "Write-side normalisation must still refuse genuinely bad input: a NaN
+component signals RAG:LLM-RAG-ERROR specifically (not a bare arithmetic
+error), confirming normalise-don't-reject did not start swallowing garbage."
+  (with-temp-graph (g)
+    (let ((store (v:make-graph-store g :strategy :scan)))
+      (signals rag:llm-rag-error
+        (rag:store-add store
+                       (list (rag:make-chunk "bad" :document-id "doc-nan"
+                              :embedding (list (make-nan-single-float) 3.0)))))
+      (is (= 0 (rag:store-count store))))))
+
 (test migrate-embeddings-is-a-noop-on-a-conforming-store
   "A store whose embeddings are already normalised single-float is left
 alone: MIGRATE-EMBEDDINGS rewrites nothing and returns 0. Without this, a

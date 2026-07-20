@@ -74,7 +74,21 @@ write in one transaction -- do NOT mutate while map-vertices iterates."
 
 (defun validate-chunks (store chunks)
   "Validate CHUNKS (non-nil embedding + consistent dimension) WITHOUT mutating
-the graph. Returns the dimension the batch establishes. Signals rag:llm-rag-error."
+the graph, and normalise each chunk's embedding to a conforming
+(simple-array single-float (*)) unit vector via RAG:AS-EMBEDDING -- IN PLACE
+on the chunk object (SETF RAG:CHUNK-EMBEDDING), so CHUNK->VERTEX (called
+afterwards on these same chunk objects by STORE-ADD) writes the normalised
+value, not the raw caller-supplied one. This is write-side enforcement: a
+chunk added via STORE-ADD after HYDRATE has already run is never touched by
+MIGRATE-EMBEDDINGS, so without this a raw double-float or un-normalised
+embedding would reach the EMBEDDING slot untouched and later blow up
+SCAN-GRAPH-STORE's STORE-SEARCH -- which scores that slot directly under a
+(simple-array single-float (*)) declaration -- with a TYPE-ERROR at query
+time, far from the STORE-ADD call that caused it. RAG:AS-EMBEDDING already
+rejects non-finite input (NaN/infinity) with RAG:LLM-RAG-ERROR (Task 4), so
+genuinely bad input is still refused; only fixable input (wrong float type,
+non-unit magnitude) is silently corrected. Returns the dimension the batch
+establishes. Signals rag:llm-rag-error."
   (let ((dim (graph-store-dimension store)))
     (dolist (chunk chunks)
       (let ((e (rag:chunk-embedding chunk)))
@@ -85,7 +99,8 @@ the graph. Returns the dimension the batch establishes. Signals rag:llm-rag-erro
               (error 'rag:llm-rag-error
                      :message (format nil "embedding dimension ~a does not match the ~
                                            store's dimension ~a" (length e) dim)))
-            (setf dim (length e)))))
+            (setf dim (length e)))
+        (setf (rag:chunk-embedding chunk) (rag:as-embedding e))))
     dim))
 
 (defmethod rag:store-add ((store graph-store) chunks)
