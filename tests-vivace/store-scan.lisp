@@ -65,3 +65,35 @@
       (is (= 2 (rag:store-count store)))
       (is (= 0 (rag:store-delete-document store "does-not-exist")))
       (is (= 2 (rag:store-count store))))))
+
+(test migrates-legacy-double-t-vector-embeddings
+  "A chunk stored as a T-vector of doubles is rewritten to a normalised
+single-float array on hydrate."
+  (with-temp-graph (g)
+    (v::ensure-chunk-schema g 'rag-chunk)
+    (let ((legacy (vector 3.0d0 4.0d0)))   ; unnormalised, boxed, T-vector
+      (let ((gdb:*graph* g))
+        (gdb:with-transaction ()
+          (funcall (v::chunk-constructor 'rag-chunk)
+                   :text "legacy" :document-id "doc-legacy"
+                   :metadata nil :embedding legacy :graph g))))
+    (let ((store (v:make-graph-store g :strategy :scan))
+          (vertices '()))
+      (v::map-chunk-vertices store (lambda (vx) (push vx vertices)))
+      (let ((e (v::%slot (first vertices) "EMBEDDING")))
+        (is (typep e '(simple-array single-float (*)))
+            "embedding was not migrated: ~S" (type-of e))
+        (is (< (abs (- 1.0 (rag:embedding-norm e))) 1e-5)
+            "embedding was not normalised")))))
+
+(test migration-policy-error-refuses-instead-of-migrating
+  "With :error policy, a legacy store signals rather than silently rewriting."
+  (with-temp-graph (g)
+    (v::ensure-chunk-schema g 'rag-chunk)
+    (let ((cl-llm.rag.vivace::*embedding-migration-policy* :error))
+      (let ((gdb:*graph* g))
+        (gdb:with-transaction ()
+          (funcall (v::chunk-constructor 'rag-chunk)
+                   :text "legacy" :document-id "doc-legacy"
+                   :metadata nil :embedding (vector 3.0d0 4.0d0) :graph g)))
+      (signals rag:llm-rag-error (v:make-graph-store g :strategy :scan)))))

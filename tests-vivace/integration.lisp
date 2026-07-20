@@ -30,8 +30,10 @@ reopened graph hydrates from it."
                       ;; to a T-vector, so this passes only because vertex->chunk
                       ;; coerces via rag:as-embedding. Use typep, NOT (type-of ...):
                       ;; SBCL's type-of reports a concrete dimension, never (*).
+                      ;; single-float, not double-float: RAG:AS-EMBEDDING has produced
+                      ;; single-float unconditionally since Task 4.
                       (is (typep (rag:chunk-embedding (rag:hit-chunk hit))
-                                 '(simple-array double-float (*))))))
+                                 '(simple-array single-float (*))))))
                (gdb:close-graph g2))))
       (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
 

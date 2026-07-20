@@ -70,7 +70,22 @@ with gdb:*graph* bound to GRAPH."
 
 (defun vertex->chunk (vertex)
   "Reconstruct a rag:chunk from a chunk VERTEX, coercing the embedding back to
-(simple-array single-float (*)) and L2-normalising it via rag:as-embedding."
+(simple-array single-float (*)) and L2-normalising it via rag:as-embedding.
+
+KEEP the RAG:AS-EMBEDDING call -- it is a live guard, not post-migration
+redundancy. MIGRATE-EMBEDDINGS (vivace/store.lisp) only runs once, at HYDRATE
+time; a chunk added afterwards via STORE-ADD with a caller-supplied
+non-conforming embedding (VALIDATE-CHUNKS only checks presence and dimension,
+never type or norm) is never migrated. SCAN-GRAPH-STORE's STORE-SEARCH reads
+vertices straight from the graph on every call, so this coercion is what
+keeps that live path correct in between hydrates. Accepted cost: one
+allocation, one sqrt, N divisions, and ~1 ULP of re-normalisation drift on
+every read (see CHUNK-VERTEX-ROUND-TRIPS-WITH-COERCED-EMBEDDING in
+tests-vivace/schema.lisp for the drift itself). This becomes safely
+removable only once normalisation/type are enforced at WRITE time too (in
+VALIDATE-CHUNKS or CHUNK->VERTEX), not just at hydrate time -- until then,
+removing it reopens the exact silent-wrong-ranking failure mode Task 6
+exists to close."
   (rag:make-chunk (%slot vertex "TEXT")
                   :document-id (%slot vertex "DOCUMENT-ID")
                   :metadata (%slot vertex "METADATA")

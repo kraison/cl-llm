@@ -14,6 +14,54 @@
 (defgeneric hydrate (store)
   (:documentation "Initialise a store from chunk vertices already in the graph."))
 
+(defparameter *embedding-migration-policy* :migrate
+  "What HYDRATE does with stored embeddings that are not already normalised
+single-float arrays.  :MIGRATE rewrites them in place (default).  :ERROR refuses
+to open the store.  There is deliberately no :IGNORE -- scoring after Phase 1 is
+a bare dot product, so an unnormalised stored vector ranks WRONG rather than
+merely slow, and a silent wrong answer is the failure mode this guards.")
+
+(defun %needs-migration-p (e)
+  (or (not (typep e '(simple-array single-float (*))))
+      (> (abs (- 1.0 (rag:embedding-norm (rag:as-embedding e)))) 1e-4)))
+
+(defun migrate-embeddings (store)
+  "Rewrite any stored embedding that is not already a normalised single-float
+array.  Returns the number of chunks rewritten.  Collect victims first, then
+write in one transaction -- do NOT mutate while map-vertices iterates."
+  (let ((victims '()))
+    (map-chunk-vertices
+     store
+     (lambda (vertex)
+       (when (%needs-migration-p (%slot vertex "EMBEDDING"))
+         (push vertex victims))))
+    (when victims
+      (ecase *embedding-migration-policy*
+        (:error
+         (error 'rag:llm-rag-error
+                :message (format nil "~a stored embeddings are not normalised ~
+                                      single-float vectors; scoring would rank ~
+                                      them incorrectly. Re-embed, or set ~
+                                      *embedding-migration-policy* to :migrate."
+                                 (length victims))))
+        (:migrate
+         ;; Go through graph-db's copy-modify-save idiom (gdb:copy / gdb:save), NOT a raw
+         ;; (setf (slot-value ...)) on the live vertex fetched by map-vertices: a bare slot-value
+         ;; setf on an in-place node bypasses the transaction's write-set (populated only by
+         ;; UPDATE-NODE, which SAVE calls), so it gets no OCC conflict validation and no
+         ;; replication/txn-log participation, even though it happens to end up on disk via
+         ;; close-graph's unconditional snapshot in the common single-writer case. COPY registers
+         ;; a mutable copy with the current transaction; SAVE runs it through UPDATE-NODE like any
+         ;; other write.
+         (let ((gdb:*graph* (graph-store-graph store)))
+           (gdb:with-transaction ()
+             (dolist (v victims)
+               (let ((c (gdb:copy v)))
+                 (setf (slot-value c (intern "EMBEDDING" :graph-db))
+                       (rag:as-embedding (%slot v "EMBEDDING")))
+                 (gdb:save c))))))))
+    (length victims)))
+
 (defun validate-chunks (store chunks)
   "Validate CHUNKS (non-nil embedding + consistent dimension) WITHOUT mutating
 the graph. Returns the dimension the batch establishes. Signals rag:llm-rag-error."
@@ -102,6 +150,7 @@ iterate chunks in different orders) agree on an exact tie."
     (subseq (stable-sort hits #'hit<) 0 (min k (length hits)))))
 
 (defmethod hydrate ((store scan-graph-store))
+  (migrate-embeddings store)
   ;; Record the dimension from the first existing chunk, if any. Do NOT do a
   ;; non-local exit out of map-vertices (it may hold locks); iterate and set once.
   (unless (graph-store-dimension store)
@@ -158,6 +207,7 @@ hydrates from any chunks already in the graph. Never opens or closes GRAPH."
   (rag:store-search (cache-index store) query-vector k))
 
 (defmethod hydrate ((store cached-graph-store))
+  (migrate-embeddings store)
   (let ((chunks (graph-store-chunks store)))
     (when chunks
       (rag:store-add (cache-index store) chunks)
