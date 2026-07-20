@@ -185,3 +185,14 @@
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run! :cl-llm-rag-vivace)
                (error "cl-llm/rag/vivace tests failed."))))
+
+(defsystem "cl-llm/bench"
+  :description "Benchmarks for cl-llm/rag. Not loaded by the test suites."
+  :license "MIT"
+  :depends-on ("cl-llm/rag/vivace")
+  :serial t
+  :components ((:module "bench"
+                :serial t
+                :components ((:file "packages")
+                             (:file "corpus")
+                             (:file "attribution")))))
