@@ -64,30 +64,49 @@ score.  Strides the block; no per-candidate indirection."
           (incf sum (* (aref flat (+ base j)) (aref query j))))
         (when (> sum best) (setf best sum))))))
 
-(defun %cold-start-search (graph dir query)
+(defun %cold-start-search (graph dir query dim)
   "Close GRAPH, reopen the SAME on-disk graph as a genuinely fresh graph
-object, build a fresh :SCAN store over it, and time ONE first STORE-SEARCH.
-A single sample, not a median -- a cold read is only cold once.  Returns
-(values TIME-MS FRESH-GRAPH) so the caller can hand FRESH-GRAPH to
-TEARDOWN-CORPUS instead of the now-closed original.
+object, build a fresh :SCAN store DIRECTLY over it (bypassing HYDRATE -- see
+below), and time ONE first STORE-SEARCH.  A single sample, not a median -- a
+cold read is only cold once.  Returns (values TIME-MS FRESH-GRAPH) so the
+caller can hand FRESH-GRAPH to TEARDOWN-CORPUS instead of the now-closed
+original.
+
+Why bypass HYDRATE: V:MAKE-GRAPH-STORE calls HYDRATE, which runs
+MIGRATE-EMBEDDINGS (a full scan touching every vertex's EMBEDDING slot --
+the SAME materialising read measurement B uses) and then a second full scan
+to infer the dimension, BOTH before this function's timer starts.  By the
+time the timed STORE-SEARCH ran, every vertex was already materialised into
+the fresh graph's node cache -- that measured a warm search mislabeled cold
+(and the graph's node cache is :WEAKNESS :VALUE, so whether GC had reclaimed
+those hydrate-warmed entries before the timed call varied run to run, which
+is why early versions of this measurement swung between ~A and ~5xA).
+Constructing the SCAN-GRAPH-STORE directly, with :DIMENSION supplied, skips
+both untimed scans entirely, so the timed call is the FIRST touch of every
+vertex.  This is safe: the corpus was written through STORE-ADD during
+BUILD-CORPUS, so on disk every embedding is already a normalised
+single-float array -- MIGRATE-EMBEDDINGS would find zero victims regardless
+of whether HYDRATE ran.
 
 What \"cold\" means here: a fresh GDB:GRAPH instance gets a fresh, empty
 per-graph node cache (the weak-value id-table graph-db materialises vertices
 into) and a freshly-established mmap, so every visited vertex must be
 re-materialised from its serialised bytes -- none of the warmth A/B/C/D
 accumulated (from %COLLECT-EMBEDDINGS's pre-scan and A's own warm-up) carries
-over.  What it does NOT mean: true disk-cold I/O.  The OS page cache
-independently keeps the mmap'd file's pages resident in RAM across the
-close/reopen, and this process cannot drop that without root (macOS's `purge`
-requires sudo, which this harness deliberately does not invoke).  So E is
-\"first touch after a process-level graph reopen\", not \"first touch after a
-cold disk\" -- read it as a lower bound on the true cold-start penalty, not
-the number itself."
+over, and now (post-fix) neither does any hydrate-time warming.  What it
+does NOT mean: true disk-cold I/O.  The OS page cache independently keeps
+the mmap'd file's pages resident in RAM across the close/reopen, and this
+process cannot drop that without root (macOS's `purge` requires sudo, which
+this harness deliberately does not invoke).  So E is \"first touch after a
+process-level graph reopen\", not \"first touch after a cold disk\" -- read
+it as a lower bound on the true cold-start penalty, not the number itself."
   (let ((name (gdb:graph-name graph)))
     (gdb:close-graph graph :snapshot-p nil)
-    (v::ensure-chunk-class 'rag-chunk name)
+    (v:ensure-chunk-class 'rag-chunk name)
     (let* ((fresh-graph (gdb:open-graph name (pathname dir)))
-           (fresh-store (v:make-graph-store fresh-graph :strategy :scan)))
+           (fresh-store (make-instance 'v:scan-graph-store
+                                        :graph fresh-graph :type 'rag-chunk
+                                        :dimension dim)))
       (values (%ms (lambda () (rag:store-search fresh-store query 10)))
               fresh-graph))))
 
@@ -126,7 +145,7 @@ timing, tear down, return a plist."
            ;; reopens GRAPH, invalidating STORE/VECTORS bookkeeping tied to the
            ;; old graph object.  It hands back the fresh graph so cleanup below
            ;; closes the right one.
-           (multiple-value-bind (e-ms fresh-graph) (%cold-start-search graph dir query)
+           (multiple-value-bind (e-ms fresh-graph) (%cold-start-search graph dir query dim)
              (setf e e-ms)
              (setf graph fresh-graph))
            (list :n n :dim dim :a a :b b :c c :d d :e e))
@@ -143,6 +162,8 @@ timing, tear down, return a plist."
     (format t "D  score, contiguous block  ~,1f ms  (~,0f%% of A)~%" d (* 100 (/ d a)))
     (format t "-- COLD (single first search after a fresh process-level graph reopen) --~%")
     (format t "E  cold-start full search   ~,1f ms~%" e)
+    (format t "   (E is a single sample; the OS page cache is not controlled, so read~%")
+    (format t "   E as a LOWER BOUND on true disk-cold I/O, not the number itself)~%")
     (format t "~%predicted segment latency  ~,1f ms~%" d)
     (format t "predicted win (A - D)      ~,1f ms~%" (- a d))
     (format t "cold-start penalty (E - A) ~,1f ms~%" (- e a))
