@@ -10,10 +10,36 @@
   (:documentation "How many chunks are indexed."))
 (defgeneric save-store (store path)
   (:documentation "Persist STORE to PATH."))
+(defgeneric store-delete-documents (store document-ids)
+  (:documentation "Remove every indexed chunk whose DOCUMENT-ID is in DOCUMENT-IDS
+(compared with EQUAL). Returns the number of chunks removed (0 if none matched --
+deleting absent documents is a no-op, never an error).
+
+This is the PRIMITIVE every store implements; STORE-DELETE-DOCUMENT is its
+one-element case. Two reasons it is the primitive rather than a loop over the
+singular:
+
+  - Cost. A store's delete is a rebuild, so deleting n of m documents one at a
+    time is O(n*m). Refreshing 3220 documents in a 23k-chunk store that way took
+    ~2 hours against ~8 minutes for the same work as pure adds. Taking a SET of
+    ids means one pass regardless of n.
+  - One implementation per store. Singular and plural rebuilds that drift apart
+    is exactly the kind of divergence that hides a data-integrity bug."))
+
 (defgeneric store-delete-document (store document-id)
   (:documentation "Remove every indexed chunk whose DOCUMENT-ID matches (EQUAL).
 Returns the number of chunks removed (0 if none matched -- deleting an absent
 document is a no-op, never an error)."))
+
+(defmethod store-delete-document (store document-id)
+  "The one-element case of STORE-DELETE-DOCUMENTS, which is the primitive."
+  (store-delete-documents store (list document-id)))
+
+(defun %id-set (document-ids)
+  "A hash-set of DOCUMENT-IDS for O(1) EQUAL membership during a delete scan."
+  (let ((set (make-hash-table :test 'equal)))
+    (dolist (id document-ids set)
+      (setf (gethash id set) t))))
 
 (declaim (inline dot))
 (defun dot (a b)
@@ -119,9 +145,12 @@ TIEBREAK is the candidate's document-id (or \"\" when it has none)."
                                        (first b) (second b)))))))
 
 (defclass memory-store ()
-  ((chunks :initform (make-array 0 :adjustable t :fill-pointer 0) :reader store-chunks)
+  ((chunks :initform (make-array 0 :adjustable t :fill-pointer 0) :accessor store-chunks)
    (dimension :initform nil :accessor store-dimension))
-  (:documentation "A flat in-memory vector of chunks; brute-force exact cosine."))
+  (:documentation "A flat in-memory vector of chunks; brute-force exact cosine.
+CHUNKS is an ACCESSOR, not a bare reader, because a delete PUBLISHES a freshly
+built replacement vector rather than rebuilding the live one in place -- see
+STORE-DELETE-DOCUMENTS."))
 
 (defun make-memory-store () (make-instance 'memory-store))
 
@@ -191,13 +220,30 @@ TIEBREAK is the candidate's document-id (or \"\" when it has none)."
 (defmethod store-count ((store memory-store))
   (length (store-chunks store)))
 
-(defmethod store-delete-document ((store memory-store) document-id)
-  "Rebuild the backing vector in place, dropping chunks whose DOCUMENT-ID matches."
+(defmethod store-delete-documents ((store memory-store) document-ids)
+  "Build the replacement vector, then PUBLISH it with a single SETF.
+
+Never rebuild the live vector in place. STORE-COUNT and STORE-SEARCH read that
+same vector, so the old truncate-then-refill (setf fill-pointer 0, then push the
+survivors back) made any concurrent reader observe a partially refilled store --
+and a rebuild interrupted part-way (a killed worker) left it truncated for real.
+Both were seen in production: a mid-refresh sample reported 10,626 chunks against
+a true 23,192, which reads exactly like catastrophic data loss and is not.
+
+Copy-and-swap removes the window entirely: a reader either holds the old vector
+(a consistent pre-delete snapshot) or reads the new one, never a half-built one."
   (let* ((chunks (store-chunks store))
-         (kept (remove document-id chunks :key #'chunk-document-id :test #'equal))
+         (ids (%id-set document-ids))
+         (kept (remove-if (lambda (chunk)
+                            (gethash (chunk-document-id chunk) ids))
+                          chunks))
          (removed (- (length chunks) (length kept))))
-    (setf (fill-pointer chunks) 0)
-    (loop for c across kept do (vector-push-extend c chunks))
+    ;; Nothing matched: return without allocating or swapping, so an absent-id
+    ;; delete leaves the store (and the vector's identity) completely untouched.
+    (when (plusp removed)
+      (let ((new (make-array (length kept) :adjustable t :fill-pointer (length kept))))
+        (replace new kept)
+        (setf (store-chunks store) new)))
     removed))
 
 ;;; Persistence: a readable s-expression with exact double-float round-trip.
