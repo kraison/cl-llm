@@ -202,3 +202,40 @@ every vector on every open, forever, and nothing would notice."
                                  (mk-chunk emb "the PFM-1 is a butterfly mine" :doc "pfm1")))
       (is (= 0 (v::migrate-embeddings store))
           "a conforming store's embeddings were rewritten when they should not have been"))))
+
+(defun %insert-legacy-vertices (g n)
+  "Insert N legacy chunk vertices directly (raw, unnormalised, boxed double-float
+T-vector embeddings -- bypassing all write-side normalisation), each with a
+distinct DOCUMENT-ID, so MIGRATE-EMBEDDINGS has N victims to work through."
+  (v::ensure-chunk-schema g 'rag-chunk)
+  (let ((gdb:*graph* g))
+    (gdb:with-transaction ()
+      (dotimes (i n)
+        (funcall (v::chunk-constructor 'rag-chunk)
+                 :text (format nil "legacy-~d" i)
+                 :document-id (format nil "doc-~d" i)
+                 :metadata nil
+                 :embedding (vector (coerce (1+ i) 'double-float) 0.0d0)
+                 :graph g)))))
+
+(test migrate-embeddings-batches-across-multiple-transactions
+  "With a small batch size, MIGRATE-EMBEDDINGS still migrates EVERY victim and
+returns the correct total count -- more victims than fit in one batch, so this
+exercises more than one gdb:with-transaction. Without this, batching is
+untested at more than one batch: a bug that dropped or double-counted victims
+across batch boundaries would not be caught by the single-batch tests above."
+  (with-temp-graph (g)
+    (%insert-legacy-vertices g 5)
+    (let ((cl-llm.rag.vivace::*embedding-migration-batch-size* 2)
+          (store (make-instance 'v:scan-graph-store :graph g :type 'rag-chunk)))
+      (is (= 5 (v::migrate-embeddings store))
+          "batched migration did not report the full victim count")
+      (let ((vertices '()))
+        (v::map-chunk-vertices store (lambda (vx) (push vx vertices)))
+        (is (= 5 (length vertices)))
+        (dolist (vx vertices)
+          (let ((e (v::%slot vx "EMBEDDING")))
+            (is (typep e '(simple-array single-float (*)))
+                "vertex ~a was not migrated: ~S" (v::%slot vx "DOCUMENT-ID") (type-of e))
+            (is (< (abs (- 1.0 (rag:embedding-norm e))) 1e-5)
+                "vertex ~a was not normalised" (v::%slot vx "DOCUMENT-ID"))))))))

@@ -21,6 +21,20 @@ to open the store.  There is deliberately no :IGNORE -- scoring after Phase 1 is
 a bare dot product, so an unnormalised stored vector ranks WRONG rather than
 merely slow, and a silent wrong answer is the failure mode this guards.")
 
+(defparameter *embedding-migration-batch-size* 5000
+  "Number of victim vertices MIGRATE-EMBEDDINGS rewrites per gdb:with-transaction.
+GDB:COPY duplicates the WHOLE vertex -- TEXT and METADATA included, not just the
+EMBEDDING slot -- which measured ~40KB/chunk end-to-end (RSS delta / chunk count) on a
+real 19,973-chunk legacy store of 1024-dimension double-float embeddings. 5000 chunks
+per batch bounds that transient copy overhead to roughly 200MB regardless of corpus
+size -- safe on any machine this runs on -- while keeping the transaction count for the
+reference corpus to 4 (was 1, and that 1 needed +771MB RSS and ~22.6s) and for the
+1M-vector corpus this project targets to ~200 (was 1, and that 1 needed ~38GB and ~19
+minutes -- and does not run at all on any machine here). More transactions cost
+per-transaction overhead; fewer cost peak memory and a bigger chunk of lost progress if
+a later batch fails; 5000 sits comfortably on the safe side of that trade for the
+failure mode that matters here -- resumability -- not raw throughput.")
+
 (defun %needs-migration-p (e)
   "T if E needs rewriting: either it is not yet the specialised single-float
 array type, or it IS that type but is not unit-norm.  The second disjunct
@@ -35,17 +49,58 @@ EMBEDDING-NORM declares, so no coercion is needed here."
   (or (not (typep e '(simple-array single-float (*))))
       (> (abs (- 1.0 (rag:embedding-norm e))) 1e-4)))
 
+(defun %migrate-embedding-batch (graph victims start end)
+  "Copy-modify-save the vertices at VICTIMS[START,END) (a vector of ids) inside one
+gdb:with-transaction. VICTIMS holds ids, not vertex objects (see MIGRATE-EMBEDDINGS);
+each vertex is looked up fresh here, inside the transaction, so the read participates
+in the transaction's read-set like any other transactional read.
+
+Go through graph-db's copy-modify-save idiom (gdb:copy / gdb:save), NOT a raw
+(setf (slot-value ...)) on the live vertex fetched by lookup-vertex: a bare slot-value
+setf on an in-place node bypasses the transaction's write-set (populated only by
+UPDATE-NODE, which SAVE calls), so it gets no OCC conflict validation and no
+replication/txn-log participation, even though it happens to end up on disk via
+close-graph's unconditional snapshot in the common single-writer case. COPY registers
+a mutable copy with the current transaction; SAVE runs it through UPDATE-NODE like any
+other write."
+  (let ((gdb:*graph* graph))
+    (gdb:with-transaction ()
+      (loop for i from start below end
+            do (let* ((v (gdb:lookup-vertex (aref victims i) :graph graph))
+                      (c (gdb:copy v)))
+                 (setf (slot-value c (intern "EMBEDDING" :graph-db))
+                       (rag:as-embedding (%slot v "EMBEDDING")))
+                 (gdb:save c))))))
+
 (defun migrate-embeddings (store)
-  "Rewrite any stored embedding that is not already a normalised single-float
-array.  Returns the number of chunks rewritten.  Collect victims first, then
-write in one transaction -- do NOT mutate while map-vertices iterates."
-  (let ((victims '()))
+  "Rewrite any stored embedding that is not already a normalised single-float array.
+Returns the number of chunks rewritten.
+
+Collect victim IDS during the scan, not vertex objects: ids are a few bytes each, so
+holding all of them for a million-chunk corpus is negligible, unlike holding the full
+vertex objects (which is what made the pre-batching version's peak RSS scale with
+corpus size before a single byte was written). Do NOT mutate while map-vertices
+iterates -- that's why collection still happens before any write.
+
+Writes happen in batches of *EMBEDDING-MIGRATION-BATCH-SIZE*, one gdb:with-transaction
+per batch, committing as it goes: peak memory is bounded by the batch rather than the
+whole corpus, and progress from a batch that already committed survives a crash in a
+LATER batch. This is deliberately NOT atomic across the whole corpus: an
+all-or-nothing transaction across a huge corpus makes a store too large to migrate
+atomically PERMANENTLY unopenable (every open re-attempts the identical operation and
+fails identically, under either policy), whereas %NEEDS-MIGRATION-P is a per-vector
+predicate, so an interrupted batched run is resumable for free -- the next open only
+re-migrates whatever is still non-conforming. A half-migrated store is already the
+state that exists transiently during any migration; resumability is worth more than
+atomicity for this one-way upgrade."
+  (let ((graph (graph-store-graph store))
+        (victim-ids '()))
     (map-chunk-vertices
      store
      (lambda (vertex)
        (when (%needs-migration-p (%slot vertex "EMBEDDING"))
-         (push vertex victims))))
-    (when victims
+         (push (gdb:id vertex) victim-ids))))
+    (when victim-ids
       (ecase *embedding-migration-policy*
         (:error
          (error 'rag:llm-rag-error
@@ -53,24 +108,22 @@ write in one transaction -- do NOT mutate while map-vertices iterates."
                                       single-float vectors; scoring would rank ~
                                       them incorrectly. Re-embed, or set ~
                                       *embedding-migration-policy* to :migrate."
-                                 (length victims))))
+                                 (length victim-ids))))
         (:migrate
-         ;; Go through graph-db's copy-modify-save idiom (gdb:copy / gdb:save), NOT a raw
-         ;; (setf (slot-value ...)) on the live vertex fetched by map-vertices: a bare slot-value
-         ;; setf on an in-place node bypasses the transaction's write-set (populated only by
-         ;; UPDATE-NODE, which SAVE calls), so it gets no OCC conflict validation and no
-         ;; replication/txn-log participation, even though it happens to end up on disk via
-         ;; close-graph's unconditional snapshot in the common single-writer case. COPY registers
-         ;; a mutable copy with the current transaction; SAVE runs it through UPDATE-NODE like any
-         ;; other write.
-         (let ((gdb:*graph* (graph-store-graph store)))
-           (gdb:with-transaction ()
-             (dolist (v victims)
-               (let ((c (gdb:copy v)))
-                 (setf (slot-value c (intern "EMBEDDING" :graph-db))
-                       (rag:as-embedding (%slot v "EMBEDDING")))
-                 (gdb:save c))))))))
-    (length victims)))
+         (let* ((victims (coerce (nreverse victim-ids) 'vector))
+                (total (length victims))
+                (migrated 0))
+           (format t "~&migrate-embeddings: ~d embedding~:p need migration; rewriting ~
+                      in batches of ~d~%"
+                   total *embedding-migration-batch-size*)
+           (finish-output)
+           (loop for start from 0 below total by *embedding-migration-batch-size*
+                 for end = (min total (+ start *embedding-migration-batch-size*))
+                 do (%migrate-embedding-batch graph victims start end)
+                    (incf migrated (- end start))
+                    (format t "~&migrate-embeddings: ~d/~d migrated~%" migrated total)
+                    (finish-output))))))
+    (length victim-ids)))
 
 (defun validate-chunks (store chunks)
   "Validate CHUNKS (non-nil embedding + consistent dimension) WITHOUT mutating
