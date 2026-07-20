@@ -23,6 +23,15 @@ EMBEDDING is an EMBEDDING vector once indexed, or NIL."
   (%make-chunk text document-id metadata embedding))
 
 (defstruct (hit (:constructor make-hit (chunk score)))
-  "One retrieval result: a CHUNK and its similarity SCORE."
+  "One retrieval result: a CHUNK and its similarity SCORE.
+SCORE's float type varies by producer: dense retrieval (COSINE) now yields
+SINGLE-FLOAT, while BM25 (sparse.lisp) and RRF/backfill fusion (hybrid.lisp)
+yield DOUBLE-FLOAT -- so the slot accepts either rather than picking one."
   (chunk nil)
-  (score 0d0 :type double-float))
+  ;; :type FLOAT, not SINGLE-FLOAT -- do not tighten this. SCORE is produced
+  ;; by three different call sites with three different float types: COSINE
+  ;; (store.lisp) yields SINGLE-FLOAT; BM25 term scoring (sparse.lisp) and
+  ;; RRF/backfill fusion (hybrid.lisp) both build on 1d0/0.5d0 literals and
+  ;; yield DOUBLE-FLOAT. Narrowing to SINGLE-FLOAT would break sparse and
+  ;; hybrid retrieval -- a regression no dense-only test would catch.
+  (score 0d0 :type float))

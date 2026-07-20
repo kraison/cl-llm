@@ -14,9 +14,81 @@
 (defgeneric hydrate (store)
   (:documentation "Initialise a store from chunk vertices already in the graph."))
 
+(defparameter *embedding-migration-policy* :migrate
+  "What HYDRATE does with stored embeddings that are not already normalised
+single-float arrays.  :MIGRATE rewrites them in place (default).  :ERROR refuses
+to open the store.  There is deliberately no :IGNORE -- scoring after Phase 1 is
+a bare dot product, so an unnormalised stored vector ranks WRONG rather than
+merely slow, and a silent wrong answer is the failure mode this guards.")
+
+(defun %needs-migration-p (e)
+  "T if E needs rewriting: either it is not yet the specialised single-float
+array type, or it IS that type but is not unit-norm.  The second disjunct
+measures E's OWN norm via RAG:EMBEDDING-NORM -- it must NOT run E through
+RAG:AS-EMBEDDING first, since AS-EMBEDDING renormalises its output to ~1.0
+for any non-zero input, which would make this check a tautology (always
+true-by-~1.0, regardless of E's actual stored norm) and silently skip
+migrating any already-single-float, non-unit-norm vector forever.  OR only
+evaluates the second disjunct when the first is false, and the first being
+false means E is already (simple-array single-float (*)) -- exactly the type
+EMBEDDING-NORM declares, so no coercion is needed here."
+  (or (not (typep e '(simple-array single-float (*))))
+      (> (abs (- 1.0 (rag:embedding-norm e))) 1e-4)))
+
+(defun migrate-embeddings (store)
+  "Rewrite any stored embedding that is not already a normalised single-float
+array.  Returns the number of chunks rewritten.  Collect victims first, then
+write in one transaction -- do NOT mutate while map-vertices iterates."
+  (let ((victims '()))
+    (map-chunk-vertices
+     store
+     (lambda (vertex)
+       (when (%needs-migration-p (%slot vertex "EMBEDDING"))
+         (push vertex victims))))
+    (when victims
+      (ecase *embedding-migration-policy*
+        (:error
+         (error 'rag:llm-rag-error
+                :message (format nil "~a stored embeddings are not normalised ~
+                                      single-float vectors; scoring would rank ~
+                                      them incorrectly. Re-embed, or set ~
+                                      *embedding-migration-policy* to :migrate."
+                                 (length victims))))
+        (:migrate
+         ;; Go through graph-db's copy-modify-save idiom (gdb:copy / gdb:save), NOT a raw
+         ;; (setf (slot-value ...)) on the live vertex fetched by map-vertices: a bare slot-value
+         ;; setf on an in-place node bypasses the transaction's write-set (populated only by
+         ;; UPDATE-NODE, which SAVE calls), so it gets no OCC conflict validation and no
+         ;; replication/txn-log participation, even though it happens to end up on disk via
+         ;; close-graph's unconditional snapshot in the common single-writer case. COPY registers
+         ;; a mutable copy with the current transaction; SAVE runs it through UPDATE-NODE like any
+         ;; other write.
+         (let ((gdb:*graph* (graph-store-graph store)))
+           (gdb:with-transaction ()
+             (dolist (v victims)
+               (let ((c (gdb:copy v)))
+                 (setf (slot-value c (intern "EMBEDDING" :graph-db))
+                       (rag:as-embedding (%slot v "EMBEDDING")))
+                 (gdb:save c))))))))
+    (length victims)))
+
 (defun validate-chunks (store chunks)
   "Validate CHUNKS (non-nil embedding + consistent dimension) WITHOUT mutating
-the graph. Returns the dimension the batch establishes. Signals rag:llm-rag-error."
+the graph, and normalise each chunk's embedding to a conforming
+(simple-array single-float (*)) unit vector via RAG:AS-EMBEDDING -- IN PLACE
+on the chunk object (SETF RAG:CHUNK-EMBEDDING), so CHUNK->VERTEX (called
+afterwards on these same chunk objects by STORE-ADD) writes the normalised
+value, not the raw caller-supplied one. This is write-side enforcement: a
+chunk added via STORE-ADD after HYDRATE has already run is never touched by
+MIGRATE-EMBEDDINGS, so without this a raw double-float or un-normalised
+embedding would reach the EMBEDDING slot untouched and later blow up
+SCAN-GRAPH-STORE's STORE-SEARCH -- which scores that slot directly under a
+(simple-array single-float (*)) declaration -- with a TYPE-ERROR at query
+time, far from the STORE-ADD call that caused it. RAG:AS-EMBEDDING already
+rejects non-finite input (NaN/infinity) with RAG:LLM-RAG-ERROR (Task 4), so
+genuinely bad input is still refused; only fixable input (wrong float type,
+non-unit magnitude) is silently corrected. Returns the dimension the batch
+establishes. Signals rag:llm-rag-error."
   (let ((dim (graph-store-dimension store)))
     (dolist (chunk chunks)
       (let ((e (rag:chunk-embedding chunk)))
@@ -27,7 +99,8 @@ the graph. Returns the dimension the batch establishes. Signals rag:llm-rag-erro
               (error 'rag:llm-rag-error
                      :message (format nil "embedding dimension ~a does not match the ~
                                            store's dimension ~a" (length e) dim)))
-            (setf dim (length e)))))
+            (setf dim (length e)))
+        (setf (rag:chunk-embedding chunk) (rag:as-embedding e))))
     dim))
 
 (defmethod rag:store-add ((store graph-store) chunks)
@@ -76,32 +149,36 @@ then mark-deleted them in one transaction (mark-deleted joins the active tx)."
     (map-chunk-vertices store (lambda (v) (declare (ignore v)) (incf n)))
     n))
 
-(defun hit< (a b)
-  "Deterministic ranking order: higher score first; ties broken by DOCUMENT-ID.
-Mirrors CL-LLM.RAG's memory-store comparator so scan and cache stores (which
-iterate chunks in different orders) agree on an exact tie."
-  (let ((sa (rag:hit-score a)) (sb (rag:hit-score b)))
-    (cond ((> sa sb) t)
-          ((< sa sb) nil)
-          (t (string< (or (rag:chunk-document-id (rag:hit-chunk a)) "")
-                      (or (rag:chunk-document-id (rag:hit-chunk b)) ""))))))
-
 (defmethod rag:store-search ((store scan-graph-store) query-vector k)
   (when (and (graph-store-dimension store)
              (/= (length query-vector) (graph-store-dimension store)))
     (error 'rag:llm-rag-error
            :message (format nil "query dimension ~a does not match store dimension ~a"
                             (length query-vector) (graph-store-dimension store))))
-  (let ((hits '()))
+  ;; Score against the embedding slot only, and build a rag:chunk ONLY for the
+  ;; survivors.  vertex->chunk per candidate was the dominant cost: it rebuilt
+  ;; text and metadata for every chunk in the corpus to rank five of them.
+  (let ((collector (rag::top-k-collector k)))
     (map-chunk-vertices
      store
      (lambda (vertex)
-       (let ((chunk (vertex->chunk vertex)))
-         (push (rag:make-hit chunk (rag:cosine query-vector (rag:chunk-embedding chunk)))
-               hits))))
-    (subseq (stable-sort hits #'hit<) 0 (min k (length hits)))))
+       ;; Score the slot value DIRECTLY.  Do NOT call as-embedding here: after
+       ;; Task 4 it allocates and L2-normalises, which would put one allocation,
+       ;; one sqrt and DIM divisions in the per-candidate inner loop -- exactly
+       ;; the cost Tasks 1-3 exist to remove.  Task 6's migration guarantees the
+       ;; slot is already a normalised (simple-array single-float (*)).
+       (let ((e (%slot vertex "EMBEDDING")))
+         (declare (type (simple-array single-float (*)) e))
+         (rag::collect-candidate collector
+                                 (rag:cosine query-vector e)
+                                 (or (%slot vertex "DOCUMENT-ID") "")
+                                 vertex))))
+    (mapcar (lambda (pair)
+              (rag:make-hit (vertex->chunk (cdr pair)) (car pair)))
+            (rag::collector-results collector))))
 
 (defmethod hydrate ((store scan-graph-store))
+  (migrate-embeddings store)
   ;; Record the dimension from the first existing chunk, if any. Do NOT do a
   ;; non-local exit out of map-vertices (it may hold locks); iterate and set once.
   (unless (graph-store-dimension store)
@@ -158,6 +235,7 @@ hydrates from any chunks already in the graph. Never opens or closes GRAPH."
   (rag:store-search (cache-index store) query-vector k))
 
 (defmethod hydrate ((store cached-graph-store))
+  (migrate-embeddings store)
   (let ((chunks (graph-store-chunks store)))
     (when chunks
       (rag:store-add (cache-index store) chunks)

@@ -23,7 +23,7 @@
 (test embed-mock-vector-is-unit-length
   (let* ((e (rag:make-mock-embedder))
          (v (rag:embed e "anything")))
-    (is (typep v '(simple-array double-float (*))))
+    (is (typep v '(simple-array single-float (*))))
     (is (< (abs (- 1.0d0 (sqrt (loop for x across v sum (* x x))))) 1d-9))))
 
 (test embed-mock-batch-preserves-order
@@ -133,7 +133,7 @@ wired together correctly."
         (e (rag:make-openai-compatible-embedder :base-url "http://x/v1" :model "m")))
     (let ((result (let ((cl-llm.http:*driver* driver))
                     (rag:embed e "a"))))
-      (is (typep result '(simple-array double-float (*))))
+      (is (typep result '(simple-array single-float (*))))
       (is (equalp (coerce #(1.0d0 0.0d0) '(simple-array double-float (*))) result)))))
 
 (test embed-openai-compatible-malformed-response-signals-llm-rag-error
@@ -144,3 +144,59 @@ error escaping from the JSON layer."
     (signals rag:llm-rag-error
       (let ((cl-llm.http:*driver* driver))
         (rag:embed e (list "a"))))))
+
+(test as-embedding-is-normalised-single-float
+  "as-embedding returns a single-float array of unit length."
+  (let ((v (rag:as-embedding '(3.0d0 4.0d0))))
+    (is (typep v '(simple-array single-float (*))))
+    (is (< (abs (- 1.0 (rag:embedding-norm v))) 1e-5))
+    ;; 3-4-5 triangle: normalised components are 0.6 and 0.8
+    (is (< (abs (- 0.6 (aref v 0))) 1e-5))
+    (is (< (abs (- 0.8 (aref v 1))) 1e-5))))
+
+(test as-embedding-zero-vector-is-left-alone
+  "A zero vector has no direction; normalising must not divide by zero."
+  (let ((v (rag:as-embedding '(0.0 0.0 0.0))))
+    (is (typep v '(simple-array single-float (*))))
+    (is (every #'zerop v))))
+
+;;; NaN / infinity rejection.
+;;;
+;;; These construct the non-finite value directly from its representation
+;;; (a bit pattern on SBCL, EXT:NAN on ECL) rather than by an arithmetic
+;;; expression like (/ 0.0 0.0) -- constructing it via arithmetic would
+;;; itself trap under SBCL's default float traps, before the value ever
+;;; reaches AS-EMBEDDING, and so would not exercise the code under test.
+;;; Each constructor needs both an #+sbcl and an #+ecl branch: a reader
+;;; conditional with only one branch silently reads as nothing on the
+;;; implementation it omits, and the test would then quietly turn into a
+;;; call on an empty list rather than fail loudly.
+
+(defun make-nan-single-float ()
+  #+sbcl (sb-kernel:make-single-float #x7fc00000)
+  #+ecl (coerce (ext:nan) 'single-float)
+  #-(or sbcl ecl) (error "no portable NaN constructor for this Lisp implementation"))
+
+(defun positive-infinity-single-float ()
+  #+sbcl sb-ext:single-float-positive-infinity
+  #+ecl ext:single-float-positive-infinity
+  #-(or sbcl ecl) (error "no portable infinity constructor for this Lisp implementation"))
+
+(defun negative-infinity-single-float ()
+  #+sbcl sb-ext:single-float-negative-infinity
+  #+ecl ext:single-float-negative-infinity
+  #-(or sbcl ecl) (error "no portable infinity constructor for this Lisp implementation"))
+
+(test as-embedding-nan-component-signals-llm-rag-error
+  "A NaN component must surface as RAG:LLM-RAG-ERROR, not a raw arithmetic
+error escaping from the float arithmetic inside AS-EMBEDDING."
+  (signals rag:llm-rag-error
+    (rag:as-embedding (list (make-nan-single-float) 3.0))))
+
+(test as-embedding-positive-infinity-component-signals-llm-rag-error
+  (signals rag:llm-rag-error
+    (rag:as-embedding (list (positive-infinity-single-float) 3.0))))
+
+(test as-embedding-negative-infinity-component-signals-llm-rag-error
+  (signals rag:llm-rag-error
+    (rag:as-embedding (list (negative-infinity-single-float) 3.0))))

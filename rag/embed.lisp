@@ -2,13 +2,61 @@
 
 (in-package #:cl-llm.rag)
 
-(deftype embedding () '(simple-array double-float (*)))
+(deftype embedding () '(simple-array single-float (*)))
+
+(defun embedding-norm (v)
+  "L2 norm of V."
+  (declare (type (simple-array single-float (*)) v))
+  (let ((sum 0f0))
+    (declare (type single-float sum))
+    (dotimes (i (length v) (sqrt sum))
+      (incf sum (* (aref v i) (aref v i))))))
+
+(defun non-finite-embedding-error ()
+  (error 'llm-rag-error
+         :message "embedding contains a non-finite or out-of-range value; refusing to index it"))
+
+(defun finite-single-float-p (x)
+  "T if the single-float X is neither NaN nor +/-infinity.
+Order matters: (= X X) is NIL for a NaN and is evaluated with an unordered
+comparison that does not itself trap on a quiet NaN, so it is safe to check
+first and short-circuit before the magnitude bound below -- which uses an
+ORDERED comparison (<=) that WOULD trap on a NaN operand if one reached it."
+  (and (= x x)
+       (<= (- most-positive-single-float) x most-positive-single-float)))
 
 (defun as-embedding (sequence)
-  "Coerce SEQUENCE of reals to an EMBEDDING (a simple double-float vector)."
-  (map '(simple-array double-float (*))
-       (lambda (x) (coerce x 'double-float))
-       sequence))
+  "Coerce SEQUENCE to a (simple-array single-float (*)) and L2-normalise it.
+Normalising at ingest is what lets cosine similarity reduce to a plain dot
+product at query time.  A zero vector has no direction and is returned as-is.
+
+A NaN or infinite component is rejected with LLM-RAG-ERROR rather than
+allowed to poison the stored vector.  Two independent guards are needed:
+implementations with IEEE float traps enabled (SBCL, by default) signal an
+ARITHMETIC-ERROR partway through the arithmetic below -- e.g. squaring a NaN
+while accumulating NORM -- before any explicit check would run, so that is
+caught and re-signalled as LLM-RAG-ERROR.  The finiteness check on NORM runs
+BEFORE the normalising divide loop, so that loop itself never executes with
+a non-finite NORM.  Implementations without traps enabled (e.g. ECL) instead
+compute silently to a NaN or infinite NORM, which self-equality alone does
+NOT catch (infinity is self-equal under IEEE 754); FINITE-SINGLE-FLOAT-P's
+magnitude bound is what rejects that case."
+  (handler-case
+      (let* ((n (length sequence))
+             (v (make-array n :element-type 'single-float)))
+        (let ((i 0))
+          (map nil (lambda (x)
+                     (setf (aref v i) (coerce x 'single-float))
+                     (incf i))
+               sequence))
+        (let ((norm (embedding-norm v)))
+          (unless (finite-single-float-p norm)
+            (non-finite-embedding-error))
+          (unless (zerop norm)
+            (dotimes (i n)
+              (setf (aref v i) (/ (aref v i) norm))))
+          v))
+    (arithmetic-error () (non-finite-embedding-error))))
 
 (defclass embedder ()
   ((model :initarg :model :initform nil :reader embedder-model))
@@ -103,8 +151,5 @@ tests exercise real ranking."))
                                 :element-type 'double-float :initial-element 0d0)))
              (dolist (w (words text))
                (incf (aref v (mod (string-hash w) (embedder-dimension embedder))) 1d0))
-             (let ((norm (sqrt (loop for x across v sum (* x x)))))
-               (when (plusp norm)
-                 (dotimes (i (length v)) (setf (aref v i) (/ (aref v i) norm)))))
-             v)))
+             (as-embedding v))))
     (if (listp input) (mapcar #'one input) (one input))))

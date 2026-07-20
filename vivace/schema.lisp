@@ -37,7 +37,7 @@ per-graph-name registration a caller may be relying on."
                   (,(intern "DOCUMENT-ID" :graph-db))
                   (,(intern "METADATA" :graph-db))
                   (,(intern "EMBEDDING" :graph-db)
-                   :type (simple-array double-float (*))))
+                   :type (simple-array single-float (*))))
                  ,graph-name))))
     tsym))
 
@@ -70,7 +70,30 @@ with gdb:*graph* bound to GRAPH."
 
 (defun vertex->chunk (vertex)
   "Reconstruct a rag:chunk from a chunk VERTEX, coercing the embedding back to
-(simple-array double-float (*)) (VG deserialises it as a T-vector)."
+(simple-array single-float (*)) and L2-normalising it via rag:as-embedding.
+
+HISTORICAL CONTEXT for keeping the RAG:AS-EMBEDDING call here: it was
+originally a live guard, not post-migration redundancy. MIGRATE-EMBEDDINGS
+(vivace/store.lisp) only runs once, at HYDRATE time; a chunk added
+afterwards via STORE-ADD with a caller-supplied non-conforming embedding was
+never migrated, and SCAN-GRAPH-STORE's STORE-SEARCH reads vertices straight
+from the graph on every call, so this coercion was what kept that live path
+correct in between hydrates.
+
+UPDATE (Task 7 follow-up): as of VALIDATE-CHUNKS (vivace/store.lisp)
+normalising every embedding via RAG:AS-EMBEDDING, in place, BEFORE
+CHUNK->VERTEX ever sees it, a non-conforming embedding can no longer reach a
+vertex via STORE-ADD at all -- write-side enforcement replaces what this
+read-side coercion used to guard against. That makes this call redundant
+going forward: it now only ever re-normalises an already-conforming value,
+at the accepted cost of one allocation, one sqrt, N divisions, and ~1 ULP of
+re-normalisation drift on every read (see
+CHUNK-VERTEX-ROUND-TRIPS-WITH-COERCED-EMBEDDING in tests-vivace/schema.lisp
+for the drift itself). Retiring it is a deliberate follow-up decision, left
+OUT of Task 7's scope: CHUNK-VERTEX-COERCES-GENERAL-VECTOR-EMBEDDING
+(tests-vivace/schema.lisp) exists specifically to exercise this coercion,
+and that test's fate should be decided together with removing the coercion,
+not as a side effect of this change."
   (rag:make-chunk (%slot vertex "TEXT")
                   :document-id (%slot vertex "DOCUMENT-ID")
                   :metadata (%slot vertex "METADATA")

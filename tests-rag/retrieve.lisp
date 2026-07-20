@@ -24,7 +24,7 @@
     (is (= 2 (length hits)))
     (is (search "TM-62" (rag:chunk-text (rag:hit-chunk (first hits))))
         "the TM-62 chunk should rank first for a TM-62 query")
-    (is (typep (rag:hit-score (first hits)) 'double-float))))
+    (is (typep (rag:hit-score (first hits)) 'single-float))))
 
 (test dense-retriever-hits-carry-provenance
   (let* ((r (populated-dense-retriever))
