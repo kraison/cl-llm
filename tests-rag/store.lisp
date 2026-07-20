@@ -5,7 +5,9 @@
 (in-suite cl-llm-rag-suite)
 
 (defun v (&rest xs)
-  (map '(simple-array double-float (*)) (lambda (x) (coerce x 'double-float)) xs))
+  "A plain typed-vector constructor -- coerces to single-float, does NOT
+normalise. Several tests deliberately feed non-unit vectors."
+  (map '(simple-array single-float (*)) (lambda (x) (coerce x 'single-float)) xs))
 
 (test cosine-basics
   (is (< (abs (- 1d0 (rag:cosine (v 1 0) (v 1 0)))) 1d-9))
@@ -22,11 +24,18 @@
   ;; The true nearest match ("east") is inserted LAST, not first, so a
   ;; broken implementation that skips sorting and just truncates to
   ;; insertion order would fail this test.
+  ;;
+  ;; Inputs are unit-length (via AS-EMBEDDING), not raw V vectors: COSINE is
+  ;; now a bare dot product, which equals true cosine only for unit-length
+  ;; inputs. A raw (v 1 1) "northeast" has norm sqrt(2), so its dot product
+  ;; with the query would tie NORTHEAST and EAST at 1.0 -- a tie true cosine
+  ;; never has (0.7071 vs 1.0) -- which would test tie-break order instead
+  ;; of ranking-by-similarity, the property this test exists to prove.
   (let ((s (rag:make-memory-store)))
-    (rag:store-add s (list (rag:make-chunk "north" :embedding (v 0 1))
-                           (rag:make-chunk "northeast" :embedding (v 1 1))
-                           (rag:make-chunk "east" :embedding (v 1 0))))
-    (let ((hits (rag:store-search s (v 1 0) 2)))
+    (rag:store-add s (list (rag:make-chunk "north" :embedding (rag:as-embedding (list 0 1)))
+                           (rag:make-chunk "northeast" :embedding (rag:as-embedding (list 1 1)))
+                           (rag:make-chunk "east" :embedding (rag:as-embedding (list 1 0)))))
+    (let ((hits (rag:store-search s (rag:as-embedding (list 1 0)) 2)))
       (is (= 2 (length hits)))
       (is (string= "east" (rag:chunk-text (rag:hit-chunk (first hits)))))
       (is (>= (rag:hit-score (first hits)) (rag:hit-score (second hits)))))))
@@ -145,3 +154,17 @@
     (rag:store-add s (list (rag:make-chunk "new" :document-id "A" :embedding (v 0 1))))
     (is (= 1 (rag:store-count s)))
     (is (string= "new" (rag:chunk-text (rag:hit-chunk (first (rag:store-search s (v 0 1) 1))))))))
+
+(test cosine-of-normalised-vectors
+  "Cosine of unit vectors: identical = 1, orthogonal = 0, opposed = -1."
+  (let ((a (rag:as-embedding '(1.0 0.0)))
+        (b (rag:as-embedding '(0.0 1.0)))
+        (c (rag:as-embedding '(-1.0 0.0))))
+    (is (< (abs (- 1.0 (rag:cosine a a))) 1e-5))
+    (is (< (abs (rag:cosine a b)) 1e-5))
+    (is (< (abs (- -1.0 (rag:cosine a c))) 1e-5))))
+
+(test cosine-returns-single-float
+  "Scoring stays in single-float; no boxing to double."
+  (let ((a (rag:as-embedding '(1.0 2.0 3.0))))
+    (is (typep (rag:cosine a a) 'single-float))))

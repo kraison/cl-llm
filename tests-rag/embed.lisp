@@ -23,7 +23,7 @@
 (test embed-mock-vector-is-unit-length
   (let* ((e (rag:make-mock-embedder))
          (v (rag:embed e "anything")))
-    (is (typep v '(simple-array double-float (*))))
+    (is (typep v '(simple-array single-float (*))))
     (is (< (abs (- 1.0d0 (sqrt (loop for x across v sum (* x x))))) 1d-9))))
 
 (test embed-mock-batch-preserves-order

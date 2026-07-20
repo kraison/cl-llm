@@ -16,7 +16,7 @@
    #:hit #:make-hit #:hit-chunk #:hit-score
    #:split-text
    #:store-add #:store-search #:store-count #:store-delete-document #:save-store #:load-store
-   #:memory-store #:make-memory-store #:store-dimension #:cosine
+   #:memory-store #:make-memory-store #:store-dimension #:cosine #:dot
    #:retriever #:retrieve #:dense-retriever #:make-dense-retriever
    #:retriever-embedder #:retriever-store
    #:index #:make-index #:index-embedder #:index-store #:index-chunker

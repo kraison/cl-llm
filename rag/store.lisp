@@ -15,14 +15,24 @@
 Returns the number of chunks removed (0 if none matched -- deleting an absent
 document is a no-op, never an error)."))
 
+(declaim (inline dot))
+(defun dot (a b)
+  "Dot product of two equal-length single-float vectors."
+  (declare (type (simple-array single-float (*)) a b)
+           (optimize (speed 3) (safety 1)))
+  (let ((sum 0f0))
+    (declare (type single-float sum))
+    (dotimes (i (length a) sum)
+      (incf sum (* (aref a i) (aref b i))))))
+
 (defun cosine (a b)
-  "Cosine similarity of two embedding vectors, 0 on a zero-norm vector."
-  (let ((dot 0d0) (na 0d0) (nb 0d0))
-    (loop for x across a for y across b
-          do (incf dot (* x y)) (incf na (* x x)) (incf nb (* y y)))
-    (if (or (zerop na) (zerop nb))
-        0d0
-        (/ dot (* (sqrt na) (sqrt nb))))))
+  "Cosine similarity of two embedding vectors, 0 on a zero-norm vector.
+Embeddings are L2-normalised at ingest (AS-EMBEDDING), so this is a plain dot
+product -- no per-candidate norm recomputation, no sqrt."
+  (declare (type (simple-array single-float (*)) a b))
+  (if (or (zerop (length a)) (zerop (length b)))
+      0f0
+      (dot a b)))
 
 (defclass memory-store ()
   ((chunks :initform (make-array 0 :adjustable t :fill-pointer 0) :reader store-chunks)
