@@ -26,22 +26,29 @@ exists to expose.  A corpus of empty-text chunks would understate it.")
 transaction per batch, not per chunk (too slow) and not one for all N (peak
 memory).  The store uses :SCAN, because :CACHE would mirror everything into RAM
 and measurement A is meant to exercise the graph path."
-  (let* ((dir (format nil "/var/tmp/cl-llm-bench-~a/" (get-universal-time)))
-         (name (intern (format nil "BENCH-~a" (get-universal-time)) :keyword)))
+  ;; GET-INTERNAL-REAL-TIME has finer-than-a-second resolution (unlike
+  ;; GET-UNIVERSAL-TIME); the dir and name derive from the SAME seed so two
+  ;; builds started within the same wall-clock second (Task 3 sweeps several
+  ;; corpus sizes back to back) never collide on either path or graph name.
+  (let* ((seed (get-internal-real-time))
+         (dir (format nil "/var/tmp/cl-llm-bench-~a/" seed))
+         (name (intern (format nil "BENCH-~a" seed) :keyword)))
     (ensure-directories-exist dir)
     (v:ensure-chunk-class 'rag-chunk name)
     (let* ((graph (gdb:make-graph name (pathname dir) :buffer-pool-size 1000))
            (store (v:make-graph-store graph :strategy :scan)))
-      (let ((pending '()) (added 0))
+      (let ((pending '()) (pending-count 0) (added 0))
         (dotimes (i n)
           (push (rag:make-chunk (%filler-text i)
                                 :document-id (format nil "doc-~7,'0d" i)
                                 :embedding (random-unit-vector dim))
                 pending)
-          (when (= (length pending) batch)
+          (incf pending-count)
+          (when (= pending-count batch)
             (rag:store-add store (nreverse pending))
             (incf added batch)
             (setf pending '())
+            (setf pending-count 0)
             (format t "~&  built ~a/~a~%" added n)
             (finish-output)))
         (when pending
