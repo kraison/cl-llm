@@ -1,10 +1,17 @@
 ;;;; bench/attribution.lisp -- decompose store-search cost into loading vs scoring.
 ;;;;
 ;;;; See docs/superpowers/specs/2026-07-20-vector-segments-design.md sec 10.
-;;;; A: full store-search                      -- the number to improve
-;;;; B: load vertices + touch the slot          -- node loading
-;;;; C: score a vector-of-vectors already in RAM -- float work, scattered
-;;;; D: score ONE contiguous simple-array        -- what a segment would cost
+;;;; A/B/C/D are all WARM: %collect-embeddings scans every vertex before A is
+;;;; timed, and A's own warm-up scans again, so by the time B runs the graph's
+;;;; per-graph node cache is primed.  That is a deliberate steady-state reading,
+;;;; but read alone it biases against segments (see E's docstring), so:
+;;;; A: full store-search                       -- the number to improve, warm
+;;;; B: load vertices + touch the slot           -- node loading, warm
+;;;; C: score a vector-of-vectors already in RAM -- float work, scattered, warm
+;;;; D: score ONE contiguous simple-array        -- what a segment would cost, warm
+;;;; E: cold-start full store-search, ONE sample -- first touch after a fresh
+;;;;    process-level graph reopen; see %COLD-START-SEARCH for exactly what
+;;;;    "cold" does and does not mean here.
 
 (in-package #:cl-llm.bench)
 
@@ -57,8 +64,36 @@ score.  Strides the block; no per-candidate indirection."
           (incf sum (* (aref flat (+ base j)) (aref query j))))
         (when (> sum best) (setf best sum))))))
 
+(defun %cold-start-search (graph dir query)
+  "Close GRAPH, reopen the SAME on-disk graph as a genuinely fresh graph
+object, build a fresh :SCAN store over it, and time ONE first STORE-SEARCH.
+A single sample, not a median -- a cold read is only cold once.  Returns
+(values TIME-MS FRESH-GRAPH) so the caller can hand FRESH-GRAPH to
+TEARDOWN-CORPUS instead of the now-closed original.
+
+What \"cold\" means here: a fresh GDB:GRAPH instance gets a fresh, empty
+per-graph node cache (the weak-value id-table graph-db materialises vertices
+into) and a freshly-established mmap, so every visited vertex must be
+re-materialised from its serialised bytes -- none of the warmth A/B/C/D
+accumulated (from %COLLECT-EMBEDDINGS's pre-scan and A's own warm-up) carries
+over.  What it does NOT mean: true disk-cold I/O.  The OS page cache
+independently keeps the mmap'd file's pages resident in RAM across the
+close/reopen, and this process cannot drop that without root (macOS's `purge`
+requires sudo, which this harness deliberately does not invoke).  So E is
+\"first touch after a process-level graph reopen\", not \"first touch after a
+cold disk\" -- read it as a lower bound on the true cold-start penalty, not
+the number itself."
+  (let ((name (gdb:graph-name graph)))
+    (gdb:close-graph graph :snapshot-p nil)
+    (v::ensure-chunk-class 'rag-chunk name)
+    (let* ((fresh-graph (gdb:open-graph name (pathname dir)))
+           (fresh-store (v:make-graph-store fresh-graph :strategy :scan)))
+      (values (%ms (lambda () (rag:store-search fresh-store query 10)))
+              fresh-graph))))
+
 (defun run-attribution (n dim &key (runs 5))
-  "Build an N x DIM corpus, take the four timings, tear down, return a plist."
+  "Build an N x DIM corpus, take the four warm timings plus one cold-start
+timing, tear down, return a plist."
   (format t "~&=== building corpus: n=~a dim=~a ===~%" n dim)
   (multiple-value-bind (store graph dir) (build-corpus n dim)
     (unwind-protect
@@ -85,20 +120,32 @@ score.  Strides the block; no per-candidate indirection."
                               do (when (> s best) (setf best s)))
                         best))
                     runs))
-                (d (%median-ms (lambda () (%score-flat flat query n dim)) runs)))
-           (list :n n :dim dim :a a :b b :c c :d d))
+                (d (%median-ms (lambda () (%score-flat flat query n dim)) runs))
+                (e nil))
+           ;; E must run LAST among the timed measurements: it closes and
+           ;; reopens GRAPH, invalidating STORE/VECTORS bookkeeping tied to the
+           ;; old graph object.  It hands back the fresh graph so cleanup below
+           ;; closes the right one.
+           (multiple-value-bind (e-ms fresh-graph) (%cold-start-search graph dir query)
+             (setf e e-ms)
+             (setf graph fresh-graph))
+           (list :n n :dim dim :a a :b b :c c :d d :e e))
       (teardown-corpus graph dir))))
 
 (defun report-attribution (results)
   "Print RESULTS and the interpretation the spec commits to in advance."
-  (destructuring-bind (&key n dim a b c d) results
+  (destructuring-bind (&key n dim a b c d e) results
     (format t "~&~%=== attribution: n=~a dim=~a ===~%" n dim)
+    (format t "-- WARM (buffer pool primed by the collection scan + A's warm-up) --~%")
     (format t "A  full store-search        ~,1f ms~%" a)
     (format t "B  load + slot, no scoring  ~,1f ms  (~,0f%% of A)~%" b (* 100 (/ b a)))
     (format t "C  score, scattered vectors ~,1f ms  (~,0f%% of A)~%" c (* 100 (/ c a)))
     (format t "D  score, contiguous block  ~,1f ms  (~,0f%% of A)~%" d (* 100 (/ d a)))
+    (format t "-- COLD (single first search after a fresh process-level graph reopen) --~%")
+    (format t "E  cold-start full search   ~,1f ms~%" e)
     (format t "~%predicted segment latency  ~,1f ms~%" d)
     (format t "predicted win (A - D)      ~,1f ms~%" (- a d))
+    (format t "cold-start penalty (E - A) ~,1f ms~%" (- e a))
     (format t "~%interpretation:~%")
     (format t "  loading dominates?   ~a  (B >= 60%% of A)~%"
             (if (>= b (* 0.6 a)) "YES -- attribution holds" "NO"))
