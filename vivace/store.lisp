@@ -22,8 +22,18 @@ a bare dot product, so an unnormalised stored vector ranks WRONG rather than
 merely slow, and a silent wrong answer is the failure mode this guards.")
 
 (defun %needs-migration-p (e)
+  "T if E needs rewriting: either it is not yet the specialised single-float
+array type, or it IS that type but is not unit-norm.  The second disjunct
+measures E's OWN norm via RAG:EMBEDDING-NORM -- it must NOT run E through
+RAG:AS-EMBEDDING first, since AS-EMBEDDING renormalises its output to ~1.0
+for any non-zero input, which would make this check a tautology (always
+true-by-~1.0, regardless of E's actual stored norm) and silently skip
+migrating any already-single-float, non-unit-norm vector forever.  OR only
+evaluates the second disjunct when the first is false, and the first being
+false means E is already (simple-array single-float (*)) -- exactly the type
+EMBEDDING-NORM declares, so no coercion is needed here."
   (or (not (typep e '(simple-array single-float (*))))
-      (> (abs (- 1.0 (rag:embedding-norm (rag:as-embedding e)))) 1e-4)))
+      (> (abs (- 1.0 (rag:embedding-norm e))) 1e-4)))
 
 (defun migrate-embeddings (store)
   "Rewrite any stored embedding that is not already a normalised single-float
