@@ -187,20 +187,46 @@ normalise. Several tests deliberately feed non-unit vectors."
 (test top-k-collector-tie-break-is-order-independent
   "A tie at the k-th boundary resolves by document-id, not by insertion order.
 This is the regression that keeps scan and cache stores agreeing: they iterate
-in different orders, so an order-dependent eviction would make them differ."
+in different orders, so an order-dependent eviction would make them differ.
+
+The discriminating case is a CHALLENGER that arrives once the buffer is
+already full, tied on score with a RESIDENT, and WINNING on tiebreak. A case
+where the correct answer happens to be \"reject the challenger\" does not
+discriminate: plain score-only `>` also rejects any tied challenger (a tie
+never beats the current occupant under strict `>`), so it produces the same
+answer by coincidence without ever consulting the tiebreak. Here X must
+evict Y (or Y must never evict X) purely because X's document-id sorts
+first -- a score-only comparator gets this wrong for whichever of X/Y
+happens to arrive second."
   (flet ((collect-in (rows)
            (let ((c (rag::top-k-collector 2)))
              (dolist (row rows)
                (rag::collect-candidate c (coerce (first row) 'single-float)
                                        (second row) (third row)))
              (mapcar #'cdr (rag::collector-results c)))))
-    ;; three candidates, two tied at 0.5; k=2 must keep 0.9 and the tied
-    ;; candidate with the smaller document-id, whichever order they arrive in.
-    (let ((forward  (collect-in '((0.9 "a" :top) (0.5 "b" :b) (0.5 "c" :c))))
-          (backward (collect-in '((0.5 "c" :c) (0.5 "b" :b) (0.9 "a" :top)))))
-      (is (equal '(:top :b) forward))
+    ;; Z clearly wins on score. X and Y tie on score with X's document-id
+    ;; sorting before Y's. k=2, so exactly one of {X,Y} survives alongside
+    ;; Z, and the correct survivor is always X -- regardless of whether X or
+    ;; Y is the resident when the other arrives as the late challenger.
+    (let ((forward  (collect-in '((0.9 "z" :z) (0.5 "x" :x) (0.5 "y" :y))))
+          (backward (collect-in '((0.9 "z" :z) (0.5 "y" :y) (0.5 "x" :x)))))
+      (is (equal '(:z :x) forward))
+      (is (equal '(:z :x) backward))
       (is (equal forward backward)
           "eviction depends on insertion order: ~S vs ~S" forward backward))))
+
+(test top-k-collector-k-zero-returns-nothing
+  "A collector constructed with k=0 retains nothing, no matter how many
+candidates are offered -- no phantom entries from the k=0 buffer path."
+  (let ((c (rag::top-k-collector 0)))
+    (rag::collect-candidate c 0.9f0 "a" :a)
+    (rag::collect-candidate c 0.1f0 "b" :b)
+    (is (null (rag::collector-results c)))))
+
+(test top-k-collector-empty-corpus-returns-nothing
+  "No candidates offered at all returns NIL, regardless of k."
+  (let ((c (rag::top-k-collector 5)))
+    (is (null (rag::collector-results c)))))
 
 (test search-matches-brute-force
   "Heap-based search agrees with a full sort on the same corpus."
