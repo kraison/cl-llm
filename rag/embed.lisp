@@ -2,13 +2,39 @@
 
 (in-package #:cl-llm.rag)
 
-(deftype embedding () '(simple-array double-float (*)))
+(deftype embedding () '(simple-array single-float (*)))
+
+(defun embedding-norm (v)
+  "L2 norm of V."
+  (declare (type (simple-array single-float (*)) v))
+  (let ((sum 0f0))
+    (declare (type single-float sum))
+    (dotimes (i (length v) (sqrt sum))
+      (incf sum (* (aref v i) (aref v i))))))
 
 (defun as-embedding (sequence)
-  "Coerce SEQUENCE of reals to an EMBEDDING (a simple double-float vector)."
-  (map '(simple-array double-float (*))
-       (lambda (x) (coerce x 'double-float))
-       sequence))
+  "Coerce SEQUENCE to a (simple-array single-float (*)) and L2-normalise it.
+Normalising at ingest is what lets cosine similarity reduce to a plain dot
+product at query time.  A zero vector has no direction and is returned as-is."
+  (let* ((n (length sequence))
+         (v (make-array n :element-type 'single-float)))
+    (let ((i 0))
+      (map nil (lambda (x)
+                 (setf (aref v i) (coerce x 'single-float))
+                 (incf i))
+           sequence))
+    (let ((norm (embedding-norm v)))
+      ;; A malformed provider response is the realistic source of NaN/Inf.  Reject
+      ;; at ingest: a non-finite component poisons the norm, and every downstream
+      ;; comparison against it silently returns false, so the vector would rank
+      ;; last forever instead of failing.  (NaN /= NaN is the tell.)
+      (unless (= norm norm)
+        (error 'llm-rag-error
+               :message "embedding contains NaN or infinity; refusing to index it"))
+      (unless (zerop norm)
+        (dotimes (i n)
+          (setf (aref v i) (/ (aref v i) norm))))
+      v)))
 
 (defclass embedder ()
   ((model :initarg :model :initform nil :reader embedder-model))

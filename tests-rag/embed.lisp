@@ -133,7 +133,7 @@ wired together correctly."
         (e (rag:make-openai-compatible-embedder :base-url "http://x/v1" :model "m")))
     (let ((result (let ((cl-llm.http:*driver* driver))
                     (rag:embed e "a"))))
-      (is (typep result '(simple-array double-float (*))))
+      (is (typep result '(simple-array single-float (*))))
       (is (equalp (coerce #(1.0d0 0.0d0) '(simple-array double-float (*))) result)))))
 
 (test embed-openai-compatible-malformed-response-signals-llm-rag-error
@@ -144,3 +144,18 @@ error escaping from the JSON layer."
     (signals rag:llm-rag-error
       (let ((cl-llm.http:*driver* driver))
         (rag:embed e (list "a"))))))
+
+(test as-embedding-is-normalised-single-float
+  "as-embedding returns a single-float array of unit length."
+  (let ((v (rag:as-embedding '(3.0d0 4.0d0))))
+    (is (typep v '(simple-array single-float (*))))
+    (is (< (abs (- 1.0 (rag:embedding-norm v))) 1e-5))
+    ;; 3-4-5 triangle: normalised components are 0.6 and 0.8
+    (is (< (abs (- 0.6 (aref v 0))) 1e-5))
+    (is (< (abs (- 0.8 (aref v 1))) 1e-5))))
+
+(test as-embedding-zero-vector-is-left-alone
+  "A zero vector has no direction; normalising must not divide by zero."
+  (let ((v (rag:as-embedding '(0.0 0.0 0.0))))
+    (is (typep v '(simple-array single-float (*))))
+    (is (every #'zerop v))))

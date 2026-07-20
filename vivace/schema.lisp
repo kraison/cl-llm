@@ -37,7 +37,7 @@ per-graph-name registration a caller may be relying on."
                   (,(intern "DOCUMENT-ID" :graph-db))
                   (,(intern "METADATA" :graph-db))
                   (,(intern "EMBEDDING" :graph-db)
-                   :type (simple-array double-float (*))))
+                   :type (simple-array single-float (*))))
                  ,graph-name))))
     tsym))
 
@@ -70,7 +70,7 @@ with gdb:*graph* bound to GRAPH."
 
 (defun vertex->chunk (vertex)
   "Reconstruct a rag:chunk from a chunk VERTEX, coercing the embedding back to
-(simple-array double-float (*)) (VG deserialises it as a T-vector)."
+(simple-array single-float (*)) and L2-normalising it via rag:as-embedding."
   (rag:make-chunk (%slot vertex "TEXT")
                   :document-id (%slot vertex "DOCUMENT-ID")
                   :metadata (%slot vertex "METADATA")

@@ -10,7 +10,7 @@
    #:embedder #:embedder-model #:embed
    #:openai-compatible-embedder #:make-openai-compatible-embedder
    #:mock-embedder #:make-mock-embedder #:embedder-dimension
-   #:embedding #:as-embedding
+   #:embedding #:as-embedding #:embedding-norm
    #:document #:make-document #:document-id #:document-text #:document-metadata
    #:chunk #:make-chunk #:chunk-text #:chunk-document-id #:chunk-metadata #:chunk-embedding
    #:hit #:make-hit #:hit-chunk #:hit-score

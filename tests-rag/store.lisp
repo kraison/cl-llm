@@ -93,7 +93,12 @@
       (is (string= "hello" (rag:chunk-text (rag:hit-chunk (first hits)))))
       (is (string= "d1" (rag:chunk-document-id (rag:hit-chunk (first hits)))))
       (is (equal '(:title "T") (rag:chunk-metadata (rag:hit-chunk (first hits)))))
-      (is (equalp (v 0.5 0.5) (rag:chunk-embedding (rag:hit-chunk (first hits)))))
+      ;; LOAD-STORE round-trips embeddings through RAG:AS-EMBEDDING, which
+      ;; L2-normalises -- (0.5 0.5) is not unit length, so the loaded chunk's
+      ;; embedding is the normalised vector, not the raw fixture. Compare
+      ;; against the real coercion, not a hand-computed magic number.
+      (is (equalp (rag:as-embedding '(0.5d0 0.5d0))
+                  (rag:chunk-embedding (rag:hit-chunk (first hits)))))
       (is (= (rag:store-dimension s) (rag:store-dimension loaded))
           "round trip re-derives the same store-dimension"))
     ;; The persisted plist must not carry a stray :DIMENSION key -- it is
