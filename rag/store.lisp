@@ -34,6 +34,90 @@ product -- no per-candidate norm recomputation, no sqrt."
       0f0
       (dot a b)))
 
+;;; A bounded top-k collector.  The point is to never materialise a hit per
+;;; corpus entry: at 1M chunks the old build-everything-then-stable-sort path
+;;; conses 1M objects and sorts them to keep 5.  K is small, so a linear scan of
+;;; the k-element buffer beats the bookkeeping of a real heap.
+;;;
+;;; Cost is O(k) per candidate once full (%TOP-K-WORST-INDEX rescans the buffer).
+;;; That is the right trade at the k values we actually use -- production k is 8
+;;; -- but K IS CALLER-SUPPLIED.  A real binary heap becomes worth its bookkeeping
+;;; somewhere around k >= 64; past that, most candidates fail a single compare
+;;; against the root instead of scanning k slots.  Revisit if a caller passes a
+;;; large k, which today none does.
+;;;
+;;; Ordering is (score DESC, tiebreak ASC) -- the same total order as HIT<.  The
+;;; tiebreak MUST be carried through eviction, not applied only at the end:
+;;; scan and cache stores iterate in different orders, so an order-dependent
+;;; eviction at the k-th boundary would make them disagree on a tie.
+
+(defstruct (top-k (:constructor %make-top-k))
+  (k 0 :type fixnum)
+  (count 0 :type fixnum)
+  (scores nil :type (or null (simple-array single-float (*))))
+  (tiebreaks nil :type (or null simple-vector))
+  (payloads nil :type (or null simple-vector)))
+
+(defun top-k-collector (k)
+  (%make-top-k :k k
+               :scores (make-array (max k 1) :element-type 'single-float)
+               :tiebreaks (make-array (max k 1) :initial-element "")
+               :payloads (make-array (max k 1) :initial-element nil)))
+
+(defun rank-before-p (s1 t1 s2 t2)
+  "True when (S1,T1) ranks ahead of (S2,T2): higher score first, ties by
+tiebreak ascending.  The same total order as HIT<."
+  (declare (type single-float s1 s2))
+  (cond ((> s1 s2) t)
+        ((< s1 s2) nil)
+        (t (string< t1 t2))))
+
+(defun %top-k-worst-index (c)
+  "Index of the slot that ranks LAST under RANK-BEFORE-P."
+  (let ((scores (top-k-scores c))
+        (tiebreaks (top-k-tiebreaks c))
+        (worst 0))
+    (declare (type (simple-array single-float (*)) scores))
+    (dotimes (i (top-k-count c) worst)
+      (when (rank-before-p (aref scores worst) (aref tiebreaks worst)
+                           (aref scores i) (aref tiebreaks i))
+        (setf worst i)))))
+
+(defun collect-candidate (c score tiebreak payload)
+  "Offer a candidate to the collector; keep it only if it outranks the current worst.
+TIEBREAK is the candidate's document-id (or \"\" when it has none)."
+  (declare (type single-float score))
+  (let ((scores (top-k-scores c))
+        (tiebreaks (top-k-tiebreaks c))
+        (payloads (top-k-payloads c))
+        (tb (or tiebreak "")))
+    (cond ((< (top-k-count c) (top-k-k c))
+           (setf (aref scores (top-k-count c)) score
+                 (aref tiebreaks (top-k-count c)) tb
+                 (aref payloads (top-k-count c)) payload)
+           (incf (top-k-count c)))
+          (t
+           (let ((worst (%top-k-worst-index c)))
+             (when (rank-before-p score tb
+                                  (aref scores worst) (aref tiebreaks worst))
+               (setf (aref scores worst) score
+                     (aref tiebreaks worst) tb
+                     (aref payloads worst) payload))))))
+  c)
+
+(defun collector-results (c)
+  "The retained candidates as (score . payload) conses, best-ranked first."
+  (let ((out '()))
+    (dotimes (i (top-k-count c))
+      (push (list (aref (top-k-scores c) i)
+                  (aref (top-k-tiebreaks c) i)
+                  (aref (top-k-payloads c) i))
+            out))
+    (mapcar (lambda (row) (cons (first row) (third row)))
+            (sort out (lambda (a b)
+                        (rank-before-p (first a) (second a)
+                                       (first b) (second b)))))))
+
 (defclass memory-store ()
   ((chunks :initform (make-array 0 :adjustable t :fill-pointer 0) :reader store-chunks)
    (dimension :initform nil :accessor store-dimension))
@@ -96,9 +180,15 @@ on an exact tie."
 (defmethod store-search ((store memory-store) query-vector k)
   (when (plusp (store-count store))
     (check-dimension store query-vector))
-  (let ((hits (loop for chunk across (store-chunks store)
-                    collect (make-hit chunk (cosine query-vector (chunk-embedding chunk))))))
-    (subseq (stable-sort hits #'hit<) 0 (min k (length hits)))))
+  ;; Bounded collection: one hit per SURVIVOR, not one per corpus entry.
+  (let ((c (top-k-collector k)))
+    (loop for chunk across (store-chunks store)
+          do (collect-candidate c
+                                (cosine query-vector (chunk-embedding chunk))
+                                (or (chunk-document-id chunk) "")
+                                chunk))
+    (mapcar (lambda (pair) (make-hit (cdr pair) (car pair)))
+            (collector-results c))))
 
 (defmethod store-count ((store memory-store))
   (length (store-chunks store)))

@@ -150,14 +150,27 @@ iterate chunks in different orders) agree on an exact tie."
     (error 'rag:llm-rag-error
            :message (format nil "query dimension ~a does not match store dimension ~a"
                             (length query-vector) (graph-store-dimension store))))
-  (let ((hits '()))
+  ;; Score against the embedding slot only, and build a rag:chunk ONLY for the
+  ;; survivors.  vertex->chunk per candidate was the dominant cost: it rebuilt
+  ;; text and metadata for every chunk in the corpus to rank five of them.
+  (let ((collector (rag::top-k-collector k)))
     (map-chunk-vertices
      store
      (lambda (vertex)
-       (let ((chunk (vertex->chunk vertex)))
-         (push (rag:make-hit chunk (rag:cosine query-vector (rag:chunk-embedding chunk)))
-               hits))))
-    (subseq (stable-sort hits #'hit<) 0 (min k (length hits)))))
+       ;; Score the slot value DIRECTLY.  Do NOT call as-embedding here: after
+       ;; Task 4 it allocates and L2-normalises, which would put one allocation,
+       ;; one sqrt and DIM divisions in the per-candidate inner loop -- exactly
+       ;; the cost Tasks 1-3 exist to remove.  Task 6's migration guarantees the
+       ;; slot is already a normalised (simple-array single-float (*)).
+       (let ((e (%slot vertex "EMBEDDING")))
+         (declare (type (simple-array single-float (*)) e))
+         (rag::collect-candidate collector
+                                 (rag:cosine query-vector e)
+                                 (or (%slot vertex "DOCUMENT-ID") "")
+                                 vertex))))
+    (mapcar (lambda (pair)
+              (rag:make-hit (vertex->chunk (cdr pair)) (car pair)))
+            (rag::collector-results collector))))
 
 (defmethod hydrate ((store scan-graph-store))
   (migrate-embeddings store)

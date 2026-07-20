@@ -168,3 +168,66 @@ normalise. Several tests deliberately feed non-unit vectors."
   "Scoring stays in single-float; no boxing to double."
   (let ((a (rag:as-embedding '(1.0 2.0 3.0))))
     (is (typep (rag:cosine a a) 'single-float))))
+
+(test top-k-collector-keeps-the-best-k
+  "A bounded collector returns exactly the k highest scores, best first."
+  (let ((c (rag::top-k-collector 3)))
+    (dolist (row '((0.1 "a" :a) (0.9 "b" :b) (0.5 "c" :c) (0.7 "d" :d) (0.2 "e" :e)))
+      (rag::collect-candidate c (coerce (first row) 'single-float)
+                              (second row) (third row)))
+    (is (equal '(:b :d :c) (mapcar #'cdr (rag::collector-results c))))))
+
+(test top-k-collector-handles-fewer-than-k
+  "Fewer candidates than k returns all of them, still ordered."
+  (let ((c (rag::top-k-collector 5)))
+    (rag::collect-candidate c 0.2f0 "x" :x)
+    (rag::collect-candidate c 0.8f0 "y" :y)
+    (is (equal '(:y :x) (mapcar #'cdr (rag::collector-results c))))))
+
+(test top-k-collector-tie-break-is-order-independent
+  "A tie at the k-th boundary resolves by document-id, not by insertion order.
+This is the regression that keeps scan and cache stores agreeing: they iterate
+in different orders, so an order-dependent eviction would make them differ."
+  (flet ((collect-in (rows)
+           (let ((c (rag::top-k-collector 2)))
+             (dolist (row rows)
+               (rag::collect-candidate c (coerce (first row) 'single-float)
+                                       (second row) (third row)))
+             (mapcar #'cdr (rag::collector-results c)))))
+    ;; three candidates, two tied at 0.5; k=2 must keep 0.9 and the tied
+    ;; candidate with the smaller document-id, whichever order they arrive in.
+    (let ((forward  (collect-in '((0.9 "a" :top) (0.5 "b" :b) (0.5 "c" :c))))
+          (backward (collect-in '((0.5 "c" :c) (0.5 "b" :b) (0.9 "a" :top)))))
+      (is (equal '(:top :b) forward))
+      (is (equal forward backward)
+          "eviction depends on insertion order: ~S vs ~S" forward backward))))
+
+(test search-matches-brute-force
+  "Heap-based search agrees with a full sort on the same corpus."
+  (let ((store (rag:make-memory-store))
+        (chunks '()))
+    (dotimes (i 50)
+      (push (rag:make-chunk (format nil "chunk ~A" i)
+                            :document-id (format nil "doc-~A" i)
+                            :embedding (rag:as-embedding
+                                        (list (coerce (sin i) 'single-float)
+                                              (coerce (cos i) 'single-float))))
+            chunks))
+    (rag:store-add store chunks)
+    (let* ((q (rag:as-embedding '(1.0 0.0)))
+           (heap-hits (rag:store-search store q 5))
+           ;; Reference must use the SAME total order as the collector
+           ;; (score DESC, document-id ASC).  Sorting by score alone would make
+           ;; this test blind to exactly the tie-break regression Task 7 guards.
+           (brute (subseq (sort (mapcar (lambda (c)
+                                          (cons (rag:cosine q (rag:chunk-embedding c)) c))
+                                        chunks)
+                                (lambda (a b)
+                                  (rag::rank-before-p
+                                   (car a) (or (rag:chunk-document-id (cdr a)) "")
+                                   (car b) (or (rag:chunk-document-id (cdr b)) ""))))
+                          0 5)))
+      (is (= 5 (length heap-hits)))
+      (loop for hit in heap-hits
+            for ref in brute
+            do (is (< (abs (- (rag:hit-score hit) (car ref))) 1e-5))))))
