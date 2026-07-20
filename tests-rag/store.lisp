@@ -183,6 +183,43 @@ bug bites."
     (is (= 1 (rag:store-count s)))
     (is (string= "new" (rag:chunk-text (rag:hit-chunk (first (rag:store-search s (v 0 1) 1))))))))
 
+(test store-delete-documents-removes-a-set
+  "The bulk primitive: one pass removes every chunk belonging to ANY of the ids."
+  (let ((s (rag:make-memory-store)))
+    (rag:store-add s (list (rag:make-chunk "a1" :document-id "A" :embedding (v 1 0))
+                           (rag:make-chunk "b1" :document-id "B" :embedding (v 0 1))
+                           (rag:make-chunk "c1" :document-id "C" :embedding (v 1 1))))
+    (is (= 2 (rag:store-delete-documents s (list "A" "C"))) "returns the total removed")
+    (is (= 1 (rag:store-count s)))
+    (let ((hits (rag:store-search s (v 0 1) 5)))
+      (is (= 1 (length hits)))
+      (is (string= "B" (rag:chunk-document-id (rag:hit-chunk (first hits))))))))
+
+(test store-delete-documents-absent-ids-is-a-noop
+  (let ((s (rag:make-memory-store)))
+    (rag:store-add s (list (rag:make-chunk "b1" :document-id "B" :embedding (v 0 1))))
+    (is (= 0 (rag:store-delete-documents s (list "NOPE" "ALSO-NOPE"))))
+    (is (= 1 (rag:store-count s)))))
+
+(test store-delete-publishes-a-new-vector
+  "A delete must BUILD-AND-SWAP, never rebuild the live vector in place.  STORE-COUNT and
+STORE-SEARCH read that same vector, so the old truncate-then-refill made a concurrent reader
+observe a partially refilled store, and an interrupted rebuild truncated it for real (a
+production sample read 10,626 chunks against a true 23,192).  So: a reader holding the
+pre-delete vector must still see the complete pre-delete snapshot afterwards."
+  (let ((s (rag:make-memory-store)))
+    (rag:store-add s (list (rag:make-chunk "a1" :document-id "A" :embedding (v 1 0))
+                           (rag:make-chunk "a2" :document-id "A" :embedding (v 1 1))
+                           (rag:make-chunk "b1" :document-id "B" :embedding (v 0 1))))
+    (let* ((before (rag::store-chunks s))
+           (before-texts (map 'list #'rag:chunk-text before)))
+      (is (= 2 (rag:store-delete-document s "A")))
+      (is (= 1 (rag:store-count s)) "the store reports only the survivors")
+      ;; the vector a concurrent reader was already holding is UNTOUCHED
+      (is (= 3 (length before)) "the pre-delete vector was mutated in place")
+      (is (equal before-texts (map 'list #'rag:chunk-text before)))
+      (is (not (eq before (rag::store-chunks s))) "delete must publish a NEW vector"))))
+
 (test cosine-of-normalised-vectors
   "Cosine of unit vectors: identical = 1, orthogonal = 0, opposed = -1."
   (let ((a (rag:as-embedding '(1.0 0.0)))

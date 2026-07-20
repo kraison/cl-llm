@@ -180,15 +180,27 @@ establishes. Signals rag:llm-rag-error."
     (map-chunk-vertices store (lambda (v) (push (vertex->chunk v) out)))
     (nreverse out)))
 
-(defmethod rag:store-delete-document ((store graph-store) document-id)
-  "Soft-delete every chunk vertex whose DOCUMENT-ID matches, atomically.
-Collect the victims first (do NOT mutate the graph while map-vertices iterates),
-then mark-deleted them in one transaction (mark-deleted joins the active tx)."
-  (let ((victims '()))
+(defun %document-id-set (document-ids)
+  "A hash-set of DOCUMENT-IDS for O(1) EQUAL membership during a delete scan."
+  (let ((set (make-hash-table :test 'equal)))
+    (dolist (id document-ids set)
+      (setf (gethash id set) t))))
+
+(defmethod rag:store-delete-documents ((store graph-store) document-ids)
+  "Soft-delete every chunk vertex whose DOCUMENT-ID is in DOCUMENT-IDS, atomically.
+
+ONE scan for the whole id set, not one scan per id: a scan is O(corpus), so deleting n
+documents one at a time is O(n*corpus).  Refreshing 3220 documents in a 23k-chunk store
+that way tracked to ~2 hours against ~8 minutes for the same work as pure adds.
+
+Collect the victims first (do NOT mutate the graph while map-vertices iterates), then
+mark-deleted them in one transaction (mark-deleted joins the active tx)."
+  (let ((ids (%document-id-set document-ids))
+        (victims '()))
     (map-chunk-vertices
      store
      (lambda (vertex)
-       (when (equal (%slot vertex "DOCUMENT-ID") document-id)
+       (when (gethash (%slot vertex "DOCUMENT-ID") ids)
          (push vertex victims))))
     (when victims
       (let ((gdb:*graph* (graph-store-graph store)))
@@ -277,9 +289,12 @@ hydrates from any chunks already in the graph. Never opens or closes GRAPH."
   (when chunks
     (rag:store-add (cache-index store) chunks)))
 
-;; keep the in-RAM index (which store-count/store-search read) in step with the graph delete
-(defmethod rag:store-delete-document :after ((store cached-graph-store) document-id)
-  (rag:store-delete-document (cache-index store) document-id))
+;; Keep the in-RAM index (which store-count/store-search read) in step with the graph delete.
+;; This hangs off the PLURAL, which is the primitive: rag:store-delete-document is a default
+;; method that delegates to the plural, so a singular delete still syncs the cache exactly
+;; once -- whereas an :after on BOTH would sync it twice.
+(defmethod rag:store-delete-documents :after ((store cached-graph-store) document-ids)
+  (rag:store-delete-documents (cache-index store) document-ids))
 
 (defmethod rag:store-count ((store cached-graph-store))
   (rag:store-count (cache-index store)))

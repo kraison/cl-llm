@@ -149,6 +149,78 @@ victims the failed run never reached")
                (gdb:close-graph g3))))
       (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
 
+(defun %refresh-chunk (emb doc-id text)
+  (rag:make-chunk text :document-id doc-id :embedding (rag:embed emb text)))
+
+(test delete-then-readd-survives-reopen
+  "REGRESSION (issue #8): refresh a document -- delete by id, then re-add -- and assert the
+count AFTER REOPENING THE STORE FROM DISK.
+
+The pre-existing delete tests assert only in-memory state, which is exactly what hid the
+production failure: the in-RAM index looked correct while the graph kept the stale chunk, so a
+refreshed corpus silently GREW (+1 chunk per refreshed document) instead of being replaced.
+The count only ever looked bigger, never wrong, and nothing signalled.  Only a reopen sees it."
+  (let* ((dir (format nil "/tmp/cl-llm-vg-refresh-~a/" (get-internal-real-time)))
+         (emb (rag:make-mock-embedder))
+         (name :cl-llm-vg-refresh))
+    (unwind-protect
+         (progn
+           ;; 1. initial ingest
+           (let* ((g (gdb:make-graph name (pathname dir)))
+                  (store (v:make-graph-store g :strategy :cache)))
+             (rag:store-add store (list (%refresh-chunk emb "d1" "revision one")))
+             (is (= 1 (rag:store-count store)))
+             (gdb:close-graph g))
+           ;; 2. refresh: delete by doc-id, then re-add the new revision
+           (let ((store (v:open-graph-store dir :name name :strategy :cache)))
+             (unwind-protect
+                  (progn
+                    (is (= 1 (rag:store-delete-document store "d1"))
+                        "delete must report the victim it found")
+                    (rag:store-add store (list (%refresh-chunk emb "d1" "revision two")))
+                    (is (= 1 (rag:store-count store)) "in-memory: replaced, not duplicated"))
+               (gdb:close-graph (v:graph-store-graph store))))
+           ;; 3. the assertion that actually matters -- reopen from disk
+           (let ((store (v:open-graph-store dir :name name :strategy :cache)))
+             (unwind-protect
+                  (progn
+                    (is (= 1 (rag:store-count store))
+                        "reopened store must hold ONE chunk; a stale survivor means the graph \
+delete did not persist and the refresh DUPLICATED the document")
+                    (let ((hit (first (rag:store-search store
+                                                        (rag:embed emb "revision two") 1))))
+                      (is (string= "revision two" (rag:chunk-text (rag:hit-chunk hit)))
+                          "the survivor must be the REPLACEMENT, not the stale original")))
+               (gdb:close-graph (v:graph-store-graph store)))))
+      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
+
+(test bulk-delete-documents-survives-reopen
+  "The bulk primitive on the graph store: one scan removes every id in the set, and the
+removal persists across a reopen."
+  (let* ((dir (format nil "/tmp/cl-llm-vg-bulk-~a/" (get-internal-real-time)))
+         (emb (rag:make-mock-embedder))
+         (name :cl-llm-vg-bulk))
+    (unwind-protect
+         (progn
+           (let* ((g (gdb:make-graph name (pathname dir)))
+                  (store (v:make-graph-store g :strategy :cache)))
+             (rag:store-add store (list (%refresh-chunk emb "a" "alpha mine")
+                                        (%refresh-chunk emb "b" "bravo mine")
+                                        (%refresh-chunk emb "c" "charlie mine")))
+             (is (= 3 (rag:store-count store)))
+             (is (= 2 (rag:store-delete-documents store (list "a" "c")))
+                 "one scan removes both ids")
+             (is (= 1 (rag:store-count store)) "cache synced by the plural :after")
+             (gdb:close-graph g))
+           (let ((store (v:open-graph-store dir :name name :strategy :cache)))
+             (unwind-protect
+                  (progn
+                    (is (= 1 (rag:store-count store)) "bulk delete persisted across reopen")
+                    (let ((hit (first (rag:store-search store (rag:embed emb "bravo mine") 1))))
+                      (is (string= "b" (rag:chunk-document-id (rag:hit-chunk hit))))))
+               (gdb:close-graph (v:graph-store-graph store)))))
+      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
+
 (test graph-store-drops-into-the-rag-pipeline
   "make-index :store (make-graph-store g) -> add-documents -> rag-ask (mock)."
   (with-temp-graph (g)

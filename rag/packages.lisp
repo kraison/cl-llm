@@ -15,7 +15,8 @@
    #:chunk #:make-chunk #:chunk-text #:chunk-document-id #:chunk-metadata #:chunk-embedding
    #:hit #:make-hit #:hit-chunk #:hit-score
    #:split-text
-   #:store-add #:store-search #:store-count #:store-delete-document #:save-store #:load-store
+   #:store-add #:store-search #:store-count #:save-store #:load-store
+   #:store-delete-document #:store-delete-documents
    #:memory-store #:make-memory-store #:store-dimension #:cosine #:dot
    #:retriever #:retrieve #:dense-retriever #:make-dense-retriever
    #:retriever-embedder #:retriever-store
