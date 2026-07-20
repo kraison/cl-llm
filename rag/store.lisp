@@ -160,22 +160,20 @@ TIEBREAK is the candidate's document-id (or \"\" when it has none)."
                                                must use the same embedding model)"
                                           d dimension)))
                 (setf dimension d)))))
-      ;; Pass 2: the whole batch is valid -- commit it.
+      ;; Pass 2: the whole batch is valid -- commit it. Coerce each chunk's
+      ;; embedding through AS-EMBEDDING first, mirroring VALIDATE-CHUNKS on
+      ;; the graph-backed store (vivace/store.lisp): COSINE/DOT now declare
+      ;; (simple-array single-float (*)) on their arguments, so a raw
+      ;; caller-supplied vector of the wrong float type (e.g. double-float)
+      ;; would type-error inside STORE-SEARCH, far from this call and long
+      ;; after the bad chunk was accepted here. AS-EMBEDDING already rejects
+      ;; non-finite input; this only fixes up float type / normalisation.
       (dolist (chunk chunks)
+        (setf (chunk-embedding chunk) (as-embedding (chunk-embedding chunk)))
         (vector-push-extend chunk (store-chunks store)))
       (when (null (store-dimension store))
         (setf (store-dimension store) dimension))))
   store)
-
-(defun hit< (a b)
-  "Deterministic ranking order: higher score first; ties broken by DOCUMENT-ID
-so scan and cache strategies (which iterate chunks in different orders) agree
-on an exact tie."
-  (let ((sa (hit-score a)) (sb (hit-score b)))
-    (cond ((> sa sb) t)
-          ((< sa sb) nil)
-          (t (string< (or (chunk-document-id (hit-chunk a)) "")
-                      (or (chunk-document-id (hit-chunk b)) ""))))))
 
 (defmethod store-search ((store memory-store) query-vector k)
   (when (plusp (store-count store))

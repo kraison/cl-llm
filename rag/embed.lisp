@@ -33,10 +33,11 @@ product at query time.  A zero vector has no direction and is returned as-is.
 A NaN or infinite component is rejected with LLM-RAG-ERROR rather than
 allowed to poison the stored vector.  Two independent guards are needed:
 implementations with IEEE float traps enabled (SBCL, by default) signal an
-ARITHMETIC-ERROR partway through the arithmetic below -- e.g. squaring a NaN,
-or computing inf/inf while normalising an infinite component -- before any
-explicit check would run, so that is caught and re-signalled as
-LLM-RAG-ERROR.  Implementations without traps enabled (e.g. ECL) instead
+ARITHMETIC-ERROR partway through the arithmetic below -- e.g. squaring a NaN
+while accumulating NORM -- before any explicit check would run, so that is
+caught and re-signalled as LLM-RAG-ERROR.  The finiteness check on NORM runs
+BEFORE the normalising divide loop, so that loop itself never executes with
+a non-finite NORM.  Implementations without traps enabled (e.g. ECL) instead
 compute silently to a NaN or infinite NORM, which self-equality alone does
 NOT catch (infinity is self-equal under IEEE 754); FINITE-SINGLE-FLOAT-P's
 magnitude bound is what rejects that case."

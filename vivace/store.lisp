@@ -149,16 +149,6 @@ then mark-deleted them in one transaction (mark-deleted joins the active tx)."
     (map-chunk-vertices store (lambda (v) (declare (ignore v)) (incf n)))
     n))
 
-(defun hit< (a b)
-  "Deterministic ranking order: higher score first; ties broken by DOCUMENT-ID.
-Mirrors CL-LLM.RAG's memory-store comparator so scan and cache stores (which
-iterate chunks in different orders) agree on an exact tie."
-  (let ((sa (rag:hit-score a)) (sb (rag:hit-score b)))
-    (cond ((> sa sb) t)
-          ((< sa sb) nil)
-          (t (string< (or (rag:chunk-document-id (rag:hit-chunk a)) "")
-                      (or (rag:chunk-document-id (rag:hit-chunk b)) ""))))))
-
 (defmethod rag:store-search ((store scan-graph-store) query-vector k)
   (when (and (graph-store-dimension store)
              (/= (length query-vector) (graph-store-dimension store)))
