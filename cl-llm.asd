@@ -181,6 +181,7 @@
                (:file "schema")
                (:file "store-scan")
                (:file "store-cache")
+               (:file "store-segment")
                (:file "integration"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run! :cl-llm-rag-vivace)

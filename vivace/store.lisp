@@ -264,13 +264,16 @@ mark-deleted them in one transaction (mark-deleted joins the active tx)."
 
 (defun make-graph-store (graph &key (type 'rag-chunk) (strategy :cache) dimension)
   "Make a graph-backed vector store over the already-open, caller-owned GRAPH.
-STRATEGY is :cache (default) or :scan. Self-declares the chunk vertex type and
-hydrates from any chunks already in the graph. Never opens or closes GRAPH."
+STRATEGY is :cache (default), :scan, or :segment. Self-declares the chunk
+vertex type and hydrates from any chunks already in the graph. Never opens or
+closes GRAPH."
   (ensure-chunk-schema graph type)
   (let ((store (ecase strategy
                  (:scan (make-instance 'scan-graph-store
                                        :graph graph :type type :dimension dimension))
-                 (:cache (make-cached-graph-store graph type dimension)))))
+                 (:cache (make-cached-graph-store graph type dimension))
+                 (:segment (make-instance 'segment-graph-store
+                                          :graph graph :type type :dimension dimension)))))
     (hydrate store)
     store))
 
@@ -312,6 +315,39 @@ hydrates from any chunks already in the graph. Never opens or closes GRAPH."
       ;; against the hydrated dimension -- otherwise a wrong-dimension chunk could
       ;; reach the graph before the cache's :after catches it.
       (setf (graph-store-dimension store) (rag:store-dimension (cache-index store)))))
+  store)
+
+(defclass segment-graph-store (graph-store) ()
+  (:documentation "store-search delegates to graph-db's mmap vector segment via
+GDB:VECTOR-SEARCH, so ranking never materialises a node it is not going to
+return -- node loading was ~92% of the old store-search cost.
+
+Unlike CACHED-GRAPH-STORE there is no in-RAM index to keep in step: the segment
+is maintained by the transaction apply path, because the chunk EMBEDDING slot is
+declared :VECTOR-INDEX.  That is why STORE-ADD and STORE-DELETE-DOCUMENTS need no
+:AFTER methods here -- adding them would be duplicated bookkeeping for a
+structure the database already maintains."))
+
+(defmethod rag:store-count ((store segment-graph-store))
+  (let ((n 0))
+    (map-chunk-vertices store (lambda (v) (declare (ignore v)) (incf n)))
+    n))
+
+(defmethod hydrate ((store segment-graph-store))
+  "Record the store's dimension from a chunk vertex, if not supplied.
+Task 5 extends this to migrate a pre-segment corpus.
+
+Iterates FULLY rather than exiting early on the first hit: gdb:map-vertices may
+hold locks, so a non-local exit out of it is unsafe.  Same reasoning, and the
+same shape, as HYDRATE on SCAN-GRAPH-STORE."
+  (unless (graph-store-dimension store)
+    (map-chunk-vertices
+     store
+     (lambda (vertex)
+       (unless (graph-store-dimension store)
+         (let ((e (%slot vertex "EMBEDDING")))
+           (when (typep e '(simple-array single-float (*)))
+             (setf (graph-store-dimension store) (length e))))))))
   store)
 
 (defun path->graph-name (path)
