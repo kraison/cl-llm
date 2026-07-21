@@ -96,21 +96,28 @@ Change `:segment` back to `:cache` and restart. That is the whole rollback.
 
 The segment is a derived index, not a source of truth — your chunk vertices are untouched by any of this, and `:cache` rebuilds its in-RAM index from them exactly as it does today. The segment file stays on disk and keeps being maintained; it costs disk space and does no harm.
 
-### Back up by copying the directory, not by snapshot
+### Backup: snapshot/replay was broken for embeddings, and is now fixed
 
-**Do not rely on `snapshot`/`replay` to back up this knowledge base.** VivaceGraph
-[issue #56](https://github.com/kraison/vivace-graph/issues/56): `backup` writes slot values as
-Lisp text, and the restore reader coerces every `#(...)` it reads to a byte vector — it has to,
-because node ids are byte vectors and it cannot tell an id from slot data. A `single-float`
-embedding therefore fails on restore with `The value 1.0 is not of type (UNSIGNED-BYTE 8)`.
+Worth knowing about, because it affected you and you may not have noticed.
 
-It fails loudly rather than restoring corrupted data, so you will not silently lose content —
-but a graph full of embeddings cannot currently be restored from a snapshot at all. This is
-**not new** and is not caused by the `:segment` change; it applies to your `:cache` deployment
-today just as much. It is worth knowing because your knowledge base is almost entirely
-embeddings.
+Until 2026-07-22, `snapshot`/`replay` **could not restore a graph containing embeddings**
+([vivace-graph#56](https://github.com/kraison/vivace-graph/issues/56)). `backup` writes slot
+values as Lisp text, and the restore reader coerced every `#(...)` to a byte vector — it had to,
+because node ids are byte vectors and it could not tell an id from slot data. A `single-float`
+embedding therefore died on restore with `The value 1.0 is not of type (UNSIGNED-BYTE 8)`.
 
-Until #56 is fixed: **back up by copying the graph directory** with the graph closed.
+This was **not** caused by the `:segment` change — it applied to your `:cache` deployment just
+as much, and had done since embeddings first went into the graph. It failed loudly rather than
+restoring corrupt data, so nothing was silently lost.
+
+**It is fixed** on VivaceGraph `experiment` at `0bb1033` or later. Specialized vectors are now
+written as `#V(SINGLE-FLOAT ...)` and restore with their element type intact. Old snapshots
+still restore; new snapshots are **not** readable by an older graph-db, so if your rollback plan
+involves replaying a snapshot into an older binary, note the one-way break.
+
+**Check your backups.** If you have snapshot files taken before this fix and have been assuming
+they are restorable, they are not — test a restore now rather than during an incident. Copying
+the graph directory with the graph closed remains a sound belt-and-braces backup either way.
 
 The one thing that is *not* reversible is the embedding normalisation in §5, because it rewrites the stored slot. That has been the case for `:cache` and `:scan` since Phase 1, so it is not new — but if you want a true point-in-time rollback, **take a copy of the graph directory before the first `:segment` open.** Do that regardless; it is cheap insurance.
 
@@ -174,7 +181,7 @@ Caveat worth stating: the 1.9 s figure is derived from the CPU-bound regime meas
 | --- | --- |
 | [cl-llm#11](https://github.com/kraison/cl-llm/issues/11) | Test suite needs a 4 GB heap. No application impact. |
 | [vivace-graph#54](https://github.com/kraison/vivace-graph/issues/54) | Rebuilding a segment while queries run against it is unsafe. Not reachable through normal open/close. |
-| [vivace-graph#56](https://github.com/kraison/vivace-graph/issues/56) | `snapshot`/`replay` cannot round-trip embeddings; fails loudly. **Back up by copying the directory.** | **Yes — affects you today, `:cache` included** |
+| [vivace-graph#56](https://github.com/kraison/vivace-graph/issues/56) | `snapshot`/`replay` could not restore embeddings. **FIXED** at `0bb1033`. Pre-fix snapshot files are not restorable — test a restore. | Was affecting you, `:cache` included |
 | [vivace-graph#55](https://github.com/kraison/vivace-graph/issues/55) | A segment file that exists but isn't registered at open can be overwritten. Not reachable given your `ensure-chunk-class`-before-open ordering — another reason to leave that alone. |
 
 ---
