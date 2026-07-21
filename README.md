@@ -275,7 +275,7 @@ it holds, so an interrupted migration is finished by the next open — and it
 reports progress on `*error-output*`, because a multi-minute silent migration
 looks hung. Legacy embeddings that are not already normalised
 `(simple-array single-float (*))` vectors are rewritten in place first, honouring
-`cl-llm.rag.vivace::*embedding-migration-policy*` (`:migrate` by default;
+`cl-llm.rag.vivace:*embedding-migration-policy*` (`:migrate` by default;
 `:error` refuses to open). That step is not optional: the segment silently skips
 non-conforming vectors, so without it those chunks would be missing from every
 search result with no error at all.

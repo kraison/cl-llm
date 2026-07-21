@@ -81,7 +81,7 @@ The migration:
 
 - **Is batched.** Default 5000 chunks per progress report.
 - **Is resumable, by construction.** The segment records which chunk ids it already holds; a re-run skips those. There is deliberately no progress file or "migrated" flag — a marker that can disagree with the segment is worse than no marker, because it can claim work that was rolled back. If the migration is interrupted, just open again.
-- **Normalises legacy embeddings first.** If any stored embedding is not already a normalised `(simple-array single-float (*))` — e.g. an old `double-float` vector — it is rewritten in place first, honouring `cl-llm.rag.vivace::*embedding-migration-policy*` (`:migrate` by default; `:error` refuses to open — note the double colon: this knob is not currently exported). This matters: the segment silently ignores non-conforming vectors, so without this step those chunks would be missing from search results with no error at all.
+- **Normalises legacy embeddings first.** If any stored embedding is not already a normalised `(simple-array single-float (*))` — e.g. an old `double-float` vector — it is rewritten in place first, honouring `cl-llm.rag.vivace:*embedding-migration-policy*` (`:migrate` by default; `:error` refuses to open). This matters: the segment silently ignores non-conforming vectors, so without this step those chunks would be missing from search results with no error at all.
 - **Logs progress** to `*error-output*`. A migration over a large corpus takes minutes and a silent one looks hung.
 
 **Expect the first open to be slow, once.** Subsequent opens do a skip-scan (cheap per chunk, but it does walk the corpus — see §8).
