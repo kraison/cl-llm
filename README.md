@@ -190,29 +190,120 @@ sources. For agentic use, `make-retrieval-tool` wraps an index as a
 
 `cl-llm/rag/vivace` lets a persistent [vivace-graph](https://github.com/kraison/vivace-graph)
 (`graph-db`) graph *be* the vector store, so the retrieval corpus lives in the
-same graph as your other data: `(rag:make-index :store (v:make-graph-store graph))`.
-See `examples/rag-vivace.lisp`.
+same graph as your other data. Chunks become vertices of a self-declared
+`rag-chunk` vertex type; the store satisfies the same protocol a `memory-store`
+does, so nothing else in the pipeline changes:
 
-`make-graph-store` / `open-graph-store` take a `:strategy`, all three identical
-through the store contract (same ranking; same scores too for the unit-norm
-query vectors `rag:embed` returns):
+```lisp
+;; v = cl-llm.rag.vivace, rag = cl-llm.rag, gdb = graph-db
+(let* ((embedder (rag:make-openai-compatible-embedder
+                  :base-url "http://localhost:11434/v1" :model "nomic-embed-text"))
+       ;; open-graph-store opens (and hands you) its own graph.  :name defaults
+       ;; to the last directory component upcased -- :KB here.
+       (store (v:open-graph-store #p"/var/tmp/kb/" :name :kb))
+       (index (rag:make-index :embedder embedder :store store)))
+  (rag:add-documents index documents)
+  (multiple-value-prog1 (rag:rag-ask index "What fuze does the TM-62 use?")
+    ;; the caller owns the graph: close it to release the mmaps and clear .dirty
+    (gdb:close-graph (v:graph-store-graph store))))
+```
 
-| strategy | what it does | when |
-| --- | --- | --- |
-| `:segment` (**default**) | embeddings live in graph-db's mmap vector segment; search never materialises a node it will not return | the right default for a persistent graph — the corpus need not fit in the Lisp heap |
-| `:cache` | composes an in-RAM index | **faster** than `:segment` (~15 ms vs ~35 ms at 20k chunks, because the corpus is already in the heap) and the right choice when it fits there — *not* deprecated |
-| `:scan` | no index; scores every chunk vertex per query | fallback and correctness reference |
+`open-graph-store` is for the RAG-only case. When you already have a graph open
+— field data and retrieval corpus in one place — use `make-graph-store` over it
+instead; it borrows the graph and never opens or closes it:
 
-**Breaking change:** the default was `:cache` and is now `:segment`. A caller
-that never passed `:strategy` now gets a segment-backed store, and the first
-open of a corpus written before the segment existed pays a one-time, resumable
-migration sweep (progress-logged). Pass `:strategy :cache` to keep the previous
-behaviour.
+```lisp
+(rag:make-index :embedder embedder
+                :store (v:make-graph-store graph :type 'my-chunk :dimension 1024))
+```
 
-On a query vector that is *not* unit-norm, `:segment` scores are `:cache` scores
-divided by the query norm — the engine computes a full cosine, `:cache` a bare
-dot product. Ordering is identical either way, and `rag:embed` always produces
-unit-norm queries, so this is only visible to a caller that hand-builds an
+`:type` names the chunk vertex type (default `rag-chunk`) — give it your own
+name if the graph holds more than one corpus. `:dimension` is optional; a store
+otherwise learns its dimension from the first chunk written or hydrated, and
+rejects a later mismatch either way.
+
+`examples/rag-vivace.lisp` is a runnable end-to-end walkthrough (mock embedder,
+real on-disk graph, index → ask → close → reopen).
+
+#### Choosing a strategy
+
+Both constructors take `:strategy`. The three are **trades, not a progression** —
+all of them are supported:
+
+| strategy | dense search @20k | corpus in the Lisp heap | what it is |
+| --- | --- | --- | --- |
+| `:segment` (**default**) | ~35 ms | no | embeddings live in graph-db's mmap vector segment; search never materialises a chunk vertex it will not return |
+| `:cache` | **~15 ms** | **yes** | an in-RAM index over the same graph. The **fastest** option and **not deprecated** |
+| `:scan` | ~2.3 s | no | no index; rescans every chunk vertex per query. Fallback and correctness reference |
+
+`:cache` is faster than `:segment`, and that is not a defect: the corpus is
+already in the heap, so there is nothing to decode. `:segment`'s advantage is
+that the corpus **does not have to be** in the heap, and that the embeddings are
+queryable alongside ordinary graph queries. If your corpus fits comfortably in
+the heap and latency matters, `:cache` is still the right answer — pass it
+explicitly.
+
+**The default changed from `:cache` to `:segment`.** A caller that never passed
+`:strategy` now gets a segment-backed store. Pass `:strategy :cache` to keep the
+previous behaviour. Passing `:strategy` explicitly is worth doing either way: it
+is self-documenting and immune to future default changes.
+
+#### Declare the chunk class before you open the graph
+
+If you open your own graph with `gdb:open-graph`, call `ensure-chunk-class`
+**first**:
+
+```lisp
+(v:ensure-chunk-class 'my-chunk :my-graph)          ; type, then graph name
+(let ((graph (gdb:open-graph :my-graph #p"/var/tmp/kb/")))
+  (v:make-graph-store graph :type 'my-chunk :dimension 1024))
+```
+
+`open-graph` instantiates the persisted chunk vertices, which requires the class
+to already exist — in a fresh image (any process restart) it does not. Letting
+`make-graph-store` declare it is too late, because that runs *after* the open.
+Under `:segment` the ordering is load-bearing for a second reason: re-registering
+an existing vector segment at open needs the owning class defined *and*
+finalized. `ensure-chunk-class` is idempotent, so it is a no-op in a warm image.
+`open-graph-store` does this for you.
+
+#### First open of an existing store
+
+Under `:segment`, `hydrate` fills the vector segment with any chunk not already
+in it. The sweep is batched and resumable — the segment itself records which ids
+it holds, so an interrupted migration is finished by the next open — and it
+reports progress on `*error-output*`, because a multi-minute silent migration
+looks hung. Legacy embeddings that are not already normalised
+`(simple-array single-float (*))` vectors are rewritten in place first, honouring
+`cl-llm.rag.vivace::*embedding-migration-policy*` (`:migrate` by default;
+`:error` refuses to open). That step is not optional: the segment silently skips
+non-conforming vectors, so without it those chunks would be missing from every
+search result with no error at all.
+
+**Expect the first open of an existing corpus to be slow, once.** Later opens
+still walk the chunk vertices to find anything unindexed, but skip what is
+already there.
+
+Sizing: the vector block is `chunks × dimension × 4` bytes — **4 KB per chunk at
+dimension 1024**, so 20k chunks ≈ 80 MB and 1M ≈ 4 GB, on disk inside the graph
+directory.
+
+For an existing deployment moving to `:segment` — rollout, rollback, and the
+gotchas that come with a real corpus — see
+[`docs/2026-07-21-segment-store-transition-guide.md`](docs/2026-07-21-segment-store-transition-guide.md).
+
+#### Results are the same across strategies
+
+`store-search` returns a list of `rag:hit` (`rag:hit-chunk` / `rag:hit-score`)
+whichever strategy you use, and the **ranking is identical, ties included** —
+`:segment` over-fetches from the engine and re-ranks through cl-llm's own
+collector, because the engine's tiebreak is by node id and cl-llm's is by
+document id. Deleted chunks are filtered out on every strategy.
+
+Scores match too for the unit-norm query vectors `rag:embed` produces. On a query
+vector that is *not* unit-norm, `:segment` returns `:cache`'s score divided by the
+query norm — the engine computes a full cosine, `:cache` a bare dot product.
+Ordering is unaffected, so this is only visible to a caller that hand-builds an
 unnormalised query and compares absolute scores across strategies.
 
 A separate live suite (`cl-llm/rag/live`) exercises a real embeddings
@@ -259,6 +350,22 @@ Under development. Currently **not** implemented:
 - Multimodal input — the content model supports it, the providers do not yet
 - Streamed tool calls on OpenAI-compatible endpoints (non-streaming tool use
   works; Anthropic streams tool calls fine)
+- Approximate nearest-neighbour search. **Every strategy — `:segment` included —
+  is a brute-force exact scan**, so dense-search latency is linear in corpus
+  size: roughly 1.85 ms per 1000 chunks at dimension 1024 while the vector block
+  fits in page cache, and considerably worse once it does not. At a scale where
+  that hurts, the answer is an ANN index, and there isn't one yet.
+
+Two things worth knowing about the graph-backed store:
+
+- **`:segment` has been developed and tested on SBCL only.** The vivace suite has
+  never been run on ECL, and `:segment` is now the default — so an ECL user gets
+  an untested path unless they pass `:strategy :cache` or `:scan`. There is an
+  existing related report of ECL/SBCL store disagreement
+  ([cl-llm#9](https://github.com/kraison/cl-llm/issues/9)).
+- Do not construct two `:segment` stores over the same graph from two threads at
+  once — the engine requires that two migrations of one segment never overlap.
+  Concurrent *readers* are safe.
 
 See `docs/superpowers/specs/2026-07-17-cl-llm-design.md` for the design and the
 reasoning behind each non-goal.

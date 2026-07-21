@@ -81,7 +81,7 @@ The migration:
 
 - **Is batched.** Default 5000 chunks per progress report.
 - **Is resumable, by construction.** The segment records which chunk ids it already holds; a re-run skips those. There is deliberately no progress file or "migrated" flag — a marker that can disagree with the segment is worse than no marker, because it can claim work that was rolled back. If the migration is interrupted, just open again.
-- **Normalises legacy embeddings first.** If any stored embedding is not already a normalised `(simple-array single-float (*))` — e.g. an old `double-float` vector — it is rewritten in place first, honouring `cl-llm.rag.vivace:*embedding-migration-policy*` (`:migrate` by default; `:error` refuses to open). This matters: the segment silently ignores non-conforming vectors, so without this step those chunks would be missing from search results with no error at all.
+- **Normalises legacy embeddings first.** If any stored embedding is not already a normalised `(simple-array single-float (*))` — e.g. an old `double-float` vector — it is rewritten in place first, honouring `cl-llm.rag.vivace::*embedding-migration-policy*` (`:migrate` by default; `:error` refuses to open — note the double colon: this knob is not currently exported). This matters: the segment silently ignores non-conforming vectors, so without this step those chunks would be missing from search results with no error at all.
 - **Logs progress** to `*error-output*`. A migration over a large corpus takes minutes and a silent one looks hung.
 
 **Expect the first open to be slow, once.** Subsequent opens do a skip-scan (cheap per chunk, but it does walk the corpus — see §8).
@@ -95,6 +95,22 @@ The migration:
 Change `:segment` back to `:cache` and restart. That is the whole rollback.
 
 The segment is a derived index, not a source of truth — your chunk vertices are untouched by any of this, and `:cache` rebuilds its in-RAM index from them exactly as it does today. The segment file stays on disk and keeps being maintained; it costs disk space and does no harm.
+
+### Back up by copying the directory, not by snapshot
+
+**Do not rely on `snapshot`/`replay` to back up this knowledge base.** VivaceGraph
+[issue #56](https://github.com/kraison/vivace-graph/issues/56): `backup` writes slot values as
+Lisp text, and the restore reader coerces every `#(...)` it reads to a byte vector — it has to,
+because node ids are byte vectors and it cannot tell an id from slot data. A `single-float`
+embedding therefore fails on restore with `The value 1.0 is not of type (UNSIGNED-BYTE 8)`.
+
+It fails loudly rather than restoring corrupted data, so you will not silently lose content —
+but a graph full of embeddings cannot currently be restored from a snapshot at all. This is
+**not new** and is not caused by the `:segment` change; it applies to your `:cache` deployment
+today just as much. It is worth knowing because your knowledge base is almost entirely
+embeddings.
+
+Until #56 is fixed: **back up by copying the graph directory** with the graph closed.
 
 The one thing that is *not* reversible is the embedding normalisation in §5, because it rewrites the stored slot. That has been the case for `:cache` and `:scan` since Phase 1, so it is not new — but if you want a true point-in-time rollback, **take a copy of the graph directory before the first `:segment` open.** Do that regardless; it is cheap insurance.
 
@@ -158,6 +174,7 @@ Caveat worth stating: the 1.9 s figure is derived from the CPU-bound regime meas
 | --- | --- |
 | [cl-llm#11](https://github.com/kraison/cl-llm/issues/11) | Test suite needs a 4 GB heap. No application impact. |
 | [vivace-graph#54](https://github.com/kraison/vivace-graph/issues/54) | Rebuilding a segment while queries run against it is unsafe. Not reachable through normal open/close. |
+| [vivace-graph#56](https://github.com/kraison/vivace-graph/issues/56) | `snapshot`/`replay` cannot round-trip embeddings; fails loudly. **Back up by copying the directory.** | **Yes — affects you today, `:cache` included** |
 | [vivace-graph#55](https://github.com/kraison/vivace-graph/issues/55) | A segment file that exists but isn't registered at open can be overwritten. Not reachable given your `ensure-chunk-class`-before-open ordering — another reason to leave that alone. |
 
 ---

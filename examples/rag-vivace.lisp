@@ -20,9 +20,17 @@
 ;;;;               Fallback and correctness reference.
 ;;;; and the graph is durable, so you index once and reopen without re-embedding.
 ;;;;
-;;;; NOTE: the default changed from :cache to :segment. This example passes
-;;;; :strategy explicitly throughout, so it is unaffected; a caller that relied
-;;;; on the old default should pass :strategy :cache.
+;;;; NOTE: the default changed from :cache to :segment. This example uses the
+;;;; default where it wants the default and passes :strategy explicitly where it
+;;;; is comparing strategies; a caller that relied on the old default should pass
+;;;; :strategy :cache.
+;;;;
+;;;; This example creates its own graph with gdb:make-graph, so the chunk class
+;;;; is declared by make-graph-store in time. A consumer that reopens its OWN
+;;;; graph with gdb:open-graph must call (v:ensure-chunk-class 'my-chunk :my-graph)
+;;;; BEFORE the open -- open instantiates the persisted chunk vertices, and the
+;;;; :segment path also needs the class finalized to re-register the existing
+;;;; vector segment. open-graph-store (step 5 below) does that for you.
 ;;;;
 ;;;; This example runs with NO Ollama and NO API key: it uses a deterministic
 ;;;; MOCK-EMBEDDER + MOCK-PROVIDER, over a REAL on-disk graph-db graph. To use real
@@ -95,9 +103,13 @@
            ;;    The ONLY change from an in-memory index is :store -- the rest of
            ;;    the RAG pipeline (add-documents, rag-ask) is identical.
            (let* ((graph (gdb:make-graph name dir))
+                  ;; No :strategy -> :segment, the default: embeddings live in
+                  ;; the graph's mmap vector segment, so the corpus need not fit
+                  ;; in the Lisp heap. Pass :strategy :cache for the faster
+                  ;; in-RAM index when it does.
                   (index (rag:make-index
                           :embedder embedder
-                          :store (v:make-graph-store graph :strategy :cache))))
+                          :store (v:make-graph-store graph))))
              (rag:add-documents index *corpus*)
              (format t "~&--- indexed into the graph ---~%~a chunk(s) stored as graph vertices~%"
                      (rag:store-count (rag:index-store index)))
@@ -112,25 +124,32 @@
              ;; => The TM-62M uses a pressure-activated fuze [1].
              ;;      sources: TM-62M, OZM-72, PFM-1
 
-             ;; 3. Strategy is invisible through the contract: a :scan store over
-             ;;    the SAME graph retrieves the same ranking as the :cache store.
-             (let* ((cache (v:make-graph-store graph :strategy :cache))
+             ;; 3. Strategy is invisible through the contract: :cache and :scan
+             ;;    stores over the SAME graph rank exactly as the :segment store
+             ;;    built above -- ties included.
+             (let* ((segment (rag:index-store index))
+                    (cache (v:make-graph-store graph :strategy :cache))
                     (scan  (v:make-graph-store graph :strategy :scan))
                     (q (rag:embed embedder "anti-tank mine with a metal body")))
-               (format t "~&--- scan vs cache (same graph) ---~%  cache: ~{~a~^, ~}~%  scan:  ~{~a~^, ~}~%"
+               (format t "~&--- segment vs cache vs scan (same graph) ---~%~
+                          ~&  segment: ~{~a~^, ~}~%  cache:   ~{~a~^, ~}~%  scan:    ~{~a~^, ~}~%"
+                       (titles (rag:store-search segment q 2))
                        (titles (rag:store-search cache q 2))
                        (titles (rag:store-search scan q 2))))
-             ;; => cache: TM-62M, PFM-1
-             ;;    scan:  TM-62M, PFM-1      ; identical (deterministic tie-break)
+             ;; => segment: TM-62M, PFM-1
+             ;;    cache:   TM-62M, PFM-1
+             ;;    scan:    TM-62M, PFM-1    ; identical (deterministic tie-break)
 
              ;; 4. Persist: closing the graph snapshots it to disk.
              (gdb:close-graph graph)
              (format t "~&--- graph closed (persisted to disk) ---~%"))
 
            ;; 5. Reopen: the corpus is still there and HYDRATES from the graph --
-           ;;    no re-chunking, no re-embedding. open-graph-store attaches a store
-           ;;    to the reopened graph.
-           (let* ((store (v:open-graph-store dir :name name :strategy :cache))
+           ;;    no re-chunking, no re-embedding. open-graph-store declares the
+           ;;    chunk class, opens the graph itself, and attaches a store (again
+           ;;    :segment by default). On a corpus written before the segment
+           ;;    existed, this first open pays a one-time, resumable migration.
+           (let* ((store (v:open-graph-store dir :name name))
                   (index (rag:make-index :embedder embedder :store store)))
              (format t "~&--- reopened from disk ---~%~a chunk(s) hydrated~%"
                      (rag:store-count store))
