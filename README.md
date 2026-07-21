@@ -231,6 +231,17 @@ needs no network access or API key. It is what CI runs on every push and pull
 request. The separate `cl-llm/eval` system has its own offline suite
 (`sbcl --eval '(asdf:test-system :cl-llm/eval)'`).
 
+`cl-llm/rag/vivace`'s offline suite needs a **larger heap than SBCL's 1GB
+default** — run it with `--dynamic-space-size 4096`, or it exhausts the heap
+on roughly two runs in three (a pre-existing ~870MB retention in the vivace
+suite fixtures, tracked as cl-llm#11; not caused by, and not specific to, the
+`:segment` strategy tests):
+
+```sh
+sbcl --dynamic-space-size 4096 --non-interactive \
+     --eval '(asdf:test-system :cl-llm/rag/vivace/tests)'
+```
+
 The live suite (`cl-llm/live`) is a separate ASDF system that hits real
 endpoints: Anthropic (needs `ANTHROPIC_API_KEY`) and, optionally, a local
 OpenAI-compatible server (`CL_LLM_LOCAL_BASE_URL` / `CL_LLM_LOCAL_MODEL`,

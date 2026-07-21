@@ -183,6 +183,10 @@
                (:file "store-cache")
                (:file "store-segment")
                (:file "integration"))
+  ;; NB: this suite needs a bigger heap than SBCL's 1GB default -- run with
+  ;; `sbcl --dynamic-space-size 4096`, or ASDF:TEST-SYSTEM below exhausts it
+  ;; on roughly two runs in three. See the Testing section of README.md and
+  ;; tests-vivace/store-segment.lisp's header comment; tracked as cl-llm#11.
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run! :cl-llm-rag-vivace)
                (error "cl-llm/rag/vivace tests failed."))))

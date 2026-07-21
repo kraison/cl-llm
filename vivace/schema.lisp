@@ -77,6 +77,11 @@ CONTRACT: the stored embedding is already a normalised
 every embedding in place BEFORE CHUNK->VERTEX ever sees it, so a non-conforming
 value cannot reach the slot via STORE-ADD, and MIGRATE-EMBEDDINGS fixes any
 pre-existing one at HYDRATE.  The read side therefore does NOT re-normalise.
+The returned chunk's EMBEDDING is the vertex's slot value ITSELF, not a copy
+-- on a memory graph this is the identical Lisp array object the vertex
+holds -- so the caller MUST NOT mutate it in place; doing so would corrupt
+what the vertex (and, for :segment stores, the vector segment scoring
+against that same slot) sees as the chunk's embedding.
 
 HISTORY (one line, as promised): this used to call RAG:AS-EMBEDDING as a live
 read-side guard; write-side enforcement in VALIDATE-CHUNKS replaced it, and the

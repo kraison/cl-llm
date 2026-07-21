@@ -174,6 +174,15 @@ establishes. Signals rag:llm-rag-error."
   (gdb:map-vertices fn (graph-store-graph store)
                     :vertex-type (chunk-type-symbol (graph-store-type store))))
 
+(defmethod rag:store-count ((store graph-store))
+  "Base O(corpus) implementation: scan the chunk vertices and count them.
+CACHED-GRAPH-STORE overrides this with an O(1) count from its in-RAM index;
+SCAN-GRAPH-STORE and SEGMENT-GRAPH-STORE have no faster source of truth than
+the vertex scan, so they inherit this."
+  (let ((n 0))
+    (map-chunk-vertices store (lambda (v) (declare (ignore v)) (incf n)))
+    n))
+
 (defun graph-store-chunks (store)
   "All chunks currently in STORE's graph, as rag:chunk objects (for building a secondary index)."
   (let ((out '()))
@@ -208,11 +217,6 @@ mark-deleted them in one transaction (mark-deleted joins the active tx)."
           (dolist (v victims)
             (gdb:mark-deleted v)))))
     (length victims)))
-
-(defmethod rag:store-count ((store scan-graph-store))
-  (let ((n 0))
-    (map-chunk-vertices store (lambda (v) (declare (ignore v)) (incf n)))
-    n))
 
 (defmethod rag:store-search ((store scan-graph-store) query-vector k)
   (when (and (graph-store-dimension store)
@@ -348,11 +352,6 @@ declared :VECTOR-INDEX.  That is why STORE-ADD and STORE-DELETE-DOCUMENTS need n
 :AFTER methods here -- adding them would be duplicated bookkeeping for a
 structure the database already maintains."))
 
-(defmethod rag:store-count ((store segment-graph-store))
-  (let ((n 0))
-    (map-chunk-vertices store (lambda (v) (declare (ignore v)) (incf n)))
-    n))
-
 (defparameter *segment-migration-batch-size* 5000
   "Chunks per progress report while migrating a pre-segment corpus.
 
@@ -394,6 +393,19 @@ rolled back, or because the process died between writing the marker and writing
 the segment -- is strictly worse than no marker.  The segment is the only source
 of truth, which is also why nothing here bothers to DETECT whether migration is
 needed: the unconditional call IS the detection, and it is idempotent.
+
+WHICH FAILURE MODES \"RESUMABLE\" ACTUALLY COVERS.  The additive skip-scan above
+resumes cheaply after an in-process abort of THIS call (an error, a killed
+thread) followed by a clean GDB:CLOSE-GRAPH -- the next HYDRATE just finishes
+what was left. A HARD crash (process killed, power loss) is a different path
+entirely: GDB:OPEN-GRAPH refuses to reopen the graph at all until the operator
+runs recovery, and the segment carries its own dirty flag that, once tripped,
+forces the engine to DROP and FULLY REBUILD the segment from scratch on the
+next open (GDB::RESTORE-VECTOR-SEGMENTS / GDB::REBUILD-VECTOR-SEGMENT) rather
+than resume the batched migration this method drives. Both mechanisms are
+correct for the failure they cover; an operator who reads \"resumable\" and
+expects the cheap skip-scan after a hard crash will instead pay a full
+re-index the first time this store is reopened.
 
 COST, stated plainly: a corpus large enough to matter pays a one-time
 multi-minute sweep on the first open after upgrading into the :VECTOR-INDEX
@@ -519,7 +531,14 @@ SEGMENT-AND-CACHE-SCORES-DIFFER-BY-THE-QUERY-NORM in tests-vivace/."
     (let ((gdb:*graph* graph))
       (dolist (pair hits)
         (let ((vertex (gdb:lookup-vertex (cdr pair) :graph graph)))
-          (when vertex
+          ;; GDB:LOOKUP-VERTEX returns the vertex regardless of its deleted
+          ;; flag (vertex.lisp), and the segment is filled ADDITIVELY by
+          ;; GDB:REBUILD-VECTOR-SEGMENT-BATCHED -- it never removes stale ids.
+          ;; So a chunk deleted by a writer that never declared :VECTOR-INDEX
+          ;; on this slot (an older cl-llm, or another app sharing the graph)
+          ;; can still be present in the segment and come back as a hit here.
+          ;; Filter it the same way the generated LOOKUP-<type> functions do.
+          (when (and vertex (not (gdb:deleted-p vertex)))
             (let ((chunk (vertex->chunk vertex)))
               (rag::collect-candidate collector
                                       (car pair)

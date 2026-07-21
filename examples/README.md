@@ -32,7 +32,7 @@ Each example is its own package (`examples/<name>`) so they don't clash.
 | [rag-local.lisp](rag-local.lisp) | The same RAG pipeline with a real local Ollama embedder + persistence | yes (Ollama + an embed model) |
 | [rag-crosslingual.lisp](rag-crosslingual.lisp) | Index Russian & Ukrainian sources, ask in English — cross-lingual retrieval via `bge-m3` | yes (Ollama + `bge-m3`) |
 | [rag-eval.lisp](rag-eval.lisp) | Measure a RAG system: retrieval recall@k / MRR (standalone) + groundedness & abstention (`cl-llm/eval`) | yes (Ollama + `bge-m3`) |
-| [rag-vivace.lisp](rag-vivace.lisp) | Back the RAG store with a vivace-graph (`graph-db`) graph: drop-in `make-graph-store`, scan/cache strategies, persistence + hydrate | **no** — offline via mocks (needs `graph-db` on the ASDF path) |
+| [rag-vivace.lisp](rag-vivace.lisp) | Back the RAG store with a vivace-graph (`graph-db`) graph: drop-in `make-graph-store`, the `:segment`/`:cache`/`:scan` strategies, persistence + hydrate | **no** — offline via mocks (needs `graph-db` on the ASDF path) |
 | [errors-and-retries.lisp](errors-and-retries.lisp) | The condition hierarchy, timeouts, the `retry-request` restart | some (parts are offline) |
 | [evaluation.lisp](evaluation.lisp) | `defsuite` / scorers / judge / `report` | **no** — runs offline via the mock |
 | [testing-with-mock.lisp](testing-with-mock.lisp) | `mock-provider`: test your own cl-llm code with no network | **no** — offline |

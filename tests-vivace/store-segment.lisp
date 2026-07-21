@@ -292,6 +292,134 @@ graph-store base behaviour."
         (gdb:close-graph (v:graph-store-graph store) :snapshot-p nil)))))
 
 ;;; ---------------------------------------------------------------------------
+;;; Final review item 1 (BLOCKING).  Task 7 made :segment the default strategy
+;;; for BOTH constructors, but every :segment test above passes :strategy
+;;; explicitly, and the one existing test that touches the default
+;;; (STORE-ADD-NORMALISES-NON-CONFORMING-EMBEDDING in tests-vivace/schema.lisp)
+;;; asserts on a raw vertex slot that is identical under all three strategies.
+;;; So flipping the default back to :cache in both MAKE-GRAPH-STORE and
+;;; OPEN-GRAPH-STORE left the whole suite green.  These two tests pin the
+;;; default directly, with no :STRATEGY argument at all.
+
+(test make-graph-store-defaults-to-segment
+  "V:MAKE-GRAPH-STORE's :STRATEGY defaults to :SEGMENT.  Mutate the default
+back to :CACHE in MAKE-GRAPH-STORE (vivace/store.lisp) and this must fail --
+verified by hand as part of the final review (see task-7-report.md)."
+  (with-temp-directory (dir)
+    (let ((graph (gdb:make-graph :cl-llm-vg-default-ctor dir :buffer-pool-size 1000)))
+      (unwind-protect
+           (is (typep (v:make-graph-store graph) 'v:segment-graph-store)
+               "make-graph-store's default strategy is not :segment")
+        (gdb:close-graph graph :snapshot-p nil)))))
+
+(test open-graph-store-defaults-to-segment
+  "Same pin as MAKE-GRAPH-STORE-DEFAULTS-TO-SEGMENT, through V:OPEN-GRAPH-STORE
+on a GENUINE REOPEN of a persisted graph -- not a fresh GDB:MAKE-GRAPH, since
+that is the call OPEN-GRAPH-STORE actually makes internally and the one a real
+caller reopening a store hits.  Mutate the default back to :CACHE in
+OPEN-GRAPH-STORE and this must fail."
+  (with-temp-directory (dir)
+    (let ((graph (gdb:make-graph :cl-llm-vg-default-open dir :buffer-pool-size 1000)))
+      (gdb:close-graph graph :snapshot-p nil))
+    (let ((store (v:open-graph-store (namestring dir) :name :cl-llm-vg-default-open)))
+      (unwind-protect
+           (is (typep store 'v:segment-graph-store)
+               "open-graph-store's default strategy is not :segment")
+        (gdb:close-graph (v:graph-store-graph store) :snapshot-p nil)))))
+
+;;; ---------------------------------------------------------------------------
+;;; Final review item 5.  GDB:VECTOR-SEARCH returns NIL, not a signal, when no
+;;; segment exists yet (documented on GDB:VECTOR-SEARCH); nothing pinned that
+;;; behaviour reaching STORE-SEARCH unchanged.
+
+(test segment-search-on-an-empty-store-returns-nil
+  "A freshly created :segment store with no chunks -- so no segment has ever
+been created for it -- must have STORE-SEARCH return NIL, not signal.  Making
+GDB:VECTOR-SEARCH (or this method's handling of its result) signal instead of
+returning NIL breaks this."
+  (with-temp-directory (dir)
+    (let* ((graph (gdb:make-graph :cl-llm-vg-seg-empty dir :buffer-pool-size 1000))
+           (store (v:make-graph-store graph :strategy :segment :dimension 8)))
+      (unwind-protect
+           (progn
+             (is (= 0 (rag:store-count store))
+                 "fixture broken: store is not empty, ~D chunks present"
+                 (rag:store-count store))
+             (is (null (gethash (cons (v::chunk-type-symbol 'rag-chunk)
+                                      (intern "EMBEDDING" :graph-db))
+                                (gdb::vector-segments graph)))
+                 "fixture broken: a segment already exists on an empty store")
+             (let ((hits (rag:store-search store (unit-query 8 1.0) 5)))
+               (is (null hits) "expected NIL from an empty store, got ~S" hits)))
+        (gdb:close-graph graph :snapshot-p nil)))))
+
+(test segment-search-filters-deleted-vertices
+  "GDB:LOOKUP-VERTEX \"returns the vertex regardless of its deleted flag\"
+(vertex.lisp), and GDB:REBUILD-VECTOR-SEGMENT-BATCHED is additive -- it never
+removes a stale id from the segment.  So a chunk deleted by a writer that
+shares the graph but whose class never declared :VECTOR-INDEX on this slot
+(an older cl-llm, or another app) leaves the segment un-reconciled: the id
+stays present and comes back as a search hit even though the vertex is
+deleted.
+
+There is no PUBLIC way to reach that drifted state: every delete this library
+performs (RAG:STORE-DELETE-DOCUMENTS -> GDB:MARK-DELETED) goes through the
+transaction apply path, and APPLY-TX-WRITE-TO-VECTOR-SEGMENTS
+(transactions.lisp) already removes the id from the segment on every delete
+of a :VECTOR-INDEX-declared slot -- which this schema's EMBEDDING slot always
+is.  So, as the review item anticipates, the drift is built through GDB
+internals: mark the vertex's DELETED-P slot directly via a raw SETF, the same
+\"bypass the transaction machinery\" idiom already documented and used in
+%MIGRATE-EMBEDDING-BATCH's comment above, rather than going through
+GDB:MARK-DELETED / a transaction (which would clean the segment itself and
+leave nothing to filter). Confirmed to work here because GDB:LOOKUP-VERTEX
+returns the SAME live, buffer-pool-cached object on every call within a
+process (checked by hand against the running image before writing this
+test), so the raw SETF is visible to the vertex STORE-SEARCH itself looks up
+-- it is not a mutation of a throwaway copy."
+  (with-temp-directory (dir)
+    (let* ((graph (gdb:make-graph :cl-llm-vg-seg-filter-deleted dir :buffer-pool-size 1000))
+           (store (v:make-graph-store graph :strategy :segment :dimension 8)))
+      (unwind-protect
+           (progn
+             (rag:store-add store (list (test-chunk "a" 8 1.0) (test-chunk "b" 8 1.0)))
+             (let* ((verts (gdb:map-vertices (lambda (x) x) graph
+                                             :vertex-type (v::chunk-type-symbol 'rag-chunk)
+                                             :collect-p t))
+                    (victim (find "a" verts
+                                  :key (lambda (x) (v::%slot x "DOCUMENT-ID"))
+                                  :test #'string=)))
+               (is (not (null victim)) "fixture broken: chunk 'a' not found")
+               (when victim
+                 (setf (gdb:deleted-p victim) t)
+                 ;; Fixture check: the id must still be IN the segment -- if it
+                 ;; were already gone this test would pass even with the bug
+                 ;; reintroduced, proving nothing.
+                 (let ((seg (gethash (cons (v::chunk-type-symbol 'rag-chunk)
+                                           (intern "EMBEDDING" :graph-db))
+                                     (gdb::vector-segments graph))))
+                   (is (not (null seg)) "fixture broken: no segment")
+                   (when seg
+                     (is (not (null (gdb::segment-get seg (gdb:id victim))))
+                         "fixture broken: deleted id is no longer in the segment, ~
+so this test cannot distinguish filtering from absence")))
+                 (let ((hits (rag:store-search store (unit-query 8 1.0) 5)))
+                   (is (plusp (length hits))
+                       "fixture broken: no hits at all, so the negative assertion ~
+below would be vacuous")
+                   (is (notany (lambda (h)
+                                 (string= "a" (rag:chunk-document-id (rag:hit-chunk h))))
+                               hits)
+                       "deleted chunk 'a' was returned by store-search: ~S"
+                       (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h))) hits))
+                   (is (some (lambda (h)
+                               (string= "b" (rag:chunk-document-id (rag:hit-chunk h))))
+                             hits)
+                       "live chunk 'b' should still be returned: ~S"
+                       (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h))) hits))))))
+        (gdb:close-graph graph :snapshot-p nil)))))
+
+;;; ---------------------------------------------------------------------------
 ;;; Migration of a pre-segment corpus (Task 5).
 
 (defun chunk-segment-key (&optional (type 'rag-chunk))
