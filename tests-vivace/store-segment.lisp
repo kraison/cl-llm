@@ -396,3 +396,50 @@ pass on a broken probe that leaves the slot NIL-checked-truthy by accident."
                  "expected hydrate to record dimension 8, got ~S"
                  (v:graph-store-dimension store)))
         (gdb:close-graph graph :snapshot-p nil)))))
+
+;;; ---------------------------------------------------------------------------
+;;; The performance premise (Task 6): store-search must not materialise the
+;;; corpus.
+
+(test segment-search-does-not-materialise-the-corpus
+  "THE PERFORMANCE PREMISE, asserted structurally.  Node loading was ~92% of the
+old store-search cost; the segment exists so ranking never touches a node it is
+not going to return.  A search for k over a corpus of N >> k must build at most
+k * *segment-overfetch-factor* chunks -- not N.
+
+Counted, never timed: a timing assertion would be flaky and would not
+distinguish 'fast' from 'correct'.
+
+The counter is installed by rebinding V::VERTEX->CHUNK's SYMBOL-FUNCTION --
+V:STORE-SEARCH's only call to it is the per-candidate build inside the hit
+loop (vivace/store.lisp); HYDRATE/migration never call it (it probes the
+dimension via a raw slot read and drives GDB:REBUILD-VECTOR-SEGMENT-BATCHED
+instead), so counting only starts AFTER the store is built and populated
+below, deliberately outside the counted window."
+  (with-temp-directory (dir)
+    (let* ((graph (gdb:make-graph :cl-llm-vg-seg-perf dir :buffer-pool-size 1000))
+           (store (v:make-graph-store graph :strategy :segment :dimension 8))
+           (built 0)
+           (k 5)
+           (corpus-size 200))
+      (unwind-protect
+           (progn
+             (rag:store-add store (agreement-corpus corpus-size))
+             (let ((original (symbol-function 'v::vertex->chunk)))
+               (unwind-protect
+                    (progn
+                      (setf (symbol-function 'v::vertex->chunk)
+                            (lambda (vertex) (incf built) (funcall original vertex)))
+                      (let ((hits (rag:store-search store (unit-query 8 1.0) k)))
+                        (is (= k (length hits)) "expected ~D hits, got ~D" k (length hits))))
+                 (setf (symbol-function 'v::vertex->chunk) original)))
+             (is (plusp built)
+                 "no chunks were built at all -- the counter never fired, so this ~
+test proves nothing")
+             (is (<= built (* k v::*segment-overfetch-factor*))
+                 "materialised ~D chunks for a k=~D search over ~D -- the search is ~
+loading nodes it does not return, which is the cost this whole phase exists to ~
+remove" built k corpus-size)
+             (is (< built corpus-size)
+                 "materialised ~D of ~D chunks -- that is a full corpus scan" built corpus-size))
+        (gdb:close-graph graph :snapshot-p nil)))))
