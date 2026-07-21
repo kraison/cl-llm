@@ -42,6 +42,24 @@ Engine spec: `vivace-graph-v3/docs/superpowers/specs/2026-07-21-vector-segment-q
 
 **Facts verified against the source — use these, do not re-derive them:**
 
+- **`open-graph-store` does NOT create a graph.** It calls `gdb:open-graph`, which mmaps
+  `heap.dat` with `:create-p nil` and therefore ERRORS on a directory that has no graph in
+  it yet. Task 2 discovered this the hard way. **To create a store in a test, use
+  `gdb:make-graph` + `v:make-graph-store`; reserve `v:open-graph-store` for a genuine
+  REOPEN of a directory a previous `make-graph` already populated.** The idiom, as used in
+  `tests-vivace/schema.lisp` and `tests-vivace/integration.lisp`:
+
+  ```lisp
+  (let* ((graph (gdb:make-graph :some-unique-name dir))
+         (store (v:make-graph-store graph :strategy :segment :dimension 8)))
+    ... (gdb:close-graph graph :snapshot-p nil))
+  ```
+
+  Every `open-graph-store`-on-a-fresh-directory call in Tasks 3-6 below is wrong for this
+  reason — substitute the idiom above. Graph names must be unique per test.
+- `tests-vivace/schema.lisp` now defines a `with-temp-directory` macro and a `test-chunk`
+  helper (added by Task 2). Reuse them; do not redefine them.
+
 - The FiveAM suite is **`:cl-llm-rag-vivace`** (`tests-vivace/suite.lisp`). Run it with
   `(fiveam:run! :cl-llm-rag-vivace)` — it is a keyword, not a package-qualified symbol.
 - Test files are per-strategy (`store-scan.lisp`, `store-cache.lisp`), so the new tests go

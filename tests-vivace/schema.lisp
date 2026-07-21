@@ -14,6 +14,26 @@
 (defmacro with-temp-graph ((g) &body body)
   `(call-with-temp-memory-graph (lambda (,g) ,@body)))
 
+(defmacro with-temp-directory ((dir) &body body)
+  "Bind DIR to a fresh, not-yet-existing directory pathname under /tmp for the
+duration of BODY; delete it (recursively, if anything created it) afterward
+regardless of how BODY exits. This only reserves a path -- callers that need an
+on-disk graph there still create it themselves (e.g. via gdb:make-graph, which
+creates the directory), matching the persistent-graph test idiom used elsewhere
+in tests-vivace/ (see tests-vivace/integration.lisp)."
+  `(let ((,dir (pathname (format nil "/tmp/cl-llm-vg-test-~a-~a/"
+                                 (get-internal-real-time) (random 1000000)))))
+     (unwind-protect (progn ,@body)
+       (ignore-errors (uiop:delete-directory-tree ,dir :validate t
+                                                        :if-does-not-exist :ignore)))))
+
+(defun test-chunk (text dim value)
+  "A rag:chunk whose embedding is DIM copies of VALUE (pre-normalisation)."
+  (rag:make-chunk text
+                  :document-id text
+                  :embedding (make-array dim :element-type 'single-float
+                                             :initial-element (coerce value 'single-float))))
+
 (test chunk-vertex-round-trips-with-coerced-embedding
   (with-temp-graph (g)
     (v::ensure-chunk-schema g 'rag-chunk)
@@ -122,3 +142,70 @@
     (v::ensure-chunk-schema g 'rag-chunk)
     (v::ensure-chunk-schema g 'rag-chunk)   ; twice must not error
     (is (gdb:lookup-node-type-by-name (v::chunk-type-symbol 'rag-chunk) :vertex :graph g))))
+
+;;; Vector-index declaration on the EMBEDDING slot (Task 2 of the :segment store
+;;; strategy plan). ENSURE-CHUNK-CLASS's DEF-VERTEX form declares EMBEDDING
+;;; :VECTOR-INDEX T; graph-db's apply path then maintains a dense-vector segment
+;;; for it automatically -- no parallel write path, no cache to invalidate. This
+;;; is the single piece of write-side mechanism later tasks (segment-graph-store,
+;;; store-search) build on; without it they are inert.
+
+(test chunk-class-declares-embedding-vector-indexed
+  "The EMBEDDING slot carries :vector-index, which is what makes the apply path
+maintain a segment for it.  Without this declaration every later task in this
+step is inert -- store-add would write vertices and no segment would exist."
+  (let ((graph-name :vector-index-decl-test))
+    (v::ensure-chunk-class 'rag-chunk graph-name)
+    (let ((slots (gdb::node-vector-index-slots
+                  (find-class (v::chunk-type-symbol 'rag-chunk)))))
+      (is (member (intern "EMBEDDING" :graph-db) slots)
+          "EMBEDDING is not vector-indexed; declared slots were ~S" slots))))
+
+(test store-add-populates-the-segment
+  "End-to-end proof the declaration is live: adding chunks through the ordinary
+store-add path makes the segment hold them, with no explicit indexing call.
+
+Builds the on-disk graph with GDB:MAKE-GRAPH (not V:OPEN-GRAPH-STORE) and
+attaches a store with V:MAKE-GRAPH-STORE: V:OPEN-GRAPH-STORE calls
+GDB:OPEN-GRAPH, which mmaps heap.dat with :CREATE-P NIL and errors on a
+directory that was never GDB:MAKE-GRAPH'd -- confirmed by hand against a fresh
+WITH-TEMP-DIRECTORY path (\"mmap-file: ... does not exist and create-p is not
+true\"). GDB:MAKE-GRAPH + V:MAKE-GRAPH-STORE is the same first-open idiom
+examples/rag-vivace.lisp and tests-vivace/integration.lisp already use;
+V:OPEN-GRAPH-STORE is for REOPENING a graph a prior GDB:MAKE-GRAPH created."
+  (with-temp-directory (dir)
+    (let* ((graph (gdb:make-graph :cl-llm-vg-vecidx-add dir))
+           (store (v:make-graph-store graph :strategy :scan :dimension 8)))
+      (unwind-protect
+           (progn
+             (rag:store-add store (list (test-chunk "a" 8 1.0)
+                                        (test-chunk "b" 8 2.0)))
+             (let ((seg (gethash (cons (v::chunk-type-symbol 'rag-chunk)
+                                       (intern "EMBEDDING" :graph-db))
+                                 (gdb::vector-segments (v:graph-store-graph store)))))
+               (is (not (null seg)) "no segment was created by store-add")
+               (when seg
+                 (is (= 2 (gdb::segment-live-count seg))
+                     "expected 2 vectors in the segment, got ~D"
+                     (gdb::segment-live-count seg)))))
+        (gdb:close-graph (v:graph-store-graph store) :snapshot-p nil)))))
+
+(test existing-store-reopens-after-declaration
+  "Backward compatibility is a hard requirement: a persisted store must open and
+read correctly under the new declaration.
+
+See STORE-ADD-POPULATES-THE-SEGMENT above for why the first phase uses
+GDB:MAKE-GRAPH + V:MAKE-GRAPH-STORE rather than V:OPEN-GRAPH-STORE; the second
+phase reopens via V:OPEN-GRAPH-STORE, the same reopen path exercised by
+TESTS-VIVACE/INTEGRATION.LISP's PERSISTENT-REOPEN-AND-HYDRATE."
+  (with-temp-directory (dir)
+    (let* ((graph (gdb:make-graph :cl-llm-vg-vecidx-reopen dir))
+           (store (v:make-graph-store graph :strategy :scan :dimension 8)))
+      (rag:store-add store (list (test-chunk "a" 8 1.0) (test-chunk "b" 8 2.0)))
+      (gdb:close-graph graph :snapshot-p nil))
+    (let ((store (v:open-graph-store (namestring dir) :name :cl-llm-vg-vecidx-reopen
+                                                        :strategy :scan :dimension 8)))
+      (unwind-protect
+           (is (= 2 (rag:store-count store))
+               "reopened store lost chunks: count ~D" (rag:store-count store))
+        (gdb:close-graph (v:graph-store-graph store) :snapshot-p nil)))))

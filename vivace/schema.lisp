@@ -37,7 +37,8 @@ per-graph-name registration a caller may be relying on."
                   (,(intern "DOCUMENT-ID" :graph-db))
                   (,(intern "METADATA" :graph-db))
                   (,(intern "EMBEDDING" :graph-db)
-                   :type (simple-array single-float (*))))
+                   :type (simple-array single-float (*))
+                   :vector-index t))
                  ,graph-name))))
     tsym))
 
