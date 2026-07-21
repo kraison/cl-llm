@@ -333,9 +333,59 @@ structure the database already maintains."))
     (map-chunk-vertices store (lambda (v) (declare (ignore v)) (incf n)))
     n))
 
+(defparameter *segment-migration-batch-size* 5000
+  "Chunks per progress report while migrating a pre-segment corpus.
+
+The number is inherited from *EMBEDDING-MIGRATION-BATCH-SIZE*'s measurement
+(gdb:copy duplicates the WHOLE vertex, ~40KB/chunk, so batching is what keeps a
+1M-chunk migration off a ~38GB unbatched transaction), but note what it means
+HERE: GDB:REBUILD-VECTOR-SEGMENT-BATCHED writes each vector straight to the mmap
+outside any transaction, so this bounds nothing in memory -- it is purely the
+cadence at which *SEGMENT-MIGRATION-PROGRESS-FN* is called.  Lower it to hear
+from a slow migration more often; it does not change what the migration costs.")
+
+(defparameter *segment-migration-progress-fn*
+  (lambda (done seen)
+    (format *error-output* "~&; segment migration: ~:D indexed (~:D chunk~:P seen)~%"
+            done seen)
+    (finish-output *error-output*))
+  "Called every *SEGMENT-MIGRATION-BATCH-SIZE* insertions during migration, and
+once more at the end for a partial remainder.  A migration of a real corpus
+takes minutes and a silent one looks hung.
+
+SEEN IS NOT A TOTAL.  The engine passes the number of conforming nodes
+encountered SO FAR IN THIS RUN; there is no cheap way to know the corpus size
+ahead of time and the engine does not compute one.  Reporting it as a
+denominator would show a progress bar that reads 100% throughout, so it is
+phrased as a running count.  Called ONLY for insertions, never for skips, which
+is what makes an already-migrated store's HYDRATE silent.")
+
 (defmethod hydrate ((store segment-graph-store))
-  "Record the store's dimension from a chunk vertex, if not supplied.
-Task 5 extends this to migrate a pre-segment corpus.
+  "Probe the dimension, then fill the vector segment with any chunk not already
+in it.
+
+MIGRATION IS BATCHED AND RESUMABLE, and its resumability comes from the segment
+itself rather than from any marker kept here.  GDB:REBUILD-VECTOR-SEGMENT-BATCHED
+is additive and skips ids the segment already holds, so an interrupted migration
+is completed by the next open and an already-migrated store pays only the skip
+scan.  There is deliberately NO progress file, checkpoint or \"migrated\" flag: a
+marker that can disagree with the segment -- because the work it claimed was
+rolled back, or because the process died between writing the marker and writing
+the segment -- is strictly worse than no marker.  The segment is the only source
+of truth, which is also why nothing here bothers to DETECT whether migration is
+needed: the unconditional call IS the detection, and it is idempotent.
+
+COST, stated plainly: a corpus large enough to matter pays a one-time
+multi-minute sweep on the first open after upgrading into the :VECTOR-INDEX
+declaration.  It is progress-logged (*SEGMENT-MIGRATION-PROGRESS-FN*) and
+resumable, but it is not free, and every later open still pays a full
+map-vertices skip scan.
+
+CONCURRENCY: the engine requires that two migrations of the same segment never
+run concurrently, so do not construct two :segment stores over one graph from
+two threads at once.  Readers are safe -- every segment operation takes the
+per-segment rw-lock, so a concurrent GDB:VECTOR-SEARCH sees a consistent, if
+incomplete, snapshot.
 
 Iterates FULLY rather than exiting early on the first hit: gdb:map-vertices may
 hold locks, so a non-local exit out of it is unsafe.  Same reasoning, and the
@@ -348,6 +398,21 @@ same shape, as HYDRATE on SCAN-GRAPH-STORE."
          (let ((e (%slot vertex "EMBEDDING")))
            (when (typep e '(simple-array single-float (*)))
              (setf (graph-store-dimension store) (length e))))))))
+  (multiple-value-bind (inserted skipped)
+      (gdb:rebuild-vector-segment-batched
+       (graph-store-graph store)
+       (chunk-type-symbol (graph-store-type store))
+       (intern "EMBEDDING" :graph-db)
+       :batch-size *segment-migration-batch-size*
+       :progress-fn *segment-migration-progress-fn*)
+    (declare (ignorable skipped))
+    ;; Say nothing when there was nothing to do: the common case is a store
+    ;; that is already migrated, and announcing a no-op migration on every
+    ;; open trains operators to ignore the line that matters.
+    (when (plusp inserted)
+      (format *error-output* "~&; segment migration complete: ~:D chunk~:P indexed~%"
+              inserted)
+      (finish-output *error-output*)))
   store)
 
 (defparameter *segment-overfetch-factor* 4
