@@ -70,32 +70,21 @@ with gdb:*graph* bound to GRAPH."
            :graph graph))
 
 (defun vertex->chunk (vertex)
-  "Reconstruct a rag:chunk from a chunk VERTEX, coercing the embedding back to
-(simple-array single-float (*)) and L2-normalising it via rag:as-embedding.
+  "Reconstruct a rag:chunk from a chunk VERTEX, reading the EMBEDDING slot as-is.
 
-HISTORICAL CONTEXT for keeping the RAG:AS-EMBEDDING call here: it was
-originally a live guard, not post-migration redundancy. MIGRATE-EMBEDDINGS
-(vivace/store.lisp) only runs once, at HYDRATE time; a chunk added
-afterwards via STORE-ADD with a caller-supplied non-conforming embedding was
-never migrated, and SCAN-GRAPH-STORE's STORE-SEARCH reads vertices straight
-from the graph on every call, so this coercion was what kept that live path
-correct in between hydrates.
+CONTRACT: the stored embedding is already a normalised
+(simple-array single-float (*)).  VALIDATE-CHUNKS (vivace/store.lisp) normalises
+every embedding in place BEFORE CHUNK->VERTEX ever sees it, so a non-conforming
+value cannot reach the slot via STORE-ADD, and MIGRATE-EMBEDDINGS fixes any
+pre-existing one at HYDRATE.  The read side therefore does NOT re-normalise.
 
-UPDATE (Task 7 follow-up): as of VALIDATE-CHUNKS (vivace/store.lisp)
-normalising every embedding via RAG:AS-EMBEDDING, in place, BEFORE
-CHUNK->VERTEX ever sees it, a non-conforming embedding can no longer reach a
-vertex via STORE-ADD at all -- write-side enforcement replaces what this
-read-side coercion used to guard against. That makes this call redundant
-going forward: it now only ever re-normalises an already-conforming value,
-at the accepted cost of one allocation, one sqrt, N divisions, and ~1 ULP of
-re-normalisation drift on every read (see
-CHUNK-VERTEX-ROUND-TRIPS-WITH-COERCED-EMBEDDING in tests-vivace/schema.lisp
-for the drift itself). Retiring it is a deliberate follow-up decision, left
-OUT of Task 7's scope: CHUNK-VERTEX-COERCES-GENERAL-VECTOR-EMBEDDING
-(tests-vivace/schema.lisp) exists specifically to exercise this coercion,
-and that test's fate should be decided together with removing the coercion,
-not as a side effect of this change."
+HISTORY (one line, as promised): this used to call RAG:AS-EMBEDDING as a live
+read-side guard; write-side enforcement in VALIDATE-CHUNKS replaced it, and the
+call was retired because it only ever re-normalised an already-conforming value,
+costing an allocation, a sqrt, N divisions and ~1 ULP of drift per chunk read.
+STORE-ADD-NORMALISES-NON-CONFORMING-EMBEDDING (tests-vivace/schema.lisp) is what
+now guards the property the coercion used to."
   (rag:make-chunk (%slot vertex "TEXT")
                   :document-id (%slot vertex "DOCUMENT-ID")
                   :metadata (%slot vertex "METADATA")
-                  :embedding (rag:as-embedding (%slot vertex "EMBEDDING"))))
+                  :embedding (%slot vertex "EMBEDDING")))

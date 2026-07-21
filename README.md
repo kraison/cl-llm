@@ -186,6 +186,35 @@ composed, never one replacing the other. `rag-ask` returns
 sources. For agentic use, `make-retrieval-tool` wraps an index as a
 `cl-llm:tool` the model can call to fetch its own cited context.
 
+### Graph-backed stores (`cl-llm/rag/vivace`)
+
+`cl-llm/rag/vivace` lets a persistent [vivace-graph](https://github.com/kraison/vivace-graph)
+(`graph-db`) graph *be* the vector store, so the retrieval corpus lives in the
+same graph as your other data: `(rag:make-index :store (v:make-graph-store graph))`.
+See `examples/rag-vivace.lisp`.
+
+`make-graph-store` / `open-graph-store` take a `:strategy`, all three identical
+through the store contract (same ranking; same scores too for the unit-norm
+query vectors `rag:embed` returns):
+
+| strategy | what it does | when |
+| --- | --- | --- |
+| `:segment` (**default**) | embeddings live in graph-db's mmap vector segment; search never materialises a node it will not return | the right default for a persistent graph — the corpus need not fit in the Lisp heap |
+| `:cache` | composes an in-RAM index | **faster** than `:segment` (~15 ms vs ~35 ms at 20k chunks, because the corpus is already in the heap) and the right choice when it fits there — *not* deprecated |
+| `:scan` | no index; scores every chunk vertex per query | fallback and correctness reference |
+
+**Breaking change:** the default was `:cache` and is now `:segment`. A caller
+that never passed `:strategy` now gets a segment-backed store, and the first
+open of a corpus written before the segment existed pays a one-time, resumable
+migration sweep (progress-logged). Pass `:strategy :cache` to keep the previous
+behaviour.
+
+On a query vector that is *not* unit-norm, `:segment` scores are `:cache` scores
+divided by the query norm — the engine computes a full cosine, `:cache` a bare
+dot product. Ordering is identical either way, and `rag:embed` always produces
+unit-norm queries, so this is only visible to a caller that hand-builds an
+unnormalised query and compares absolute scores across strategies.
+
 A separate live suite (`cl-llm/rag/live`) exercises a real embeddings
 endpoint (e.g. Ollama with `nomic-embed-text`) and skips cleanly with
 `CL_LLM_LIVE` unset — the same gating convention as `cl-llm/live`.

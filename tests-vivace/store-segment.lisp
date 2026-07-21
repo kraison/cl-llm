@@ -136,6 +136,70 @@ V::*SEGMENT-OVERFETCH-FACTOR* to 1 and this test fails."
           (progn (gdb:close-graph graph-a :snapshot-p nil)
                  (gdb:close-graph graph-b :snapshot-p nil)))))))
 
+(test segment-and-cache-scores-differ-by-the-query-norm
+  "PINS THE DOCUMENTED DIFFERENCE (Task 7 decision).  On a query that is NOT
+unit-norm, :segment and :cache return the SAME ORDER but different SCORES, and
+the difference is exactly the factor 1/|q|: the engine computes a full cosine
+(dividing by the query's own norm), while RAG:COSINE -- what :cache and :scan use
+-- is a bare dot product.
+
+The decision was to LEAVE this and document it rather than force score equality.
+Normalising the query inside SEGMENT-GRAPH-STORE's STORE-SEARCH would change
+nothing (the engine divides by the query norm either way); matching :cache's
+number would require multiplying the engine's cosine back UP by |q|, i.e.
+reintroducing :cache's non-cosine scaling into the strategy that gets it right.
+This test exists so that the relationship is a checked property rather than a
+claim in a docstring, and so that any future change to either scoring path is
+caught here.
+
+Contrast with SEGMENT-SEARCH-AGREES-WITH-CACHE-RANKING above, which asserts
+score EQUALITY -- for unit-norm queries, the only kind cl-llm's own pipeline
+produces."
+  (with-temp-directory (dir-a)
+    (with-temp-directory (dir-b)
+      (let* ((chunks (agreement-corpus 9))
+             (k 5)
+             (graph-a (gdb:make-graph :cl-llm-vg-seg-qnorm-a dir-a :buffer-pool-size 1000))
+             (graph-b (gdb:make-graph :cl-llm-vg-seg-qnorm-b dir-b :buffer-pool-size 1000))
+             (seg (v:make-graph-store graph-a :strategy :segment :dimension 8))
+             (cache (v:make-graph-store graph-b :strategy :cache :dimension 8))
+             ;; Deliberately NOT unit-norm: |q| = 3 * sqrt(8) ~= 8.485.
+             (q (make-array 8 :element-type 'single-float :initial-element 3.0))
+             (qnorm (rag:embedding-norm q)))
+        (unwind-protect
+             (progn
+               (is (> (abs (- 1.0 qnorm)) 0.5)
+                   "query must be far from unit-norm for this test to mean anything: |q| = ~S"
+                   qnorm)
+               (rag:store-add seg chunks)
+               (rag:store-add cache chunks)
+               (let ((a (rag:store-search seg q k))
+                     (b (rag:store-search cache q k)))
+                 (is (= k (length a)) "segment returned ~D hits, expected ~D" (length a) k)
+                 (is (= k (length b)) "cache returned ~D hits, expected ~D" (length b) k)
+                 (when (and (= k (length a)) (= k (length b)))
+                   ;; (1) Same order.
+                   (is (equal (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h))) a)
+                              (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h))) b))
+                       "ranking diverged on an unnormalised query: ~S vs ~S"
+                       (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h))) a)
+                       (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h))) b))
+                   ;; (2) The scores are genuinely NOT equal -- otherwise (3)
+                   ;; would be satisfiable by two identical scoring paths and
+                   ;; would prove nothing about the factor.
+                   (is (> (abs (- (rag:hit-score (first a)) (rag:hit-score (first b)))) 1e-3)
+                       "scores did not differ at all: segment ~S vs cache ~S"
+                       (rag:hit-score (first a)) (rag:hit-score (first b)))
+                   ;; (3) ...and they differ by exactly 1/|q|.
+                   (loop for x in a for y in b
+                         do (is (< (abs (- (* qnorm (rag:hit-score x)) (rag:hit-score y)))
+                                   1e-4)
+                                "score ratio is not 1/|q| for ~S: segment ~S * ~S /= cache ~S"
+                                (rag:chunk-document-id (rag:hit-chunk x))
+                                (rag:hit-score x) qnorm (rag:hit-score y))))))
+          (progn (gdb:close-graph graph-a :snapshot-p nil)
+                 (gdb:close-graph graph-b :snapshot-p nil)))))))
+
 (test segment-search-dimension-mismatch-errors
   "Parity with scan-graph-store: a wrong-dimension query signals rather than
 silently scoring against a prefix."
@@ -395,6 +459,89 @@ pass on a broken probe that leaves the slot NIL-checked-truthy by accident."
              (is (eql 8 (v:graph-store-dimension store))
                  "expected hydrate to record dimension 8, got ~S"
                  (v:graph-store-dimension store)))
+        (gdb:close-graph graph :snapshot-p nil)))))
+
+;;; ---------------------------------------------------------------------------
+;;; Legacy (non-conforming-embedding) corpus, fully searchable under the new
+;;; :segment default (shipping-blocker fix on top of Task 7).
+
+(defun %insert-legacy-double-float-chunks (g n dim)
+  "Insert N chunk vertices directly into G, each with a boxed T-vector of
+DOUBLE-FLOAT as its EMBEDDING slot -- exactly the shape a pre-existing corpus
+(recorded: 19,973 chunks of 1024-dimension double-float embeddings) has on
+disk. Bypasses RAG:STORE-ADD / VALIDATE-CHUNKS entirely (which now normalises
+every embedding on write) so the resulting vertices are genuinely
+non-conforming, the way a corpus written before this project existed would
+be -- see %INSERT-LEGACY-VERTICES in tests-vivace/store-scan.lisp for the
+same idiom used against :scan.
+
+Each chunk gets a distinct DOCUMENT-ID (\"leg-0\" .. \"leg-(N-1)\") and a
+one-hot embedding (component (I MOD DIM) set to (1+ I), the rest 0.0d0), so
+every chunk is individually identifiable by document-id even though several
+may land on the same one-hot position when N > DIM -- irrelevant here since
+the test asserts on the SET of document-ids returned, not on ranking order."
+  (v::ensure-chunk-schema g 'rag-chunk)
+  (let ((gdb:*graph* g))
+    (gdb:with-transaction ()
+      (dotimes (i n)
+        (let ((e (make-array dim :initial-element 0.0d0)))
+          (setf (aref e (mod i dim)) (coerce (1+ i) 'double-float))
+          (funcall (v::chunk-constructor 'rag-chunk)
+                   :text (format nil "legacy chunk ~D" i)
+                   :document-id (format nil "leg-~D" i)
+                   :metadata nil
+                   :embedding e
+                   :graph g))))))
+
+(test segment-store-legacy-corpus-fully-searchable
+  "SHIPPING-BLOCKING FIX (found reviewing Task 7).  A pre-existing corpus of
+non-conforming (here: boxed DOUBLE-FLOAT) embeddings must become FULLY
+searchable under the new :segment default -- not merely open without error.
+
+Without HYDRATE on SEGMENT-GRAPH-STORE calling MIGRATE-EMBEDDINGS first,
+GDB:REBUILD-VECTOR-SEGMENT-BATCHED filters every candidate through the
+engine's %NODE-SEGMENT-VALUE, which returns NIL -- silently, no error or
+warning -- for anything that is not already (simple-array single-float (*)).
+A legacy chunk would therefore be skipped by the segment sweep, never
+indexed, and absent from every STORE-SEARCH result forever. Since :segment is
+now what a bare (v:make-graph-store graph) / (v:open-graph-store path) gets
+you, this is the naive upgrade path a real user hits, not an edge case.
+
+The assertion is on RESULTS, not merely on open succeeding or STORE-COUNT:
+the bug is silent omission from search results specifically, and STORE-COUNT
+(a vertex scan, unaffected by the segment) would report the right number of
+chunks even with a completely empty segment -- it would not catch this at
+all. Guarded against a vacuous pass: the expected count (N) is asserted
+before the contents, and the query is built so every one of the N legacy
+chunks scores IDENTICALLY against it once migrated to unit-norm (each is a
+one-hot vector; the query is uniform, so cosine is 1/sqrt(dim) for all of
+them) -- there is no ranking order for a subset of them to hide behind; a
+k=n search returns all n or it demonstrably dropped some."
+  (with-temp-directory (dir)
+    (let* ((dim 8)
+           (n 15)
+           (expected-ids (sort (loop for i from 0 below n collect (format nil "leg-~D" i))
+                               #'string<))
+           (graph (gdb:make-graph :cl-llm-vg-seg-legacy dir :buffer-pool-size 1000)))
+      (unwind-protect
+           (progn
+             (%insert-legacy-double-float-chunks graph n dim)
+             ;; Open as :segment -- the new default -- and let HYDRATE run the
+             ;; migration + segment sweep.
+             (let* ((store (v:make-graph-store graph :strategy :segment :dimension dim))
+                    (q (make-array dim :element-type 'single-float :initial-element 1.0))
+                    (hits (rag:store-search store q n)))
+               (is (= n (length hits))
+                   "expected all ~D legacy chunks in search results, got ~D -- some ~
+were silently dropped by the segment migration" n (length hits))
+               (when (= n (length hits))
+                 (let ((got-ids (sort (mapcar (lambda (h)
+                                                (rag:chunk-document-id (rag:hit-chunk h)))
+                                              hits)
+                                      #'string<)))
+                   (is (equal expected-ids got-ids)
+                       "search results do not cover the full legacy corpus: expected ~S, got ~S"
+                       expected-ids got-ids)))))
         (gdb:close-graph graph :snapshot-p nil)))))
 
 ;;; ---------------------------------------------------------------------------

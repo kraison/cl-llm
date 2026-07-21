@@ -262,11 +262,31 @@ mark-deleted them in one transaction (mark-deleted joins the active tx)."
   (declare (ignore path))
   store)
 
-(defun make-graph-store (graph &key (type 'rag-chunk) (strategy :cache) dimension)
+(defun make-graph-store (graph &key (type 'rag-chunk) (strategy :segment) dimension)
   "Make a graph-backed vector store over the already-open, caller-owned GRAPH.
-STRATEGY is :cache (default), :scan, or :segment. Self-declares the chunk
-vertex type and hydrates from any chunks already in the graph. Never opens or
-closes GRAPH."
+Self-declares the chunk vertex type and hydrates from any chunks already in the
+graph. Never opens or closes GRAPH.
+
+STRATEGY is :segment (default), :cache or :scan.
+  :segment  embeddings live in graph-db's mmap vector segment; search never
+            materialises a node it will not return, and the corpus need not fit
+            in the Lisp heap.  The right default for a persistent graph.
+  :cache    an in-RAM index; FASTER than :segment (~15ms vs ~35ms at 20k, because
+            the corpus is already in the heap) and the right choice when it fits
+            there.  NOT deprecated.
+  :scan     no index; scores every chunk vertex per query.  Fallback and
+            correctness reference.
+
+All three return the same ranking through the STORE-SEARCH contract.  Scores are
+identical too for the unit-norm query vectors RAG:EMBED produces; on a NON-unit
+query :segment's score is :cache's divided by the query norm (the engine computes
+a full cosine, :cache a bare dot) -- ordering is unaffected.  See
+RAG:STORE-SEARCH on SEGMENT-GRAPH-STORE.
+
+The default changed from :cache to :segment: a caller that never passed
+:STRATEGY now gets a segment-backed store, which on an existing corpus pays a
+one-time migration sweep at open (see HYDRATE on SEGMENT-GRAPH-STORE).  Pass
+:STRATEGY :CACHE explicitly to keep the old behaviour."
   (ensure-chunk-schema graph type)
   (let ((store (ecase strategy
                  (:scan (make-instance 'scan-graph-store
@@ -389,7 +409,23 @@ incomplete, snapshot.
 
 Iterates FULLY rather than exiting early on the first hit: gdb:map-vertices may
 hold locks, so a non-local exit out of it is unsafe.  Same reasoning, and the
-same shape, as HYDRATE on SCAN-GRAPH-STORE."
+same shape, as HYDRATE on SCAN-GRAPH-STORE.
+
+MIGRATE-EMBEDDINGS RUNS FIRST, same as HYDRATE on SCAN-GRAPH-STORE and
+CACHED-GRAPH-STORE, and for the same reason: GDB:REBUILD-VECTOR-SEGMENT-BATCHED
+filters candidates through the engine's %NODE-SEGMENT-VALUE, which returns NIL
+-- silently, no error or warning -- for any embedding that is not already a
+conforming (simple-array single-float (*)).  A legacy chunk (e.g. a
+double-float vector from before this store existed) would therefore be skipped
+by the segment sweep rather than migrated into it, and would stay absent from
+every subsequent GDB:VECTOR-SEARCH -- and therefore from every STORE-SEARCH
+result -- forever, with no indication anything was dropped.  Calling
+MIGRATE-EMBEDDINGS here, exactly as the other two strategies do, makes every
+embedding conforming before the segment sweep runs, so :SEGMENT is not a
+silent-data-loss upgrade path for a pre-segment corpus.  Respects
+*EMBEDDING-MIGRATION-POLICY* like the other two strategies: :MIGRATE rewrites,
+:ERROR refuses to open."
+  (migrate-embeddings store)
   (unless (graph-store-dimension store)
     (map-chunk-vertices
      store
@@ -448,7 +484,27 @@ Two properties this method must keep:
      document-id, so the engine's own top-k is re-ranked here through
      RAG::TOP-K-COLLECTOR -- the same collector the scan and memory stores use,
      not a second ranking path -- over an over-fetched candidate set (see
-     *SEGMENT-OVERFETCH-FACTOR*)."
+     *SEGMENT-OVERFETCH-FACTOR*).
+
+SCORE SCALE, on a NON-UNIT-NORM QUERY-VECTOR.  The score returned here is a FULL
+cosine: GDB:SEGMENT-SCAN divides by the query's own norm.  :cache and :scan score
+with RAG:COSINE, which is a BARE DOT product (valid as a cosine only because
+stored embeddings are unit-norm, and only for a unit-norm query).  So for a query
+of norm |q| /= 1 this method returns :cache's score divided by |q|.  ORDER is
+unaffected -- 1/|q| is a positive constant across candidates -- so the strategies
+are order-identical always, and score-identical exactly when the query is
+unit-norm, which is what RAG:EMBED / RAG:AS-EMBEDDING always produce and what
+every path in this system passes.
+
+This difference is DELIBERATELY LEFT IN PLACE rather than papered over.
+Normalising QUERY-VECTOR here would change nothing: the engine divides by the
+query norm regardless, so a pre-normalised query yields the identical score.  The
+only way to reproduce :cache's number would be to MULTIPLY the engine's cosine
+back up by |q| -- i.e. to reintroduce :cache's non-cosine scaling into the one
+strategy that computes a true cosine, so that an out-of-range \"similarity\" > 1
+could be reported for an unnormalised query.  Matching a less correct number is
+not worth it; the difference is documented instead, and pinned by
+SEGMENT-AND-CACHE-SCORES-DIFFER-BY-THE-QUERY-NORM in tests-vivace/."
   (when (and (graph-store-dimension store)
              (/= (length query-vector) (graph-store-dimension store)))
     (error 'rag:llm-rag-error
@@ -479,11 +535,25 @@ Two properties this method must keep:
   "A stable keyword graph name derived from PATH's last directory component."
   (intern (string-upcase (car (last (pathname-directory (pathname path))))) :keyword))
 
-(defun open-graph-store (path &key (strategy :cache) (type 'rag-chunk) dimension
+(defun open-graph-store (path &key (strategy :segment) (type 'rag-chunk) dimension
                                    (name (path->graph-name path)))
   "Open a standalone persistent graph at PATH and return a store over it. For the
 RAG-only case with no field-data graph to share. The caller owns closing the graph
-(via graph-store-graph)."
+(via graph-store-graph).
+
+STRATEGY is :segment (default), :cache or :scan -- see MAKE-GRAPH-STORE, which
+this delegates to, for what each one is and when it is right.  In short:
+:segment keeps embeddings in graph-db's mmap vector segment (search never
+materialises a node it will not return, and the corpus need not fit in the Lisp
+heap) and is the right default for a persistent graph; :cache is an in-RAM index
+that is FASTER when the corpus fits in the heap and is NOT deprecated; :scan has
+no index and rescans every chunk vertex per query (fallback and correctness
+reference).
+
+The default changed from :cache to :segment.  Reopening an existing store
+without :STRATEGY therefore performs a one-time, resumable segment migration on
+the first such open (HYDRATE on SEGMENT-GRAPH-STORE); pass :STRATEGY :CACHE to
+keep the old behaviour."
   ;; Declare the chunk vertex class BEFORE gdb:open-graph: open-graph instantiates the persisted
   ;; chunks, which requires the class to exist.  make-graph-store's ensure-chunk-schema would
   ;; declare it -- but AFTER open, which is too late on a FRESH image (a restart), where the class

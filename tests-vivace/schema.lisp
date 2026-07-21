@@ -34,7 +34,7 @@ in tests-vivace/ (see tests-vivace/integration.lisp)."
                   :embedding (make-array dim :element-type 'single-float
                                              :initial-element (coerce value 'single-float))))
 
-(test chunk-vertex-round-trips-with-coerced-embedding
+(test chunk-vertex-round-trips-embedding-exactly
   (with-temp-graph (g)
     (v::ensure-chunk-schema g 'rag-chunk)
     (let ((emb (rag:as-embedding '(0.1d0 0.2d0 0.3d0))))
@@ -53,29 +53,28 @@ in tests-vivace/ (see tests-vivace/integration.lisp)."
         (is (string= "hello" (rag:chunk-text chunk)))
         (is (string= "doc1" (rag:chunk-document-id chunk)))
         (is (equal '(:title "T" :position 0) (rag:chunk-metadata chunk)))
-        ;; EMB is already unit-norm (RAG:AS-EMBEDDING was applied to build it above),
-        ;; and VERTEX->CHUNK re-normalises via RAG:AS-EMBEDDING on every read (kept
-        ;; deliberately live -- see the comment on VERTEX->CHUNK in
-        ;; vivace/schema.lisp). Re-normalising an already-unit vector is NOT
-        ;; bit-exact idempotent: the norm computed the second time is a float close
-        ;; to but not exactly 1.0, so dividing by it perturbs the last ~1 ULP of
-        ;; each component. EQUALP is therefore the wrong check post-Task-4;
-        ;; compare elementwise within a tolerance that comfortably covers a few ULP
-        ;; of single-float drift.
-        (is (every (lambda (a b) (< (abs (- a b)) 1e-6)) emb (rag:chunk-embedding chunk))
-            "round-tripped embedding drifted beyond tolerance: ~S vs ~S"
+        ;; KEPT AND TIGHTENED (Task 7).  This test previously asserted only a
+        ;; 1e-6 tolerance, because VERTEX->CHUNK re-normalised via
+        ;; RAG:AS-EMBEDDING on every read and re-normalising an already-unit
+        ;; vector is not bit-exact idempotent (the norm computed the second time
+        ;; is close to but not exactly 1.0, so the divide perturbs the last ~1
+        ;; ULP of each component).  That coercion is gone -- VERTEX->CHUNK reads
+        ;; the slot directly -- so the drift it documented no longer exists and
+        ;; the assertion becomes BIT-EXACT equality.  That is strictly stronger,
+        ;; and it is what pins the removal: put the RAG:AS-EMBEDDING call back
+        ;; and this fails on the ULP drift.  Hence updated rather than deleted.
+        (is (plusp (length (rag:chunk-embedding chunk)))
+            "round-tripped embedding is empty: ~S" (rag:chunk-embedding chunk))
+        (is (equalp emb (rag:chunk-embedding chunk))
+            "round-tripped embedding is not bit-identical: ~S vs ~S"
             emb (rag:chunk-embedding chunk))
-        ;; NOTE: this checks the specialised type, but is NOT load-bearing for
-        ;; the RAG:AS-EMBEDDING coercion in VERTEX->CHUNK: EMB above is
-        ;; already a (SIMPLE-ARRAY SINGLE-FLOAT (*)) (RAG:AS-EMBEDDING has
-        ;; produced single-float since Task 4), and this in-memory graph
-        ;; hands back the identical Lisp object with no serialise/deserialise
-        ;; step, so the TYPE coercion is a no-op here (only the VALUE changes,
-        ;; per the drift above). See
-        ;; VERTEX-TO-CHUNK-COERCES-GENERAL-VECTOR-EMBEDDING below for the test
-        ;; that actually exercises the coercion (a non-specialised input
-        ;; vector). This assertion still guards the value/provenance
-        ;; round-trip -- kept for that reason. NOTE: uses TYPEP rather than
+        ;; NOTE: this checks the specialised type, which under the current
+        ;; contract is the WRITE side's doing (VALIDATE-CHUNKS), not the read
+        ;; side's -- see STORE-ADD-NORMALISES-NON-CONFORMING-EMBEDDING below for
+        ;; the test that exercises non-conforming input end to end. Here EMB is
+        ;; already a (SIMPLE-ARRAY SINGLE-FLOAT (*)) and the in-memory graph
+        ;; hands back the identical Lisp object, so this guards the
+        ;; value/provenance round-trip. NOTE: uses TYPEP rather than
         ;; (EQUAL '(SIMPLE-ARRAY SINGLE-FLOAT (*)) (TYPE-OF ...)) because
         ;; SBCL's TYPE-OF always reports a concrete array dimension (e.g.
         ;; (SIMPLE-ARRAY SINGLE-FLOAT (3))), never the wildcard (*) -- so an
@@ -85,57 +84,82 @@ in tests-vivace/ (see tests-vivace/integration.lisp)."
         ;; tests-rag/embed.lisp.
         (is (typep (rag:chunk-embedding chunk) '(simple-array single-float (*))))))))
 
-(test vertex-to-chunk-coerces-general-vector-embedding
-  ;; The round-trip test above stores an already-specialised
-  ;; (SIMPLE-ARRAY SINGLE-FLOAT (*)) embedding, and the in-memory graph hands
-  ;; that same Lisp object straight back out (no serialise/deserialise, no
-  ;; close/reopen) -- so it never actually exercises VERTEX->CHUNK's
-  ;; RAG:AS-EMBEDDING coercion. This test closes that gap without a
-  ;; close/reopen cycle: it feeds CHUNK->VERTEX a general (element-type T)
-  ;; simple vector -- NOT a (SIMPLE-ARRAY SINGLE-FLOAT (*)) -- and confirms
-  ;; graph-db's in-memory vertex slot stores and returns it faithfully
-  ;; (unspecialised), so VERTEX->CHUNK's call to RAG:AS-EMBEDDING is what
-  ;; specialises it back to (SIMPLE-ARRAY SINGLE-FLOAT (*)). Remove the
-  ;; RAG:AS-EMBEDDING call from VERTEX->CHUNK and this test fails.
-  (with-temp-graph (g)
-    (v::ensure-chunk-schema g 'rag-chunk)
-    (let ((emb (make-array 3 :initial-contents '(0.1d0 0.2d0 0.3d0))))
-      ;; Sanity-check the fixture itself: this must be a general T-vector,
-      ;; not already the specialised type, or the test below proves nothing.
-      (is (not (typep emb '(simple-array single-float (*)))))
-      (let ((gdb:*graph* g))
-        (gdb:with-transaction ()
-          (v::chunk->vertex g 'rag-chunk
-                            (rag:make-chunk "world"
-                                            :document-id "doc2"
-                                            :metadata '(:title "T2" :position 1)
-                                            :embedding emb))))
-      (let* ((verts (gdb:map-vertices (lambda (x) x) g
-                                      :vertex-type (v::chunk-type-symbol 'rag-chunk)
-                                      :collect-p t))
-             (chunk (v::vertex->chunk (first verts)))
-             (out (rag:chunk-embedding chunk)))
-        (is (= 1 (length verts)))
-        ;; EMB is raw and non-unit-norm; VERTEX->CHUNK L2-normalises it via
-        ;; RAG:AS-EMBEDDING (Task 4), so OUT can never be bit-equal to EMB --
-        ;; asserting EQUALP would be asserting a falsehood by design. What must
-        ;; actually hold is the pair of properties normalisation is supposed to
-        ;; guarantee, checked INDEPENDENTLY of the function under test (recomputing
-        ;; the expectation with RAG:AS-EMBEDDING itself would trivially pass even if
-        ;; normalisation were broken, since it would just compare a function to
-        ;; itself):
-        ;;   (a) OUT is unit-norm (within tolerance), and
-        ;;   (b) OUT points in the SAME direction as EMB, i.e. every component's
-        ;;       ratio to EMB's corresponding component is the same constant
-        ;;       (within tolerance) -- OUT = k * EMB for some k > 0.
-        ;; This is a STRONGER check than the original bit-equality assertion.
-        (is (< (abs (- 1.0 (rag:embedding-norm out))) 1e-5)
-            "coerced embedding is not unit-norm: ~S" out)
-        (let* ((ratios (map 'list (lambda (o i) (/ o (coerce i 'single-float))) out emb))
-               (k (first ratios)))
-          (is (every (lambda (r) (< (abs (- r k)) 1e-5)) ratios)
-              "coerced embedding is not proportional to the input: ratios ~S" ratios))
-        (is (typep out '(simple-array single-float (*))))))))
+(test store-add-normalises-non-conforming-embedding
+  "WRITE-SIDE ENFORCEMENT, end to end: a chunk whose embedding is neither a
+(SIMPLE-ARRAY SINGLE-FLOAT (*)) nor unit-norm, added through the ordinary
+RAG:STORE-ADD path, must land in the vertex's EMBEDDING slot already coerced and
+normalised.
+
+This test replaces VERTEX-TO-CHUNK-COERCES-GENERAL-VECTOR-EMBEDDING, which
+exercised the RAG:AS-EMBEDDING call VERTEX->CHUNK used to make on every read.
+That call is gone (Task 7); VALIDATE-CHUNKS (vivace/store.lisp) now normalises in
+place BEFORE CHUNK->VERTEX ever sees the value, so the property that used to be
+restored on the way OUT is enforced on the way IN.  This is the only coverage of
+non-conforming input in the suite, which is why it was repurposed rather than
+deleted.
+
+It asserts against the RAW VERTEX SLOT (V::%SLOT), not against VERTEX->CHUNK's
+output: VERTEX->CHUNK is now a plain slot read, so going through it would prove
+nothing extra, while the slot is the thing STORE-SEARCH scores under a
+(SIMPLE-ARRAY SINGLE-FLOAT (*)) declaration.
+
+Makes VALIDATE-CHUNKS skip normalisation and this test fails on the type
+assertion (verified as Task 7's sabotage proof).
+
+Uses the DEFAULT strategy deliberately -- no :STRATEGY argument -- so it also
+covers the write path under the new :segment default."
+  (with-temp-directory (dir)
+    (let* ((graph (gdb:make-graph :cl-llm-vg-writeside dir :buffer-pool-size 1000))
+           (store (v:make-graph-store graph))
+           ;; A general (element-type T) vector of DOUBLE-FLOATs, non-unit-norm:
+           ;; non-conforming on both counts.  RAW keeps the original values for
+           ;; the direction check, since STORE-ADD normalises the chunk IN PLACE.
+           (emb (make-array 3 :initial-contents '(0.1d0 0.2d0 0.3d0)))
+           (raw (copy-seq emb)))
+      (unwind-protect
+           (progn
+             ;; Sanity-check the fixture: if it were already conforming the test
+             ;; below would prove nothing.
+             (is (not (typep emb '(simple-array single-float (*))))
+                 "fixture is already conforming: ~S" (type-of emb))
+             (is (> (abs (- 1.0 (sqrt (reduce #'+ (map 'list (lambda (x) (* x x)) emb)))))
+                    0.1)
+                 "fixture is already ~~unit-norm, so normalisation would be invisible: ~S"
+                 emb)
+             (rag:store-add store (list (rag:make-chunk "world"
+                                                        :document-id "doc2"
+                                                        :metadata '(:title "T2")
+                                                        :embedding emb)))
+             (let ((verts (gdb:map-vertices (lambda (x) x) graph
+                                            :vertex-type (v::chunk-type-symbol 'rag-chunk)
+                                            :collect-p t)))
+               (is (= 1 (length verts)) "expected exactly 1 chunk vertex, got ~D"
+                   (length verts))
+               (when (= 1 (length verts))
+                 (let ((out (v::%slot (first verts) "EMBEDDING")))
+                   (is (not (null out)) "EMBEDDING slot is NIL")
+                   (is (typep out '(simple-array single-float (*)))
+                       "stored embedding was not coerced: type ~S" (type-of out))
+                   (when (typep out '(simple-array single-float (*)))
+                     (is (= 3 (length out)) "stored embedding has length ~D" (length out))
+                     ;; The two properties normalisation must give, checked
+                     ;; INDEPENDENTLY of RAG:AS-EMBEDDING (recomputing the
+                     ;; expectation with the function under test would pass even
+                     ;; if it were broken):
+                     ;;   (a) unit-norm, and
+                     ;;   (b) same direction as the input -- every component's
+                     ;;       ratio to the raw input is the same constant.
+                     (is (< (abs (- 1.0 (rag:embedding-norm out))) 1e-5)
+                         "stored embedding is not unit-norm: ~S" out)
+                     (let* ((ratios (map 'list
+                                         (lambda (o i) (/ o (coerce i 'single-float)))
+                                         out raw))
+                            (k (first ratios)))
+                       (is (and (plusp k)
+                                (every (lambda (r) (< (abs (- r k)) 1e-5)) ratios))
+                           "stored embedding is not a positive multiple of the input: ~S"
+                           ratios)))))))
+        (gdb:close-graph graph :snapshot-p nil)))))
 
 (test ensure-chunk-schema-is-idempotent
   (with-temp-graph (g)

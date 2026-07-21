@@ -5,10 +5,24 @@
 ;;;; the RAG vector-store protocol, so `(make-index :store (make-graph-store g))`
 ;;;; is a drop-in -- nothing else in the pipeline changes.
 ;;;;
-;;;; It offers two search strategies, identical through the contract:
-;;;;   :cache -- composes an in-RAM index (memory-store) for fast search
-;;;;   :scan  -- scans the chunk vertices in the graph (lowest RAM)
+;;;; It offers three search strategies, identical through the contract (same
+;;;; ranking; same scores too for the unit-norm query vectors rag:embed returns):
+;;;;   :segment -- DEFAULT. Embeddings live in graph-db's mmap vector segment;
+;;;;               search never materialises a node it will not return, and the
+;;;;               corpus need not fit in the Lisp heap. The right default for a
+;;;;               persistent graph. First open of a pre-segment corpus pays a
+;;;;               one-time, resumable migration sweep.
+;;;;   :cache   -- composes an in-RAM index (memory-store). FASTER than :segment
+;;;;               (~15ms vs ~35ms at 20k chunks, because the corpus is already
+;;;;               in the heap) and the right choice when it fits there. NOT
+;;;;               deprecated.
+;;;;   :scan    -- no index; scores every chunk vertex per query (lowest RAM).
+;;;;               Fallback and correctness reference.
 ;;;; and the graph is durable, so you index once and reopen without re-embedding.
+;;;;
+;;;; NOTE: the default changed from :cache to :segment. This example passes
+;;;; :strategy explicitly throughout, so it is unaffected; a caller that relied
+;;;; on the old default should pass :strategy :cache.
 ;;;;
 ;;;; This example runs with NO Ollama and NO API key: it uses a deterministic
 ;;;; MOCK-EMBEDDER + MOCK-PROVIDER, over a REAL on-disk graph-db graph. To use real
