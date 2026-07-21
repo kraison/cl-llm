@@ -350,6 +350,66 @@ same shape, as HYDRATE on SCAN-GRAPH-STORE."
              (setf (graph-store-dimension store) (length e))))))))
   store)
 
+(defparameter *segment-overfetch-factor* 4
+  "How many times k to request from GDB:VECTOR-SEARCH before re-ranking.
+
+Why over-fetch at all: the engine ranks score DESC then NODE-ID ASC, while
+cl-llm ranks score DESC then DOCUMENT-ID ASC.  Asking for exactly k cannot be
+repaired by re-ranking, because the engine may already have truncated a TIED
+group at the k boundary using the wrong key -- the chunk cl-llm would have
+ranked k-th may never be returned at all.  Over-fetching makes the whole tied
+neighbourhood available to the re-rank.
+
+4 is a judgement, not a measurement: it covers tied groups far larger than real
+float embeddings produce, while keeping the extra work to a handful of node
+loads.  It is exact only if no tied group straddling the k boundary is larger
+than (* k (1- *segment-overfetch-factor*)); a pathological corpus of identical
+embeddings could still diverge from :cache, which is why the agreement test
+uses a corpus with deliberate ties.")
+
+(defmethod rag:store-search ((store segment-graph-store) query-vector k)
+  "Rank via the mmap vector segment, then re-rank the survivors with cl-llm's
+own collector so the result is identical to :cache -- ties included.
+
+Two properties this method must keep:
+
+ (1) It never materialises a node it is not going to consider.  GDB:VECTOR-SEARCH
+     touches only the segment's id array and its contiguous vector block and
+     returns (score . node-id) conses; only those ids are turned into vertices
+     and then chunks.  Node loading measured ~92% of the old STORE-SEARCH cost,
+     which is the entire premise of this strategy.
+
+ (2) It ranks exactly as :cache does.  The engine's tiebreak is node-id, ours is
+     document-id, so the engine's own top-k is re-ranked here through
+     RAG::TOP-K-COLLECTOR -- the same collector the scan and memory stores use,
+     not a second ranking path -- over an over-fetched candidate set (see
+     *SEGMENT-OVERFETCH-FACTOR*)."
+  (when (and (graph-store-dimension store)
+             (/= (length query-vector) (graph-store-dimension store)))
+    (error 'rag:llm-rag-error
+           :message (format nil "query dimension ~a does not match store dimension ~a"
+                            (length query-vector) (graph-store-dimension store))))
+  (let* ((graph (graph-store-graph store))
+         (type (chunk-type-symbol (graph-store-type store)))
+         (hits (gdb:vector-search graph type (intern "EMBEDDING" :graph-db)
+                                  query-vector
+                                  (* k *segment-overfetch-factor*)))
+         (collector (rag::top-k-collector k)))
+    (let ((gdb:*graph* graph))
+      (dolist (pair hits)
+        (let ((vertex (gdb:lookup-vertex (cdr pair) :graph graph)))
+          (when vertex
+            (let ((chunk (vertex->chunk vertex)))
+              (rag::collect-candidate collector
+                                      (car pair)
+                                      (or (rag:chunk-document-id chunk) "")
+                                      chunk))))))
+    ;; Same return shape as every other strategy: a list of RAG:HIT, built
+    ;; (make-hit chunk score) -- chunk first.  Returning collector-results
+    ;; directly would hand callers (score . chunk) conses and break all of them.
+    (mapcar (lambda (pair) (rag:make-hit (cdr pair) (car pair)))
+            (rag::collector-results collector))))
+
 (defun path->graph-name (path)
   "A stable keyword graph name derived from PATH's last directory component."
   (intern (string-upcase (car (last (pathname-directory (pathname path))))) :keyword))
