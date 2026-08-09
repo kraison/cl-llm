@@ -345,6 +345,7 @@ Each of these was earned by a specific failure.
   question 4).
 - **The tuple-NULL rule** for composite indexes (§7) — to be decided in M, not
   inherited.
+- **ANN / HNSW** — considered 2026-08-09 and **not on the path**. See §12.2.
 
 ### 12.1 vivace-graph #45 phase accounting
 
@@ -411,6 +412,64 @@ the substrate real. **Phase 3 is unlocked by this programme, not required by it*
 until there is a real inference workload at real claim volume to size tabling and
 magic-sets against. Building SLG against estimates is the measurement failure mode this
 project has already hit twice (§11).
+
+### 12.2 Approximate nearest neighbour (ANN / HNSW) — considered, not on the path
+
+Raised 2026-08-09. Recorded because "we considered ANN and here is why it is not on the
+path" is exactly the kind of conclusion that gets re-litigated in six months.
+
+**Current state.** Every vector-search strategy is a brute-force exact scan —
+`segment.lisp:927`: *"segment-scan is a bounded top-k full-cosine sweep."* Measured at
+roughly **1.85 ms per 1000 chunks at dimension 1024** while the vector block is
+resident, so ~43 ms at the current ~23k-chunk corpus. The segment-store work estimates
+~1.9 s/query at 1M chunks, CPU-bound. ⚠ **That 1.9 s figure was derived from a laptop
+CPU-bound regime and has never been measured on the deployment host**, so per §11 it
+must not drive a decision until someone runs it there.
+
+**Why this design reduces the need rather than increasing it.** S5's mechanic bounds the
+search spatially and temporally *before* dense retrieval, so the vector search runs over
+a filtered candidate set rather than the corpus. The candidate set therefore scales with
+**density per place-time cell, not with total corpus size** — a corpus ten times larger
+with the same spatial-temporal spread yields the same bounded candidate set.
+`segment-score-subset` (`segment.lisp:1014`) already scores an arbitrary subset exactly,
+which is the primitive that path needs.
+
+**Filtered ANN is the weak case, not the strong one.** An HNSW graph is built over the
+whole vector set. Pre-filtering fragments it — connectivity assumed nodes that are no
+longer present, and recall collapses. Post-filtering can return zero in-scope hits
+inside a tight place-time bound, forcing a much larger k and eroding the speed
+advantage. On the bounded path, exact subset scoring is both faster and correct.
+
+**Two consequences if it ever does land**, and they are why the rules below are written
+now rather than retrofitted:
+
+1. **It weakens the regression surface this design leans on.** S5 (§8) makes the bundle
+   the artifact partly because its correctness is deterministically checkable, and §11
+   makes capture-and-diff with *ordering as the contract* a standing rule. HNSW
+   construction
+   depends on insertion order and randomised level assignment, so seed sets can shift
+   between rebuilds. Adding ANN means either a deterministic build or an explicit
+   admission that the seed set is no longer a stable contract.
+2. **An ANN miss is the absence-vs-value defect class reappearing in the retriever.**
+   Expansion cannot recover what was never seeded, and an approximate search returning
+   nothing is **not** `searched-empty` — it is `indeterminate`. This design is unusual
+   in having the vocabulary to say that correctly (§4.1); most retrieval systems do not.
+
+**Two rules the unit specs must carry**, which are what make ANN safe to add later:
+
+- **S1** — an approximate or otherwise lossy search that returns nothing yields
+  `indeterminate`, never `searched-empty`.
+- **S5** — bounded retrieval uses exact subset scoring via `segment-score-subset`; a
+  global ANN query must never silently become the bounded path.
+
+**Where it would help first**, if it ever becomes urgent: **S3, the map-less document
+tenant**. A source declaring `space: none` has no spatial bound to narrow it, so its
+queries are often corpus-wide and *do* scale with corpus size. Not the place-anchored
+path.
+
+**The trigger metric is not corpus size.** It is per-query candidate-set size *after*
+bounding — a different number, currently unmeasured, and one the present corpus cannot
+reveal. Measure it during S2/S3, when there is finally a bounded query to measure.
 
 ## 13. Next step
 
