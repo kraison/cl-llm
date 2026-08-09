@@ -292,9 +292,10 @@ engine, already behind mine-action's `7ac1458` floor.
 validator; building the traversal first and the guardrail second is building the
 dangerous half first. Cross-namespace inference unlocks here too, gated on #94 and #102.
 
-**E Orthogonal, pulled by measurement** — #102 (gates any Datalog), #104/#105 closure,
-and a dedicated interval index *only if* §7's composite index does not already serve the
-temporal access path.
+**E Orthogonal, pulled by measurement** — #102 (an index-backed generator predicate: on
+S5's path, and gating any Datalog — see §12.1), #104/#105 closure, and a dedicated
+interval index *only if* §7's composite index does not already serve the temporal access
+path.
 
 ## 10. Cross-repo mechanics
 
@@ -330,7 +331,8 @@ Each of these was earned by a specific failure.
 
 ## 12. Deferred and still open
 
-- **Cross-namespace inference** — C's second half. Gated on #94 and #102.
+- **Cross-namespace inference** — C's second half. Gated on #94 and #102, and on
+  vivace-graph #45 Phase 3. See §12.1.
 - **Expression / computed-key indexes.** Views keep the derived-key cases for now.
 - **Automatic index selection in the Prolog compiler** (scan-and-filter rewritten to an
   index range scan) — separately deferred, not required by this programme.
@@ -343,6 +345,72 @@ Each of these was earned by a specific failure.
   question 4).
 - **The tuple-NULL rule** for composite indexes (§7) — to be decided in M, not
   inherited.
+
+### 12.1 vivace-graph #45 phase accounting
+
+How much of the Prolog roadmap this programme needs. The short answer: **about half of
+Phase 2, one bullet of Phase 4, and nothing else** — until C's inference half.
+
+| #45 phase | Programme need |
+|---|---|
+| **0** Control-flow core | **None — done and merged.** Inherited free. |
+| **1** Safety / web-enablement | **None — done and merged.** Inherited free. |
+| **2a** Clause indexing for asserted clauses | **Conditional** — only if S4 compiles the ontology into many asserted clauses. See the gate below. |
+| **2b** Index-aware predicate resolution (#102) | **A narrow slice**, for S5. |
+| **3** Datalog stratum + tabling | **None for this programme.** All of it for C's inference half, sequenced after P5. |
+| **4** Cost-based join reordering | **None.** Pure optimisation. |
+| **4** `shortest_path` / `reachable` / k-hop | **None.** `reachable` overlaps Phase 3; S5's weighted expansion is planner-bounded and belongs in Lisp. |
+| **4** Spatial/temporal predicates pushed into indexes | **Yes** — the same work as #102, for S5. |
+| **4** First-class aggregation | **Weak form already shipped** (`findall` + length). Strong form is a want, not a need. |
+
+Phases 0 and 1 being already paid for is the single largest reason C is cheaper than the
+handoff implied: the substrate inherits a correct, composable, bounded, effect-gated,
+snapshot-capable engine at no cost. One residual to carry: deep-recursion safety was
+answered with **resource bounds rather than a trampoline**, so long derivations fail
+rather than run. That resurfaces in Phase 3.
+
+**The gate that decides all of it — S4 must state, in its own spec, whether the
+validator runs *as* a Prolog query or is *driven from Lisp*.**
+
+- *Driven from Lisp* — the validator sweeps claims via the index API and calls Prolog
+  only to evaluate each constraint. Needs essentially none of Phases 2, 3 or 4.
+- *Expressed as Prolog queries over the graph* — pulls in 2b properly, later wants Phase
+  4's pushed-down predicates, and **if the formalism compiles to many asserted clauses,
+  pulls in 2a as well**, because `functor.lisp` recompiles the whole functor on every
+  `<-` and `clauses-with-arity` is a linear scan.
+
+**Recommendation: drive the validator from Lisp.** The sharpening that decides it is
+that **a full-corpus validation sweep does not benefit from an index** — checking every
+claim against every constraint is a scan by definition, and no index makes a sweep
+selective. S5's access pattern, by contrast, *is* selective (place plus window), which
+is exactly what a leading-prefix composite range serves. So:
+
+- S4 write-path validation → single-record lookup by identity. **M supplies this.** No
+  #45 work.
+- S4 batch pass → a sweep. No index, no #102.
+- S5 retrieval → selective. **This is where #102 and Phase 4's pushed-down predicates
+  land**, and the general-index design already identified the seam: mirror
+  `spatial-query.lisp`, which wires the spatial index into Prolog as index-backed
+  predicates — "thin wrappers over the v1 API, so build API first; Prolog is a wrapper,
+  not a rewrite."
+
+**Why Phase 3 is genuinely needed later, not optional.** Ontology transitivity
+(`subClassOf` over a taxonomy) is a closure; supersession chains are a closure, and S6's
+"what superseded this, and what superseded that" is a chain walk. And **tabling is the
+termination guarantee the claim model needs**: contradictions are deliberately retained
+and rival claims are never resolved into one, so the derived graph is cyclic-capable by
+design. Today a recursive rule that loops hits a resource bound and *fails*; tabling
+makes it *terminate correctly*. That is the difference between a reasoner that refuses
+to answer and one that answers. Semi-naïve evaluation plus magic sets is then what makes
+derivation over 300k+ claims tractable rather than theoretical.
+
+⚠ **The trap.** Phase 3 is #45's declared flagship and "historically the direction this
+engine has wanted to go." That is exactly the condition under which a programme quietly
+reorders itself around the most interesting engine work instead of the work that makes
+the substrate real. **Phase 3 is unlocked by this programme, not required by it** —
+until there is a real inference workload at real claim volume to size tabling and
+magic-sets against. Building SLG against estimates is the measurement failure mode this
+project has already hit twice (§11).
 
 ## 13. Next step
 
