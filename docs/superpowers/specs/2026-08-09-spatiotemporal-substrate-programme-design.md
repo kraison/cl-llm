@@ -1,0 +1,354 @@
+# SpatioTemporal substrate (B + C) — programme design
+
+**Date:** 2026-08-09
+**Status:** decomposition and phasing agreed in brainstorming. No unit is specced or
+planned; each gets its own spec → plan → build cycle.
+**Scope:** the whole programme. Deliberately *not* a spec for any single unit.
+**Origin:** `docs/notes/2026-08-06-spatiotemporal-graphrag-BC-handoff.md`.
+**Tracking:** cl-llm#15, board https://github.com/users/kraison/projects/1.
+
+## 1. What this is
+
+SpatioTemporalGraphRAG as a **generic system** — directions **B** (a general
+agent-memory substrate) and **C** (a reasoning engine for a knowledge base) — as
+distinct from the mine-action domain agent, which is direction A and already shipped as
+Stage A.
+
+mine-action is the existence proof and the first tenant. It is **not** the requirement.
+
+## 2. The thesis: B and C share a first brick
+
+The handoff named the first question as whether B and C share a first brick or genuinely
+fork. They share one, and it is neither of the two candidates the handoff proposed.
+
+**B and C are two consumers of one record.** B asks *"can an agent trust and cite
+this?"* C asks *"can a reasoner derive and check this?"* Both questions are answered by
+the same fact record: identity, extent, time with provenance, method, confidence,
+standing.
+
+Therefore the temporal facility is not B's first brick — it is *part of* the record. And
+Prolog revival is not C's first brick — it is a *consumer* of the record.
+
+## 3. The three findings, verified 2026-08-09
+
+The handoff's framing claims were re-checked against the code, and two changed.
+
+**The logic engine is idle, and more built than the handoff says.** `grep` for
+`graph-db:select|select-flat|?-` across mine-action's `src/` returns **0 call sites**.
+But vivace-graph #45 phases 0 and 1 are complete and merged to master: control-flow
+core, `call/N`, `findall`/`bagof`/`setof` with free-var grouping, resource bounds,
+effect partitioning, snapshot query mode, `def-query`, the JSON pattern DSL, `catch/3`
+with ISO balls, NDJSON streaming. **C is a formalism over an existing engine, not a
+revival.** What is missing is Phase 2 indexing — vivace-graph #102: *"General ordered
+index is unreachable from Prolog: no index-backed generator predicate."*
+
+**The engine has no notion of time.** No `allen`, no valid-time, no transaction-time, no
+interval index anywhere in `~/work/vivace-graph-v3/*.lisp`; two incidental `interval`
+mentions. The entire temporal algebra is `mine-action/src/spine-time.lisp` — **87
+lines**, a struct and one relation function.
+
+**Stage A's prototype is small at the core and fat at the edges.** `spine-time.lisp` 87,
+`spine-place.lisp` 86, `spine-graph.lisp` 104, `spine-query.lisp` 106,
+`spine-schema.lisp` 269 — against `spine-register.lisp` **858** and
+`spine-backfill.lisp` **683**, of 2,226 total. The generic part is tiny and the
+app-specific part is most of the code. That is the encouraging shape for an extraction.
+
+### 3.1 What changed since the handoff was written
+
+- **vivace-graph #53 is CLOSED as completed** (`3f7ba97`). The multi-graph node-escape
+  class is fixed structurally: `maybe-init-node-data` resolves `(heap (node-home-graph
+  node graph))`, so all thirteen call sites are correct at once and a future one is
+  correct by default. The concern that a cross-graph claim layer would re-arm that SEGV
+  is retired.
+- **It grew into a shipped multi-graph contract for 3.0**, which constrains this design
+  directly. See §6.2.
+- **The general ordered index v1 shipped** and is merged to `experiment`, single-slot.
+- #93, #94, #102, #104, #105 remain open.
+
+## 4. The record
+
+```
+claim
+  subject      (namespace, external-key)
+  object       (namespace, external-key)     ; optional -- unary claims exist
+  relation     open vocabulary
+  method       open vocabulary
+  standing     observed | inferred | asserted | searched-empty
+               | uncovered | indeterminate
+  confidence
+  precision    inherited from the weaker endpoint
+  fraction     partial / traversing registration
+  rule-version
+  extent       temporal-extent               ; optional
+  geometry                                    ; optional
+```
+
+Reifying the relation rather than making it an edge buys three properties, each
+load-bearing: contradictions survive instead of being resolved away; claims can be
+superseded and versioned, so a rule change is a regeneration rather than a migration;
+and claims are regenerable and therefore disposable.
+
+`temporal-extent` is Stage A §3.3 unchanged: interval (an instant is a degenerate
+interval), precision, semantics as an open vocabulary, standing. Relations between
+extents are **computed, never materialised** — the algebra is closed and cheap and
+nothing can go stale — and standing propagates, so a relation inherits the weaker
+standing of its two endpoints.
+
+### 4.1 The one generalisation beyond Stage A
+
+Stage A carries `provenance: derived|asserted` on claims and `observed|inferred` on
+extents. `standing` merges those and adds the three cases mine-action handled per-app
+and got wrong repeatedly:
+
+- `searched-empty` — the source looked and found nothing;
+- `uncovered` — no source covers this;
+- `indeterminate` — we could not find out.
+
+**These are a type, not a convention.** The absence-vs-value defect class has seven-plus
+confirmed instances, silent every time: `%report-metric` coercing a never-computed gap
+to `0d0` so an undesignated site reported 0 ha unsurveyed and prose called a
+4.1%-surveyed site "essentially the whole site covered"; `accuracy_m = 0` meaning
+*unpopulated*; classification state read as a contamination fact. The API must make the
+collapse **unrepresentable**, not merely reviewed against. This is the single most
+valuable thing Stage A produced and it generalises directly to B.
+
+## 5. Layering
+
+```
+graph-db/core                    neutral engine -- storage, txn, index, Prolog
+  |- graph-db/spacetime          NEW - extent, Allen, standing, claim, registration
+       |- graph-db/ontology      NEW - formalism + validator            (C)
+       |- cl-llm/rag/vivace      fusion retrieval over claims           (B, retrieval)
+       |    |- cl-llm/memory     NEW - agent-memory API                 (B, capstone)
+       |- mine-action            first tenant -- spine-* becomes an adapter
+```
+
+The substrate goes into vivace-graph as an **opt-in ASDF subsystem** beside
+`graph-db/geos` and `graph-db/replication`, not into cl-llm. The deciding argument: the
+engine must eventually be able to *index* a temporal extent, and an index cannot
+accelerate a type it cannot see. A type living above VG could only be indexed by VG
+depending upwards.
+
+`cl-llm` core does not depend on `graph-db` today — only `cl-llm/rag/vivace` does — and
+this programme must not widen that.
+
+### 5.1 Boundary rules (PR review checklist, not aspirations)
+
+1. Nothing in `graph-db/spacetime` may name a mine-action concept.
+2. Anything needing an LLM lives above `cl-llm`, never in `graph-db/*`.
+3. Sources declare through the onboarding contract; the substrate holds no per-source
+   code, and every facet supports an explicit "none" so a missing declaration is a
+   contract violation rather than a silently non-registering source.
+4. `graph-db/core` gains nothing from this programme except, eventually, an interval
+   index — and only once measured.
+
+A decision justified **only** by what mine-action needs belongs in mine-action.
+
+## 6. The namespace design, folded in
+
+`vivace-graph/docs/namespace-design-discussion.md` is not adjacent work. Its point 4
+*is* this substrate's claim store: *"Cross-namespace edges exist only in a derived
+namespace. Cross-source relations are reified as claim nodes."* Its own handoff says the
+mine-action spine is "the derived, disposable namespace this design predicted, built for
+real."
+
+### 6.1 The endpoint abstraction
+
+`claim-subject` / `claim-object`, and the inverse *"which claims touch this vertex?"*,
+are an **interface with two implementations**:
+
+- **today** — `(namespace, external-key)`, resolved by lookup, no edges;
+- **after namespaces** — real edges to the endpoints, one snapshot clock, resolution by
+  traversal.
+
+Stage A §3.5 states the invariant that makes deferral safe: the semantics are identical
+either way; only the physical representation of a claim's endpoints changes. This is why
+the substrate does not block on the namespace work, and why the namespace work is a peer
+unit the substrate designs *toward* rather than waits *on*.
+
+### 6.2 Constraints inherited from the shipped 3.0 multi-graph contract
+
+Hard requirements on the substrate's API:
+
+- **A read-write transaction is single-graph.** Touching a foreign node signals
+  `cross-graph-transaction-error` at `lookup-object`, `create-node`, `save`,
+  `update-node`, `delete-node` and `mark-deleted`. Therefore **claim generation resolves
+  its endpoints before opening its write transaction.** Stage A's external-key endpoints
+  already satisfy this; now it has a stated reason.
+- **Cross-graph reads are legal only from a read-only snapshot or outside a
+  transaction.** `with-read-snapshot` records per graph and several compose. Therefore
+  **bundle assembly runs under composed read snapshots**, one per namespace touched —
+  per-namespace consistency, but not one instant.
+- Class names are already globally unique across graphs: a down payment on global
+  type-ids.
+
+### 6.3 One epoch is a correctness gate for C
+
+"Derived and checkable" across five graphs with five snapshot clocks is not checkable: a
+derivation can observe an inconsistent instant and `rule-version` provenance will not
+record that it did. So the split is — the **validator** runs per-namespace and needs
+nothing from the namespace work; **inference spanning namespaces**, and the agent-memory
+capstone, need the single epoch (vivace-graph #94).
+
+### 6.4 Asserted claims
+
+Namespace design point 5, carried into the substrate: an operator assertion is a node in
+the **source** namespace keyed by external identity, with only intra-namespace edges;
+its claim in the derived namespace is a materialisation like any other. An authored
+cross-boundary link cannot be regenerated from a rule, so a dangle there would be data
+loss rather than staleness. A node id is a location; an external key is an identity.
+
+## 7. Multi-slot indexing
+
+The general ordered index v1 is merged, single-slot. `def-index` (`index.lisp:421`)
+declares in its own docstring (`index.lisp:431`) that it "is the home for future
+composite / multi-slot indexes"; the design memo records composite as *"deferred but
+designed-for: codec already polymorphic — `less-than` orders lists, so it's additive;
+the deferred part is query-planner leading-prefix matching."* Composite `(user-key .
+node-id)` is already **the** indexing idiom across views, `:unique` and the spatial
+index.
+
+This programme needs it in three places:
+
+1. **The inbound query is a two-slot equality lookup** — `(subject-namespace,
+   subject-key)`. That is the retrieval and agent-memory hot path, and the namespace
+   design's open item 2.
+2. **Claim identity becomes enforceable.** Identity is `(subject, object, relation,
+   rule-version)`, and regeneration must upsert rather than duplicate at 300k+. A view
+   cannot enforce: per the `:unique` design (#6), enforcement is a commit-boundary check
+   inside `%commit`'s single `with-transaction-manager-lock` region — check
+   pre-durability for a clean abort, maintain post-durability so it is
+   journal-replayable — and that is exactly what **sidesteps #7, since views are
+   post-durability**. A multi-slot unique index is the only route to an arbitrary
+   composite key under the transaction system's protection.
+3. **Leading-prefix ordering is the spatiotemporal access path.** `(place, valid-start)`
+   — equality on the leading component, range on the trailing — answers "claims about
+   place P overlapping window W" in one cursor. This may remove the case for a dedicated
+   interval index; measure before building one.
+
+The historical argument is the strongest: six real hromadas share `(oblast, raion,
+name)` and differ only by `hromada-type`; discarding it made the second row upsert over
+the first and **silently overwrite its KATOTTH code**, so those hromadas never entered
+the graph and could never be alerted. A multi-slot unique index turns that into a
+`unique-constraint-violation` at the commit boundary.
+
+**What it does not replace:** views key on arbitrary computation; `def-index` keys on
+slot values. Without expression indexes, views keep the derived-key cases and multi-slot
+takes the tuple-of-raw-slots cases — which is most identity lookup, and the set that
+wants enforcement. This resolves the apparent conflict between Stage A §8.2 ("views
+already exist, no prerequisite work") and the namespace design's open item 3 ("the slots
+must be indexed or an assertion resolves by scan"): both are right about different
+questions.
+
+**One trap:** `:unique` and `def-index` are NULL-exempt today. For a tuple, the rule
+for an absent component must be chosen deliberately — indexed, unindexed, or an error.
+`(namespace, external-key)` with a NIL key means *this endpoint has no external
+identity*, which must not collapse into a shared key. That is the absence-vs-value
+defect class reappearing inside the index design.
+
+## 8. The units
+
+| | Unit | Repo | Issue |
+|---|---|---|---|
+| M | Multi-slot indexes | vivace-graph | #107 |
+| S1 | `graph-db/spacetime` — claim + time substrate | vivace-graph | #108 |
+| S2 | First tenant: spine becomes a tenant | mine-action | #55 |
+| S3 | Document validity-time + supersession (map-less tenant) | cl-llm | #12 |
+| S4 | `graph-db/ontology` — formalism + validator | vivace-graph | #109 |
+| S5 | Retrieval fusion | cl-llm | #13 |
+| S0 | Namespaces | vivace-graph | #110 |
+| S6 | Agent memory + decision trace | cl-llm | #14 |
+
+Dependencies: M → S1 → {S2 ‖ S3} → S5; S1 → S4; {S4, S5, S0} → S6.
+
+## 9. Phasing
+
+Bands, not a serial chain. The concurrency is load-bearing.
+
+**P1 Foundations** (vivace-graph) — M, then S1. M first because it is small and additive
+and S1's identity scheme depends on it; S1 is designed concurrently. **P1 is not
+declared done here.**
+
+**P2 Proof by two tenants** (mine-action ‖ cl-llm) — S2 and S3, concurrently. These
+**are the acceptance test for P1**, not consumers of it. A substrate with one tenant
+becomes that tenant's library no matter how carefully it is reviewed; genericity has to
+be forced structurally. S3 is the only thing proving the spatial facets are genuinely
+optional rather than merely defaulted. Nothing is built on top until both land. Running
+them sequentially would bake in mine-action's assumptions before the map-less tenant
+could object.
+
+**P3 B and C fork** — S4 (reasoning) ‖ S5 (retrieval) ‖ S0 begins. Having shared the
+brick, the directions now genuinely diverge.
+
+**P4 Namespaces complete** — S0. Sequenced to finish late so the epoch, the detached
+bulk-load path and the inbound lookup are sized against **measurements rather than
+estimates**; started early because it is the long pole. Its handoff says to brainstorm
+the open items, not re-derive the agreed shape.
+
+⚠ Deployment gate: a type-id migration lands on a production host running an older
+engine, already behind mine-action's `7ac1458` floor.
+
+**P5 Capstone** — S6. LLM-directed traversal lands here and **only** here, behind S4's
+validator; building the traversal first and the guardrail second is building the
+dangerous half first. Cross-namespace inference unlocks here too, gated on #94 and #102.
+
+**E Orthogonal, pulled by measurement** — #102 (gates any Datalog), #104/#105 closure,
+and a dedicated interval index *only if* §7's composite index does not already serve the
+temporal access path.
+
+## 10. Cross-repo mechanics
+
+**A VG change reaches production in five steps** — `experiment` → green on SBCL → merged
+to `master` → released → consumer's version floor bumped → production deployed. No phase
+may assume that is instant. Every phase touching vivace-graph states its version floor
+and whether production must be bumped.
+
+Engine work is on `experiment`; ECL is demoted to periodic — verify on SBCL and say
+explicitly when ECL was skipped.
+
+## 11. Testing and measurement discipline
+
+Each of these was earned by a specific failure.
+
+- **Contract conformance per source** — identity, space, time, attribution, sensitivity,
+  registration, indexed text; each declared, each exercised, including the explicit
+  "none".
+- **Absence-vs-value conformance** — a standing test category. For every gatherer field,
+  a test that its never-measured state is distinguishable from a real zero.
+- **Sensitivity and path-matching rules proven against the real corpus, never synthetic
+  fixtures.** The provenance rule that excluded a set of restricted photographs was a
+  silent no-op on the real filesystem for NFC/NFD reasons, and its unit tests passed its
+  entire life because the fixtures used the same string literals the code did.
+- **Bundle regression is capture-and-diff, with ordering as the contract.**
+- **Deterministic scoring of bundle correctness; LLM-judge scoring confined to
+  narration.** Prior eval work measured LLM-judge dimensions at roughly 15% run-to-run
+  variance with a strong judge, while deterministic dimensions were trustworthy enough
+  to drive an embedder bake-off.
+- **Every performance figure names its host and is the third run.** Every figure in this
+  project that was assumed rather than measured has been wrong, twice by quoting a cold
+  reading as steady state. The dev hub does not characterise production.
+
+## 12. Deferred and still open
+
+- **Cross-namespace inference** — C's second half. Gated on #94 and #102.
+- **Expression / computed-key indexes.** Views keep the derived-key cases for now.
+- **Automatic index selection in the Prolog compiler** (scan-and-filter rewritten to an
+  index range scan) — separately deferred, not required by this programme.
+- **A dedicated interval index** — contingent on §7's measurement.
+- **Registration of coarse points to fine places** (Stage A open question 5) — whether a
+  coarse centroid registers to the containing place, to every place its uncertainty
+  radius touches, or to the smallest place wholly containing that radius. Affects claim
+  volume and honesty. Inherited unresolved.
+- **Spine memory footprint at full source scale, measured per host** (Stage A open
+  question 4).
+- **The tuple-NULL rule** for composite indexes (§7) — to be decided in M, not
+  inherited.
+
+## 13. Next step
+
+Each unit gets its own spec → plan → build cycle. The first is **M** (vivace-graph
+#107), whose spec must settle the multi-slot declaration surface, the class-level unique
+form and the tuple-NULL rule. **S1** (#108) is designed concurrently and built on M.
+
+No unit is planned by this document. This document decides only what the units are,
+where they live, what order they go in, and what would make each of them wrong.
