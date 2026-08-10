@@ -91,8 +91,20 @@ and claims are regenerable and therefore disposable.
 `temporal-extent` is Stage A §3.3 unchanged: interval (an instant is a degenerate
 interval), precision, semantics as an open vocabulary, standing. Relations between
 extents are **computed, never materialised** — the algebra is closed and cheap and
-nothing can go stale — and standing propagates, so a relation inherits the weaker
-standing of its two endpoints.
+nothing can go stale — and standing propagates.
+
+**Amended 2026-08-10 by S1a's design** (`vivace-graph`
+`docs/superpowers/specs/2026-08-10-temporal-extent-allen-standing-design.md`, #130).
+This section previously said a relation "inherits the weaker standing of its two
+endpoints". It does not: a computed relation carries the **set** of contributing
+standings. `asserted` and `inferred` have no defensible ordering — an operator's
+commitment versus a reproducible, rule-versioned derivation, neither dominating —
+so collapsing to a single weakest value means inventing an order and imposing it
+on every tenant through the substrate. The three absence cases are not weaker
+values either; they are the states where there is no interval, and the consumer
+needs the reason. A set can be collapsed downstream by a consumer that knows its
+own ordering; a collapse cannot be un-done. Same argument as the relation set
+itself, applied to the second axis.
 
 ### 4.1 The one generalisation beyond Stage A
 
