@@ -109,7 +109,9 @@ left the index genuinely empty.  Rebuilding off to the side and swapping removes
     (if (zerop n) 1d0 (/ (float (sparse-index-total-length index) 1d0) n))))
 
 (defgeneric sparse-search (store query-string k)
-  (:documentation "Up to K HITs for QUERY-STRING by BM25, highest score first."))
+  (:documentation "The best (MIN K candidates) HITs for QUERY-STRING by BM25,
+highest score first, where a candidate is any chunk sharing a term with the
+query.  Exactly that many -- never fewer, which it silently was until GH #17."))
 
 (defmethod sparse-search ((store sparse-store) query-string k)
   ;; Take ONE snapshot of the index slot and read everything -- postings, lengths, chunks,
@@ -133,4 +135,10 @@ left the index genuinely empty.  Rebuilding off to the side and swapping removes
                         (bm25-term-score idf (cdr p) (aref lengths (car p)) avgdl)))))))))
     (let ((hits (loop for idx being the hash-keys of scores using (hash-value sc)
                       collect (make-hit (aref chunks idx) sc))))
-      (subseq (sort hits #'> :key #'hit-score) 0 (min k (length hits))))))
+      ;; Take the length from SORT's RETURN VALUE, never from the binding
+      ;; handed to it: SORT is destructive and relinks the list, so HITS may
+      ;; name a short tail afterwards and the MIN would truncate to it
+      ;; (GH #17).
+      (let* ((sorted (sort hits #'> :key #'hit-score))
+             (found (length sorted)))
+        (subseq sorted 0 (min k found))))))

@@ -85,3 +85,34 @@ still see the complete pre-delete snapshot, and search must stay consistent afte
     (is (null (rag:sparse-search s "anything" 3)))          ; empty store
     (rag:store-add s (list (rag:make-chunk "TM-62M" :document-id "a")))
     (is (null (rag:sparse-search s "zzz-nonexistent" 3)))))  ; no term overlap -> no hits
+
+(test sparse-search-returns-every-hit-it-was-asked-for
+  "⚠ Regression for GH #17.  SUBSEQ evaluates left to right, so
+`(subseq (sort hits ...) 0 (min k (length hits)))` read LENGTH from a
+binding the destructive SORT had already relinked -- a short tail -- and
+silently returned fewer hits than asked for.
+
+⚠ THE FIXTURE MUST SCRAMBLE THE PRE-SORT ORDER.  Three earlier attempts at
+this test passed against the broken code: equal scores give SORT nothing to
+relink, and monotone scores leave the binding's head at or near the front.
+Varying term frequency AND length together is what moves it.  Measured:
+twelve candidates, asking for twelve returned ten."
+  (let ((s (rag:make-sparse-store)))
+    (rag:store-add
+     s (loop for i from 1 to 12
+             collect (rag:make-chunk
+                      (format nil "~{~a~^ ~}"
+                              (append (make-list (1+ (mod i 7))
+                                                 :initial-element "mine")
+                                      (make-list (1+ (mod i 5))
+                                                 :initial-element "pad")
+                                      (list (format nil "u~a" i))))
+                      :document-id (format nil "d~a" i))))
+    (is (= 12 (rag:store-count s)))
+    ;; Every chunk contains "mine", so every chunk is a candidate.
+    (is (= 12 (length (rag:sparse-search s "mine" 12)))
+        "asked for all twelve candidates")
+    (is (= 12 (length (rag:sparse-search s "mine" 30)))
+        "asked for more than exist -- must return all, not fewer")
+    (is (= 5 (length (rag:sparse-search s "mine" 5)))
+        "a k below the candidate count is still honoured")))
