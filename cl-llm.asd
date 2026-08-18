@@ -108,7 +108,7 @@
 (defsystem "cl-llm/rag"
   :description "Retrieval-augmented generation for cl-llm."
   :license "MIT"
-  :depends-on ("cl-llm")
+  :depends-on ("cl-llm" "cl-temporal-extent")
   :serial t
   :components ((:module "rag"
                 :serial t
@@ -121,6 +121,7 @@
                              (:file "index")
                              (:file "sparse")
                              (:file "hybrid")
+                             (:file "bundle")
                              (:file "answer"))))
   :in-order-to ((test-op (test-op "cl-llm/rag/tests"))))
 
@@ -140,6 +141,7 @@
                              (:file "index")
                              (:file "sparse")
                              (:file "hybrid")
+                             (:file "bundle")
                              (:file "answer"))))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!

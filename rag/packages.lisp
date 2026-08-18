@@ -27,6 +27,10 @@
    #:sparse-store #:make-sparse-store #:sparse-search
    #:hybrid-retriever #:make-hybrid-retriever #:reciprocal-rank-fusion #:*rrf-k*
    #:dense-preserving-fusion #:*backfill-max*
+   #:evidence #:make-evidence #:evidence-chunk #:evidence-score
+   #:evidence-method #:evidence-source #:evidence-confidence
+   #:evidence-precision #:evidence-extent #:evidence-standing
+   #:bundle #:make-bundle #:bundle-query #:bundle-evidence #:bundle-modes
    ;; grows in later tasks
    ))
 
