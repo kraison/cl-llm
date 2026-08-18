@@ -193,6 +193,31 @@
              (unless (uiop:symbol-call :fiveam :run! :cl-llm-rag-vivace)
                (error "cl-llm/rag/vivace tests failed."))))
 
+(defsystem "cl-llm/rag/eval"
+  :description "Deterministic scoring of retrieval bundles."
+  :license "MIT"
+  :depends-on ("cl-llm/rag" "cl-llm/eval")
+  :serial t
+  :pathname "rag-eval/"
+  :components ((:file "packages")
+               (:file "scorers"))
+  :in-order-to ((test-op (test-op "cl-llm/rag/eval/tests"))))
+
+(defsystem "cl-llm/rag/eval/tests"
+  :description "Offline test suite for cl-llm/rag/eval."
+  :license "MIT"
+  :depends-on ("cl-llm/rag/eval" "fiveam")
+  :serial t
+  :pathname "tests-rag-eval/"
+  :components ((:file "packages")
+               (:file "suite")
+               (:file "scorers"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-rag-eval-suite
+                                                :cl-llm.rag.eval.test))
+               (error "cl-llm/rag/eval test suite failed."))))
+
 (defsystem "cl-llm/bench"
   :description "Benchmarks for cl-llm/rag. Not loaded by the test suites."
   :license "MIT"
