@@ -48,3 +48,8 @@ what the graph-free dependency bought (vivace-graph#159)."
                          (rag:chunk-document-id (rag:evidence-chunk e)))
                        (rag:bundle-evidence bundle))))
     (is (equal '(:dense :sparse) (rag:bundle-modes bundle)))))
+
+(test evidence-standing-defaults-to-indeterminate
+  "A caller who never sets :STANDING gets :INDETERMINATE, not NIL -- the
+default that keeps the struct's docstring honest."
+  (is (eq :indeterminate (rag:evidence-standing (rag:make-evidence)))))

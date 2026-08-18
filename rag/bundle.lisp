@@ -6,8 +6,9 @@
 
 (defstruct evidence
   "One retrieved item and everything known about where it came from.
-STANDING is never NIL: absence carries a reason, so a reader can tell
-\"nobody looked\" from \"we looked and found nothing\"."
+STANDING defaults to :INDETERMINATE, so absence always carries a reason
+rather than reading as NIL-by-omission. An explicit :STANDING NIL is not
+refused here -- that is BUNDLE-STANDING-WELL-FORMED's job (a later task)."
   (chunk nil)
   (score 0.0d0)
   (method nil)        ; :DENSE :SPARSE :SPATIAL :TEMPORAL :CLAIM
@@ -15,7 +16,7 @@ STANDING is never NIL: absence carries a reason, so a reader can tell
   (confidence nil)
   (precision nil)
   (extent nil)        ; a TEMPORAL-EXTENT:TEMPORAL-EXTENT, or NIL
-  (standing nil))
+  (standing :indeterminate))
 
 (defstruct bundle
   "A query and its ranked evidence.  The ORDER of EVIDENCE is the contract:
