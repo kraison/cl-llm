@@ -225,17 +225,40 @@ different way (e.g. after sorting them first); dropping `rank` as
 ordering detection.
 
 **Ordering is the contract, and the golden file is the only thing that
-enforces it.** Every other test in this unit was checked against that
-claim and none of them would catch `fuse` silently re-ordering its
-output: the determinism test (`fusion-order-is-deterministic`) compares
-two runs of `fuse` against *each other*, so a consistently-wrong order
-would pass it; the fusion tests (`fuse-names-every-mode-that-contributed`,
-`fuse-keeps-distinct-chunks-of-the-same-document`) check membership, not
-position; and the record-level ordering test
+enforces it — but "the golden file" is the mechanism, not any single
+test, and which test actually stands guard took two passes to get
+right.** `a-reordering-fails-the-golden-file` proves the mechanism
+*can* catch a reordering, but it drives `write-golden`/`check-golden`
+against the hand-built `%bundle` fixture (see §5's `%bundle`), never
+against `fuse`. So do every other test in the unit: the determinism
+test (`fusion-order-is-deterministic`) compares two runs of `fuse`
+against *each other*, which a consistently-wrong order would still
+pass; the fusion tests (`fuse-names-every-mode-that-contributed`,
+`fuse-keeps-distinct-chunks-of-the-same-document`) check membership,
+not position; and the record-level ordering test
 (`a-bundle-is-ordered-and-names-its-modes`) builds a `bundle` directly
-and never calls `fuse` at all. `a-reordering-fails-the-golden-file`
-(`tests-rag-eval/golden.lisp`) is the one test standing between a
-reordering regression and a green suite.
+and never calls `fuse` at all. A first attempt at closing this wrote a
+bundle's golden file and checked it against a second `fuse` call in the
+*same* test run — which turned out to prove nothing beyond "`fuse`
+agrees with itself": both calls would sort identically even under a
+`fuse` ablated to always sort by document id, since the same ablated
+code produces both the write and the check.
+
+What actually closes the gap is a **committed** golden fixture,
+`tests-rag-eval/fixtures/fuse-mine.golden`, generated once (by
+`write-golden`, run by hand, against an unmodified `fuse`) and checked
+into the repository rather than written inside the test. The test
+`a-real-fuse-bundle-matches-its-committed-golden`
+(`tests-rag-eval/golden.lisp`) builds the same five-chunk, two-source
+fixture the golden file was generated from, calls `fuse` fresh, and
+checks the result against that committed file — so a later `fuse` has
+to agree with evidence captured *before* that later change existed, not
+with itself. This was verified, not assumed: temporarily changing
+`fuse` to sort its evidence by document id (the fixture's real RRF
+order is `(a e b d c)`, not the alphabetical order a document-id sort
+would produce) turns this one test red with the rest of the suite still
+green; reverting turns it back green. That is the test standing between
+a reordering regression and a green suite.
 
 Two functions, deliberately asymmetric:
 
@@ -254,11 +277,12 @@ Two functions, deliberately asymmetric:
   `write-golden`, called deliberately, never something `check-golden`
   does on your behalf.
 
-Fixtures for this harness are small and hand-built, with known-relevant
-answers, in `cl-llm/rag`'s and `cl-llm/rag/eval`'s offline suites: fast
-and hermetic. Scoring against the real corpus is intentionally a separate
-opt-in suite, following the existing `cl-llm/live` pattern — not built in
-this unit (see §8).
+Fixtures for this harness are small and hand-built (or, for
+`fuse-mine.golden`, generated once from a small hand-built source
+fixture), with known-relevant answers, in `cl-llm/rag`'s and
+`cl-llm/rag/eval`'s offline suites: fast and hermetic. Scoring against the
+real corpus is intentionally a separate opt-in suite, following the
+existing `cl-llm/live` pattern — not built in this unit (see §8).
 
 ## 7. Dependencies: `cl-temporal-extent`, and no graph
 
