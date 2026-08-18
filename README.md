@@ -310,6 +310,17 @@ A separate live suite (`cl-llm/rag/live`) exercises a real embeddings
 endpoint (e.g. Ollama with `nomic-embed-text`) and skips cleanly with
 `CL_LLM_LIVE` unset — the same gating convention as `cl-llm/live`.
 
+### Evidence bundles (`cl-llm/rag/eval`)
+
+`cl-llm/rag/eval` fuses dense and sparse retrieval into one ordered
+`bundle` of `evidence` — ranked, attributed to the mode that produced it,
+and carrying a non-`NIL` standing so absence always has a reason — plus
+four deterministic scorers and a capture-and-diff harness that treats
+ordering as the regression contract. It depends on `cl-llm/rag` and
+`cl-llm/eval` and, like `cl-llm/rag` itself, adds no graph dependency. See
+[`docs/evidence-bundle.md`](docs/evidence-bundle.md) for the records, the
+scorers, and what this first unit does and does not do.
+
 ## Testing
 
 ```sh
