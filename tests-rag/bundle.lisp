@@ -449,3 +449,36 @@ break."
                (rag:make-dense-source embedder store) "old" :k 5
                :bounds (rag:make-bounds :window (%interval 2004 2007)
                                         :window-standing :asserted))))))
+
+(test a-sparse-source-honours-a-bound-planned-from-seeds
+  "⚠ The only test spanning PLAN-BOUNDS to a bounded retrieval, and the
+only one reaching SPARSE-SOURCE's bound wiring: reverting that method to
+(declare (ignore bounds)) once left the suite green while the spec names
+BOTH sources (cl-llm#13 final review, I2/M2).  A mechanism built in one
+unit and relied on by another with nothing spanning the join is the defect
+that survived four reviews in unit 1."
+  (let ((store (rag:make-sparse-store))
+        (sexp #'temporal-extent:extent->sexp))
+    (rag:store-add
+     store
+     (list (rag:make-chunk "TM-62 fuze survey" :document-id "in"
+                           :metadata (list :extent
+                                           (funcall sexp
+                                                    (%interval 2005 2006))))
+           (rag:make-chunk "TM-62 fuze report" :document-id "out"
+                           :metadata (list :extent
+                                           (funcall sexp
+                                                    (%interval 1990 1991))))))
+    (let* ((source (rag:make-sparse-source store))
+           (seeds (list (%ev-at "s1" :extent (%interval 2004 2005))
+                        (%ev-at "s2" :extent (%interval 2006 2007))))
+           (b (rag:plan-bounds seeds)))
+      (is (eq :inferred (rag:bounds-window-standing b))
+          "the window must be DERIVED, or this is not the planner's bound")
+      (is (= 2 (length (rag:collect-evidence source "TM-62 fuze" :k 5)))
+          "both chunks retrieve unbounded, so the filter has real work")
+      (let ((ev (rag:collect-evidence source "TM-62 fuze" :k 5 :bounds b)))
+        (is (= 1 (length ev)) "the 1990 chunk is known outside the window")
+        (is (string= "in" (rag:chunk-document-id
+                           (rag:evidence-chunk (first ev)))))
+        (is (eq :sparse (rag:evidence-method (first ev))))))))
