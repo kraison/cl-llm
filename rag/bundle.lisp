@@ -46,14 +46,27 @@ BOUNDS is the planner's region/window and is accepted by every method; unit
 (defun make-sparse-source (store)
   (make-instance 'sparse-source :store store))
 
+(defun %chunk-facets (chunk)
+  "Two values: the TEMPORAL-EXTENT and box CHUNK's metadata declares, or NIL
+for each.  :EXTENT holds the extent SEXP -- plain data, so it survives any
+store -- and SEXP->EXTENT signals on a malformed one rather than reading it
+as an absence."
+  (let ((md (chunk-metadata chunk)))
+    (values (let ((s (getf md :extent)))
+              (and s (temporal-extent:sexp->extent s)))
+            (getf md :box))))
+
 (defun %hit->evidence (hit method)
   "Wrap HIT as EVIDENCE attributed to METHOD.  STANDING is :INDETERMINATE:
 no claim has been consulted, which is not the same as having consulted one
 and found nothing (that is :SEARCHED-EMPTY, cl-llm#13 unit 3)."
-  (make-evidence :chunk (hit-chunk hit)
-                 :score (hit-score hit)
-                 :method method
-                 :standing :indeterminate))
+  (multiple-value-bind (extent box) (%chunk-facets (hit-chunk hit))
+    (make-evidence :chunk (hit-chunk hit)
+                   :score (hit-score hit)
+                   :method method
+                   :extent extent
+                   :box box
+                   :standing :indeterminate)))
 
 (defmethod collect-evidence ((source dense-source) query &key (k 5) bounds)
   (declare (ignore bounds))
@@ -106,6 +119,7 @@ asking for K never gets back up to 2K (cl-llm#13).  Sources still receive
                                      :confidence (evidence-confidence e)
                                      :precision (evidence-precision e)
                                      :extent (evidence-extent e)
+                                     :box (evidence-box e)
                                      :standing (evidence-standing e)))))
       (make-bundle
        :query query

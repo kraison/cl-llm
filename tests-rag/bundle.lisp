@@ -288,3 +288,63 @@ window it cares about and lets the region follow from the evidence."
   (let ((b (rag:plan-bounds '())))
     (is (eq :indeterminate (rag:bounds-box-standing b)))
     (is (eq :indeterminate (rag:bounds-window-standing b)))))
+
+(test a-source-reads-facets-from-chunk-metadata
+  "Metadata carries the extent as its SEXP -- plain data, so it survives
+persistence through any store -- and the box as four numbers."
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (store (rag:make-memory-store))
+         (extent (%interval 2001 2002)))
+    (rag:store-add
+     store (list (rag:make-chunk "anti-tank mine" :document-id "d1"
+                                 :metadata (list :extent
+                                                 (temporal-extent:extent->sexp
+                                                  extent)
+                                                 :box '(0 0 1 1))
+                                 :embedding (rag:embed embedder "anti-tank"))))
+    (let ((ev (rag:collect-evidence (rag:make-dense-source embedder store)
+                                    "anti-tank" :k 1)))
+      (is (temporal-extent:temporal-extent-p (rag:evidence-extent (first ev))))
+      (is (equal '(0 0 1 1) (rag:evidence-box (first ev)))))))
+
+(test a-chunk-without-facet-metadata-yields-nil-facets
+  "The map-less tenant's normal case: no keys, no facets, no error."
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (store (rag:make-memory-store)))
+    (rag:store-add
+     store (list (rag:make-chunk "plain" :document-id "d1"
+                                 :embedding (rag:embed embedder "plain"))))
+    (let ((ev (rag:collect-evidence (rag:make-dense-source embedder store)
+                                    "plain" :k 1)))
+      (is (null (rag:evidence-extent (first ev))))
+      (is (null (rag:evidence-box (first ev)))))))
+
+(test a-malformed-extent-sexp-in-metadata-signals
+  "⚠ A corrupt facet is a definition mistake, not an absence.  Silently
+reading it as NIL would make a broken corpus look like a map-less one."
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (store (rag:make-memory-store)))
+    (rag:store-add
+     store (list (rag:make-chunk "bad" :document-id "d1"
+                                 :metadata '(:extent (:not-an-extent 9))
+                                 :embedding (rag:embed embedder "bad"))))
+    (signals temporal-extent:invalid-extent
+      (rag:collect-evidence (rag:make-dense-source embedder store)
+                            "bad" :k 1))))
+
+(test fuse-retains-the-box
+  "⚠ FUSE rebuilds EVIDENCE field by field; BOX must survive the rebuild or
+Task 5's filter sees nothing (cl-llm#13 unit 2, task 4)."
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (dense-store (rag:make-memory-store))
+         (sparse-store (rag:make-sparse-store))
+         (chunk (rag:make-chunk "TM-62 anti-tank mine" :document-id "d1"
+                                :metadata '(:box (0 0 1 1))
+                                :embedding (rag:embed embedder "TM-62"))))
+    (rag:store-add dense-store (list chunk))
+    (rag:store-add sparse-store (list chunk))
+    (let ((b (rag:fuse (list (rag:make-dense-source embedder dense-store)
+                             (rag:make-sparse-source sparse-store))
+                       "TM-62" :k 5)))
+      (is (equal '(0 0 1 1)
+                 (rag:evidence-box (first (rag:bundle-evidence b))))))))
