@@ -75,3 +75,20 @@ calls to prove the dataset thunk re-evaluates.")
 
 (test find-suite-unknown-signals
   (signals eval:llm-eval-error (eval:find-suite 'no-such-suite)))
+
+(test a-variant-without-a-run-fn-is-unchanged
+  "⚠ The generalisation must not alter existing behaviour: every variant in
+every existing suite has no RUN-FN."
+  (let ((v (eval:parse-variant (list :model "m" :label "plain"))))
+    (is (null (eval:variant-run-fn v)))
+    (is (string= "plain" (eval:variant-label v)))
+    (is (equal '(:model "m") (eval:variant-args v)))))
+
+(test a-run-fn-is-stripped-from-the-args-forwarded-to-ask
+  "RUN-FN is an eval-only key, like :LABEL and :PROMPT-FN -- forwarding it to
+ASK would make it a model parameter."
+  (let ((v (eval:parse-variant
+            (list :model "m" :run-fn (lambda (case)
+                                        (declare (ignore case)) :b)))))
+    (is (functionp (eval:variant-run-fn v)))
+    (is (equal '(:model "m") (eval:variant-args v)))))

@@ -4,12 +4,16 @@
 
 ;;; Variants
 
-(defstruct (variant (:constructor %make-variant (label args prompt-fn)))
+(defstruct (variant (:constructor %make-variant (label args prompt-fn
+                                                 &optional run-fn)))
   "One point in the grid: a LABEL, a plist of ARGS forwarded to ASK, and a
-PROMPT-FN of (case) -> prompt string."
+PROMPT-FN of (case) -> prompt string.  RUN-FN, when given, replaces the model
+call entirely: it takes the case and returns whatever the scorers grade, so
+the harness can measure a retrieval bundle and not only a reply."
   (label "" :type string)
   (args nil :type list)
-  (prompt-fn nil :type function))
+  (prompt-fn nil :type function)
+  (run-fn nil))
 
 (defun compact-label (args)
   "A short human label from a variant's forwarded ARGS."
@@ -20,20 +24,22 @@ PROMPT-FN of (case) -> prompt string."
           do (format out "~(~a~)=~a" key value))))
 
 (defun parse-variant (plist)
-  "Turn a variant PLIST into a VARIANT, stripping the eval-only keys :label and
-:prompt-fn from the args forwarded to ASK."
+  "Turn a variant PLIST into a VARIANT, stripping the eval-only keys :label,
+:prompt-fn and :run-fn from the args forwarded to ASK."
   (when (oddp (length plist))
     (error 'llm-eval-error
            :message (format nil "malformed variant plist (odd length): ~s" plist)))
-  (let ((args '()) (label nil) (prompt-fn nil))
+  (let ((args '()) (label nil) (prompt-fn nil) (run-fn nil))
     (loop for (key value) on plist by #'cddr
           do (case key
                (:label (setf label value))
                (:prompt-fn (setf prompt-fn value))
+               (:run-fn (setf run-fn value))
                (t (setf args (append args (list key value))))))
     (%make-variant (or label (compact-label args))
                    args
-                   (or prompt-fn #'case-input))))
+                   (or prompt-fn #'case-input)
+                   run-fn)))
 
 ;;; Suites
 

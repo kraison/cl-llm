@@ -13,6 +13,7 @@
    #:register-scorer #:find-scorer #:run-scorer #:exact-match
    #:defjudge #:parse-judge-score
    #:variant #:parse-variant #:variant-label #:variant-args #:variant-prompt-fn
+   #:variant-run-fn
    #:suite #:defsuite #:suite-name #:suite-dataset-fn #:suite-variants
    #:suite-scorers #:register-suite #:find-suite
    #:*eval-map* #:run-suite

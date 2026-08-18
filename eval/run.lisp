@@ -30,20 +30,31 @@ Only the model call is protected: an ASK failure becomes an error cell, but a
 scorer's LLM-EVAL-ERROR (a harness/dataset misuse) propagates out of the run,
 per the spec -- it is a definition mistake to surface immediately, not an API
 outage to record."
-  (let ((prompt (funcall (variant-prompt-fn variant) case)))
-    ;; ASK returns (values text response); we need the RESPONSE object (the
-    ;; second value), not the text, since scorers take a response.
-    (multiple-value-bind (response error)
-        (handler-case
-            (values (nth-value 1 (apply #'llm:ask prompt (variant-args variant))) nil)
-          (c:llm-error (e) (values nil e)))
-      (if error
-          (%make-cell case (variant-label variant) nil nil error)
-          (%make-cell case (variant-label variant) response
-                      (loop for scorer in scorers
-                            collect (scorer-name scorer)
-                            collect (run-scorer scorer case response))
-                      nil)))))
+  (if (variant-run-fn variant)
+      ;; A RUN-FN produces the graded artifact directly; no model is called,
+      ;; so there is no LLM-ERROR to convert into an error cell.
+      (let ((response (funcall (variant-run-fn variant) case)))
+        (%make-cell case (variant-label variant) response
+                    (loop for scorer in scorers
+                          collect (scorer-name scorer)
+                          collect (run-scorer scorer case response))
+                    nil))
+      (let ((prompt (funcall (variant-prompt-fn variant) case)))
+        ;; ASK returns (values text response); we need the RESPONSE object
+        ;; (the second value), not the text, since scorers take a response.
+        (multiple-value-bind (response error)
+            (handler-case
+                (values (nth-value 1 (apply #'llm:ask prompt
+                                             (variant-args variant)))
+                        nil)
+              (c:llm-error (e) (values nil e)))
+          (if error
+              (%make-cell case (variant-label variant) nil nil error)
+              (%make-cell case (variant-label variant) response
+                          (loop for scorer in scorers
+                                collect (scorer-name scorer)
+                                collect (run-scorer scorer case response))
+                          nil))))))
 
 (defun run-suite (name-or-suite &key provider)
   "Run a suite and return a SUITE-RESULT. When PROVIDER is given it is bound to
