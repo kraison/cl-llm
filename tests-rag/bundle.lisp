@@ -266,3 +266,25 @@ union over extents that share one moment MUST build an instant."
                                (%ev-at "c")))
     (is (eq :inferred standing))
     (is (equal '(0 -1 3 2) b) "the enclosing box, not the first one")))
+
+(test supplied-bounds-win-and-are-asserted
+  (let ((b (rag:plan-bounds (list (%ev-at "a" :extent (%interval 2001 2002)))
+                            :box '(9 9 10 10))))
+    (is (equal '(9 9 10 10) (rag:bounds-box b)))
+    (is (eq :asserted (rag:bounds-box-standing b))
+        "the caller asserts the scope; it was not derived")))
+
+(test the-two-halves-resolve-independently
+  "⚠ The reason the bounders are separate operations: an agent pins the
+window it cares about and lets the region follow from the evidence."
+  (let* ((seeds (list (%ev-at "a" :extent (%interval 2001 2002)
+                                  :box '(0 0 1 1))))
+         (b (rag:plan-bounds seeds :window (%interval 1990 1991))))
+    (is (eq :asserted (rag:bounds-window-standing b)))
+    (is (eq :inferred (rag:bounds-box-standing b)))
+    (is (equal '(0 0 1 1) (rag:bounds-box b)))))
+
+(test planning-over-nothing-is-indeterminate-on-both-halves
+  (let ((b (rag:plan-bounds '())))
+    (is (eq :indeterminate (rag:bounds-box-standing b)))
+    (is (eq :indeterminate (rag:bounds-window-standing b)))))

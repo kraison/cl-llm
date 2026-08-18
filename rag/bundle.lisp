@@ -178,3 +178,15 @@ saying how it was arrived at.  Same vocabulary as TEMPORAL-BOUND."
     (cond ((null evidence) (values nil :indeterminate))
           ((null boxes) (values nil :searched-empty))
           (t (values (%union-boxes boxes) :inferred)))))
+
+(defun plan-bounds (evidence &key box window)
+  "The scope to retrieve inside: BOX and WINDOW when supplied, otherwise
+derived from EVIDENCE.  Each half resolves independently, so a caller may
+pin one and let the other follow.  A supplied value is :ASSERTED."
+  (multiple-value-bind (derived-box box-standing) (spatial-bound evidence)
+    (multiple-value-bind (derived-window window-standing)
+        (temporal-bound evidence)
+      (make-bounds :box (or box derived-box)
+                   :box-standing (if box :asserted box-standing)
+                   :window (or window derived-window)
+                   :window-standing (if window :asserted window-standing)))))
