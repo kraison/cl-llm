@@ -35,6 +35,7 @@
    #:sparse-source #:make-sparse-source #:fuse
    #:bounds #:make-bounds #:bounds-box #:bounds-box-standing
    #:bounds-window #:bounds-window-standing #:evidence-box
+   #:temporal-bound #:spatial-bound
    ;; grows in later tasks
    ))
 

@@ -125,3 +125,56 @@ empty the moment a region existed (design, cl-llm#13 unit 2)."
   (box-standing :indeterminate)
   (window nil)                   ; a TEMPORAL-EXTENT, or NIL
   (window-standing :indeterminate))
+
+(defun %extent-earliest (e)
+  (temporal-extent:bound-earliest (temporal-extent:extent-start e)))
+
+(defun %extent-latest (e)
+  (temporal-extent:bound-latest (temporal-extent:extent-end e)))
+
+(defun %union-extents (extents)
+  "The enclosing extent of EXTENTS.  An :UNBOUNDED edge swallows everything
+past it.  ⚠ Builds an INSTANT when the two edges coincide exactly --
+MAKE-INTERVAL signals on equal exact bounds."
+  (let* ((lo (if (some (lambda (e) (eq :unbounded (%extent-earliest e)))
+                       extents)
+                 :unbounded
+                 (reduce (lambda (a b) (if (local-time:timestamp< a b) a b))
+                         (mapcar #'%extent-earliest extents))))
+         (hi (if (some (lambda (e) (eq :unbounded (%extent-latest e)))
+                       extents)
+                 :unbounded
+                 (reduce (lambda (a b) (if (local-time:timestamp< a b) b a))
+                         (mapcar #'%extent-latest extents))))
+         (start (temporal-extent:make-bound lo lo))
+         (end (temporal-extent:make-bound hi hi)))
+    (if (eq := (temporal-extent:bound-compare start end))
+        (temporal-extent:make-instant start :semantics :validity
+                                            :standing :inferred)
+        (temporal-extent:make-interval start end :semantics :validity
+                                                 :standing :inferred))))
+
+(defun temporal-bound (evidence)
+  "Two values: the enclosing TEMPORAL-EXTENT of EVIDENCE's extents, and the
+standing saying how it was arrived at -- :INFERRED when derived,
+:SEARCHED-EMPTY when nothing carried one, :INDETERMINATE when there was
+nothing to look at (design, cl-llm#13 unit 2)."
+  (let ((extents (remove nil (mapcar #'evidence-extent evidence))))
+    (cond ((null evidence) (values nil :indeterminate))
+          ((null extents) (values nil :searched-empty))
+          (t (values (%union-extents extents) :inferred)))))
+
+(defun %union-boxes (boxes)
+  "The enclosing (MIN-LON MIN-LAT MAX-LON MAX-LAT) of BOXES."
+  (list (reduce #'min (mapcar #'first boxes))
+        (reduce #'min (mapcar #'second boxes))
+        (reduce #'max (mapcar #'third boxes))
+        (reduce #'max (mapcar #'fourth boxes))))
+
+(defun spatial-bound (evidence)
+  "Two values: the enclosing box of EVIDENCE's boxes, and the standing
+saying how it was arrived at.  Same vocabulary as TEMPORAL-BOUND."
+  (let ((boxes (remove nil (mapcar #'evidence-box evidence))))
+    (cond ((null evidence) (values nil :indeterminate))
+          ((null boxes) (values nil :searched-empty))
+          (t (values (%union-boxes boxes) :inferred)))))

@@ -199,3 +199,70 @@ a filter reads one place regardless of where the facet came from."
                               :method :dense :box '(1 2 3 4))))
     (is (equal '(1 2 3 4) (rag:evidence-box e)))
     (is (null (rag:evidence-extent e)))))
+
+(defun %ev-at (doc-id &key extent box)
+  (rag:make-evidence :chunk (rag:make-chunk (format nil "t-~a" doc-id)
+                                            :document-id doc-id)
+                     :method :dense :extent extent :box box))
+
+(defun %interval (y1 y2)
+  (temporal-extent:make-interval
+   (temporal-extent:exact-bound
+    (local-time:parse-timestring (format nil "~a-01-01T00:00:00Z" y1)))
+   (temporal-extent:exact-bound
+    (local-time:parse-timestring (format nil "~a-01-01T00:00:00Z" y2)))
+   :semantics :validity))
+
+(test temporal-bound-reports-indeterminate-when-there-is-nothing-to-look-at
+  "⚠ :INDETERMINATE and :SEARCHED-EMPTY are the pair most easily conflated,
+and conflating them is the failure this vocabulary exists to prevent."
+  (multiple-value-bind (w standing) (rag:temporal-bound '())
+    (is (null w))
+    (is (eq :indeterminate standing))))
+
+(test temporal-bound-reports-searched-empty-when-no-seed-carries-an-extent
+  (multiple-value-bind (w standing)
+      (rag:temporal-bound (list (%ev-at "a") (%ev-at "b")))
+    (is (null w))
+    (is (eq :searched-empty standing))))
+
+(test a-derived-window-encloses-every-seed-extent-and-is-inferred
+  (multiple-value-bind (w standing)
+      (rag:temporal-bound (list (%ev-at "a" :extent (%interval 2001 2002))
+                                (%ev-at "b" :extent (%interval 2005 2006))
+                                (%ev-at "c")))
+    (is (eq :inferred standing)
+        "a derived bound is INFERRED -- it was not observed")
+    (is (local-time:timestamp=
+         (local-time:parse-timestring "2001-01-01T00:00:00Z")
+         (temporal-extent:bound-earliest (temporal-extent:extent-start w))))
+    (is (local-time:timestamp=
+         (local-time:parse-timestring "2006-01-01T00:00:00Z")
+         (temporal-extent:bound-latest (temporal-extent:extent-end w))))))
+
+(test a-window-derived-from-one-instant-is-an-instant-not-an-interval
+  "⚠ MAKE-INTERVAL signals when its two bounds are exact and equal, so a
+union over extents that share one moment MUST build an instant."
+  (let* ((ts (local-time:parse-timestring "2003-03-03T00:00:00Z"))
+         (inst (temporal-extent:make-instant (temporal-extent:exact-bound ts)
+                                             :semantics :validity)))
+    (multiple-value-bind (w standing)
+        (rag:temporal-bound (list (%ev-at "a" :extent inst)
+                                  (%ev-at "b" :extent inst)))
+      (is (eq :inferred standing))
+      (is (temporal-extent:extent-instant-p w)))))
+
+(test spatial-bound-mirrors-the-temporal-one
+  (multiple-value-bind (b standing) (rag:spatial-bound '())
+    (is (null b))
+    (is (eq :indeterminate standing)))
+  (multiple-value-bind (b standing)
+      (rag:spatial-bound (list (%ev-at "a") (%ev-at "b")))
+    (is (null b))
+    (is (eq :searched-empty standing)))
+  (multiple-value-bind (b standing)
+      (rag:spatial-bound (list (%ev-at "a" :box '(0 0 2 2))
+                               (%ev-at "b" :box '(1 -1 3 1))
+                               (%ev-at "c")))
+    (is (eq :inferred standing))
+    (is (equal '(0 -1 3 2) b) "the enclosing box, not the first one")))
