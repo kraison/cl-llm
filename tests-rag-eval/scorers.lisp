@@ -10,6 +10,14 @@
     (is (= 0.0d0 (eval:score-value
                   (re:bundle-recall-at-k case (%bundle '("a" "c"))))))))
 
+(test recall-at-k-signals-on-a-case-with-no-expected
+  "⚠ A dataset/harness mistake -- an eval case nobody populated -- must
+signal, not silently score 1.0d0 (EVERY over NIL expected is vacuously
+true).  Same principle as EXACT-MATCH (eval/scorer.lisp)."
+  (let ((case (eval:make-case "q")))
+    (signals eval:llm-eval-error
+      (re:bundle-recall-at-k case (%bundle '("a"))))))
+
 (test containment-catches-evidence-with-no-real-chunk
   "⚠ A fabricated citation must be catchable deterministically, not merely
 instructed against."
@@ -22,6 +30,20 @@ instructed against."
                                                   :standing :indeterminate))
                :modes '(:dense))))
     (is (= 1.0d0 (eval:score-value (re:bundle-containment case good))))
+    (is (= 0.0d0 (eval:score-value (re:bundle-containment case bad))))))
+
+(test containment-catches-a-chunk-with-no-document-id
+  "⚠ The other half of the guard: a chunk that EXISTS but carries no
+document id is just as fabricated as no chunk at all."
+  (let* ((case (eval:make-case "q" :expected '("a")))
+         (bad (rag:make-bundle
+               :query "q"
+               :evidence (list (rag:make-evidence
+                                :chunk (rag:make-chunk "text"
+                                                       :document-id nil)
+                                :score 1.0d0 :method :dense
+                                :standing :indeterminate))
+               :modes '(:dense))))
     (is (= 0.0d0 (eval:score-value (re:bundle-containment case bad))))))
 
 (test standing-well-formed-rejects-nil-and-non-vocabulary

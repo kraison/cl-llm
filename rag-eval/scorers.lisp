@@ -9,8 +9,14 @@
         when chunk collect (rag:chunk-document-id chunk)))
 
 (eval:defscorer bundle-recall-at-k (case bundle)
-  "1.0 when every expected document id appears in BUNDLE, else 0.0."
+  "1.0 when every expected document id appears in BUNDLE, else 0.0.
+Signals LLM-EVAL-ERROR when CASE has no :EXPECTED -- an unpopulated case
+is a dataset/harness mistake, not a retrieval outcome to score (cl-llm#13
+unit 1); same principle as EXACT-MATCH (eval/scorer.lisp)."
   (let ((expected (eval:case-expected case)))
+    (unless expected
+      (error 'eval:llm-eval-error
+             :message "bundle-recall-at-k needs a case with :expected ids"))
     (eval:score (if (and bundle
                          (every (lambda (id)
                                   (member id (%bundle-doc-ids bundle)
