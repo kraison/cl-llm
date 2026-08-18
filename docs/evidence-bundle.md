@@ -136,9 +136,10 @@ parameter ahead of the mechanism that would use it; unit 2 (§9) is that
 mechanism. Both `dense-source` and `sparse-source` now filter their
 results through `bounded-evidence` before returning them, so a caller
 that passes `:bounds` gets a scoped list back, not the unfiltered one.
-`fuse` does not yet thread `:bounds` through to its sources — see §9's
-last note. Unit 3's claim expansion becomes a third `collect-evidence`
-method on this same generic.
+`fuse` does not yet thread `:bounds` through to its sources — see §9.6,
+which also states what applying the bound as a post-filter costs. Unit
+3's claim expansion becomes a third `collect-evidence` method on this
+same generic.
 
 `fuse` is what turns several sources into one bundle:
 
@@ -409,10 +410,12 @@ model, not a stub of it.
 ## 9. The retrieval planner (unit 2)
 
 Unit 2 gives the `bounds` parameter (§4) a producer and a meaning: it
-bounds the region and window retrieval runs inside, *before* retrieval
-runs, rather than approximating relevance by hop count once results are
-back. The planner's output is a **scope**, not a ranking — weighting
-within that scope is unit 3's problem.
+bounds the region and window an answer is drawn from, rather than
+approximating relevance by hop count once results are back. The planner's
+output is a **scope**, not a ranking — weighting within that scope is unit
+3's problem. How that scope is *applied* today is a post-filter over each
+source's results rather than a restriction pushed into the store; §9.6
+says plainly what that costs a caller.
 
 ### 9.1 `bounds`: two halves, two reasons
 
@@ -429,6 +432,14 @@ because the two facets are not equally available: a document corpus can
 have perfectly good validity time and no spatial facet at all. A shared
 standing would force a lie about one of them. Both halves default to
 `:indeterminate`, matching how `evidence-standing` defaults (§2).
+
+**Three standings coexist here and two of them may legitimately
+disagree.** `evidence-standing` (§3) says how *that item* came to be
+retrieved; the extent's own `temporal-extent:extent-standing` says how
+*the facet* was known; `bounds-box-standing`/`bounds-window-standing` say
+how *the bound* was arrived at — derived, asserted, or not arrived at.
+A window `:inferred` from seeds whose extents are each `:observed` is not
+a contradiction; the three answer different questions.
 
 The region is a **bounding box of four numbers, not a polygon**. Precise
 containment needs real geometry, and real geometry needs the graph
@@ -507,8 +518,15 @@ survive persistence through any store:
 - **`:box`** — four numbers, `(min-lon min-lat max-lon max-lat)`.
 
 **The two keys degrade differently, on purpose.** A malformed `:extent`
-**signals** `temporal-extent:invalid-extent` — bad temporal data is a
-definition mistake, not something to silently read as absence. A
+**signals**, because bad temporal data is a definition mistake rather than
+something to read silently as absence. What it signals is a
+`temporal-extent:spacetime-error`, that library's documented root
+condition: `invalid-extent` for a bad shape, tag, version, kind or
+precision, `invalid-bound` for a bad endpoint, `invalid-standing` for a
+bad standing. A caller that wants to catch all of them handles the root
+rather than `invalid-extent` alone; what `sexp->extent` guarantees is
+that no *raw* error (a `type-error`, a `program-error`) ever escapes it,
+which is what makes it safe to point at untrusted chunk metadata. A
 malformed `:box` — wrong arity, a non-`REAL` element, an improper list,
 or not a list at all — **reads as absent**, `NIL`, rather than signalling
 or being passed through unchecked: a corrupted box degrades instead of
@@ -518,12 +536,44 @@ which only ever acts on a facet it is sure of. `dense-source` and
 when present and leave them `NIL` when absent — a chunk with neither key
 behaves exactly as it did before this unit.
 
-### 9.6 What honours a bound today
+### 9.6 What honours a bound today, and how it is applied
 
 `dense-source` and `sparse-source` both filter through
 `bounded-evidence` before returning, so `(collect-evidence source query
-:bounds b)` scopes either source on its own. **`fuse` does not yet
-thread `:bounds` through to its sources** — it has no `:bounds` keyword
-at all — so a hybrid query built via `fuse` cannot be bounded yet. This
-is a current gap, not a design decision; wiring it through is unstarted
-work.
+:bounds b)` scopes either source on its own.
+
+**The bound is a post-filter over each source's top-`k`, not
+pre-retrieval scoping.** `collect-evidence` calls
+`store-search`/`sparse-search` with `k` first and drops the
+known-outside items from what comes back. The consequence a caller sees:
+a bounded query returns **at most `k`, and may return fewer than the same
+unbounded query would**. Ask for `:k 5` inside a window and you can get
+back 2, or 0, while the store still holds fifty in-bounds chunks that
+ranked below the unfiltered top 5. That is intended behaviour, not a bug
+— but it is the same shape as the "asking for `k` gets back fewer than
+`k`" defect this repo has already fixed once (#17), so it is stated here
+rather than left to be discovered. Pushing the bound down into a store's
+own search, so that `k` is filled from in-bounds candidates, needs a
+store-level predicate that does not exist yet; it is tracked as #19.
+
+**`fuse` does not yet thread `:bounds` through to its sources** — it has
+no `:bounds` keyword at all — so a hybrid query built via `fuse` cannot
+be bounded yet. This is a current gap, not a design decision; it is
+tracked as #18.
+
+### 9.7 What unit 2 does not do
+
+- **No ranking.** The bound decides what is in play; weighting by spatial
+  precision and temporal relation is unit 3.
+- **No real geometry.** A box, not a polygon (§9.1). Precise containment
+  needs the engine, and belongs with the claim traversal that already
+  needs it.
+- **No query parsing.** The planner is deterministic: it derives a scope
+  from evidence or takes one from its caller. Deriving a bound from the
+  *text* of a question is an LLM's job and lands, if ever, behind the
+  capstone's constraint validator — which is also why `temporal-bound`
+  and `spatial-bound` are separately callable operations rather than one
+  opaque function.
+- **No claim traversal.** Seeds come from the two retrieval modes that
+  exist.
+- **No push-down into the store.** §9.6, tracked as #19.

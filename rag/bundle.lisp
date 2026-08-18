@@ -153,7 +153,10 @@ asking for K never gets back up to 2K (cl-llm#13).  Sources still receive
   "The scope retrieval runs inside: a region and a window, each with its own
 reason.  A bound EXCLUDES ONLY WHAT IS KNOWN TO FALL OUTSIDE IT -- evidence
 whose facet is absent is never excluded, or a corpus with no geometry would
-empty the moment a region existed (design, cl-llm#13 unit 2)."
+empty the moment a region existed (design, cl-llm#13 unit 2).
+⚠ BOX is trusted: it must be four REALs.  Unlike a metadata box, which is
+untrusted data and so is validated, a caller-supplied one is not -- a
+malformed one type-errors in the filter (cl-llm#13 final review, M5)."
   (box nil)                      ; (min-lon min-lat max-lon max-lat), or NIL
   (box-standing :indeterminate)
   (window nil)                   ; a TEMPORAL-EXTENT, or NIL
@@ -168,7 +171,9 @@ empty the moment a region existed (design, cl-llm#13 unit 2)."
 (defun %union-extents (extents)
   "The enclosing extent of EXTENTS.  An :UNBOUNDED edge swallows everything
 past it.  ⚠ Builds an INSTANT when the two edges coincide exactly --
-MAKE-INTERVAL signals on equal exact bounds."
+MAKE-INTERVAL signals on equal exact bounds.  The result is always labelled
+:VALIDITY, so a window derived wholly from :EVENT extents is relabelled;
+nothing reads the label today (cl-llm#13 final review, M3)."
   (let* ((lo (if (some (lambda (e) (eq :unbounded (%extent-earliest e)))
                        extents)
                  :unbounded
@@ -215,7 +220,11 @@ saying how it was arrived at.  Same vocabulary as TEMPORAL-BOUND."
 (defun plan-bounds (evidence &key box window)
   "The scope to retrieve inside: BOX and WINDOW when supplied, otherwise
 derived from EVIDENCE.  Each half resolves independently, so a caller may
-pin one and let the other follow.  A supplied value is :ASSERTED."
+pin one and let the other follow.  A supplied value is :ASSERTED.
+⚠ A supplied BOX must be four REALs, (MIN-LON MIN-LAT MAX-LON MAX-LAT).
+That is the caller's contract to keep: it is not validated here, because
+swallowing caller misuse silently is worse than the type error a malformed
+one raises downstream (cl-llm#13 final review, M5)."
   (multiple-value-bind (derived-box box-standing) (spatial-bound evidence)
     (multiple-value-bind (derived-window window-standing)
         (temporal-bound evidence)

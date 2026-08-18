@@ -322,14 +322,18 @@ ordering as the regression contract; it depends on both `cl-llm/rag` and
 `cl-llm/eval`, and, like `cl-llm/rag` itself, adds no graph dependency.
 
 A retrieval **planner** (`rag:plan-bounds`, `rag:temporal-bound`,
-`rag:spatial-bound`) scopes retrieval *before* it runs: it bounds the
-region and window from the evidence at hand (or a caller-supplied one),
-and `dense-source`/`sparse-source` honour that bound via
-`rag:bounded-evidence`, excluding only evidence known to lie outside it.
-It lives in `cl-llm/rag` with no graph dependency, same as the bundle
-itself. See [`docs/evidence-bundle.md`](docs/evidence-bundle.md) for the
-records, the scorers, the planner, and what each unit does and does not
-do.
+`rag:spatial-bound`) derives a **scope** — a region and a window, each
+carrying its own standing — from the evidence at hand or from a
+caller-supplied value, and `dense-source`/`sparse-source` honour it via
+`rag:bounded-evidence`, excluding only evidence *known* to lie outside
+it. The bound is applied as a **post-filter over each source's top-`k`**,
+not pushed down into the store, so a bounded query returns at most `k`
+and may return fewer than the same unbounded query would. That is
+intended for now; pushing the bound into the store's own search is
+future work. The planner lives in `cl-llm/rag` with no graph dependency,
+same as the bundle itself. See
+[`docs/evidence-bundle.md`](docs/evidence-bundle.md) for the records, the
+scorers, the planner, and what each unit does and does not do.
 
 ## Testing
 
