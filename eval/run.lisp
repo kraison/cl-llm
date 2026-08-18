@@ -29,7 +29,9 @@ captured ERROR condition (or NIL)."
 Only the model call is protected: an ASK failure becomes an error cell, but a
 scorer's LLM-EVAL-ERROR (a harness/dataset misuse) propagates out of the run,
 per the spec -- it is a definition mistake to surface immediately, not an API
-outage to record."
+outage to record. A RUN-FN error is the same kind as the latter -- the
+harness or the thing under test is broken -- so it too propagates uncaught,
+never becomes an error cell."
   (if (variant-run-fn variant)
       ;; A RUN-FN produces the graded artifact directly; no model is called,
       ;; so there is no LLM-ERROR to convert into an error cell.
