@@ -31,6 +31,8 @@
    #:evidence-method #:evidence-source #:evidence-confidence
    #:evidence-precision #:evidence-extent #:evidence-standing
    #:bundle #:make-bundle #:bundle-query #:bundle-evidence #:bundle-modes
+   #:collect-evidence #:dense-source #:make-dense-source
+   #:sparse-source #:make-sparse-source #:fuse
    ;; grows in later tasks
    ))
 

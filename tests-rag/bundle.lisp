@@ -53,3 +53,71 @@ what the graph-free dependency bought (vivace-graph#159)."
   "A caller who never sets :STANDING gets :INDETERMINATE, not NIL -- the
 default that keeps the struct's docstring honest."
   (is (eq :indeterminate (rag:evidence-standing (rag:make-evidence)))))
+
+(defun %bundle-doc-ids (bundle)
+  (mapcar (lambda (e) (rag:chunk-document-id (rag:evidence-chunk e)))
+          (rag:bundle-evidence bundle)))
+
+(test a-dense-source-produces-evidence-marked-dense
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (store (rag:make-memory-store)))
+    (rag:store-add
+     store
+     (list (rag:make-chunk "anti-tank mine fuze"
+                           :document-id "d1"
+                           :embedding (rag:embed embedder "anti-tank"))))
+    (let ((ev (rag:collect-evidence (rag:make-dense-source embedder store)
+                                    "anti-tank" :k 1)))
+      (is (= 1 (length ev)))
+      (is (eq :dense (rag:evidence-method (first ev))))
+      (is (eq :indeterminate (rag:evidence-standing (first ev))))
+      (is (string= "d1" (rag:chunk-document-id
+                         (rag:evidence-chunk (first ev))))))))
+
+(test a-sparse-source-produces-evidence-marked-sparse
+  (let ((store (rag:make-sparse-store)))
+    (rag:store-add store
+                   (list (rag:make-chunk "TM-62 fuze" :document-id "d2")))
+    (let ((ev (rag:collect-evidence (rag:make-sparse-source store)
+                                    "TM-62" :k 1)))
+      (is (= 1 (length ev)))
+      (is (eq :sparse (rag:evidence-method (first ev))))
+      (is (eq :indeterminate (rag:evidence-standing (first ev)))))))
+
+(test fuse-names-every-mode-that-contributed
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (dense-store (rag:make-memory-store))
+         (sparse-store (rag:make-sparse-store))
+         (chunk (rag:make-chunk "TM-62 anti-tank mine" :document-id "d1"
+                                :embedding (rag:embed embedder "TM-62"))))
+    (rag:store-add dense-store (list chunk))
+    (rag:store-add sparse-store (list chunk))
+    (let ((b (rag:fuse (list (rag:make-dense-source embedder dense-store)
+                             (rag:make-sparse-source sparse-store))
+                       "TM-62" :k 5)))
+      (is (string= "TM-62" (rag:bundle-query b)))
+      (is (member :dense (rag:bundle-modes b)))
+      (is (member :sparse (rag:bundle-modes b)))
+      (is (every (lambda (e) (rag:evidence-standing e))
+                 (rag:bundle-evidence b))))))
+
+(test fusion-order-is-deterministic
+  "⚠ Ordering is the regression contract, so it must not depend on hash
+order or on which source answered first."
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (dense-store (rag:make-memory-store))
+         (sparse-store (rag:make-sparse-store))
+         (chunks
+           (list (rag:make-chunk "alpha mine" :document-id "a"
+                                 :embedding (rag:embed embedder "alpha"))
+                 (rag:make-chunk "beta mine" :document-id "b"
+                                :embedding (rag:embed embedder "beta"))
+                 (rag:make-chunk "gamma mine" :document-id "c"
+                                :embedding (rag:embed embedder "gamma")))))
+    (rag:store-add dense-store chunks)
+    (rag:store-add sparse-store chunks)
+    (let* ((sources (list (rag:make-dense-source embedder dense-store)
+                          (rag:make-sparse-source sparse-store)))
+           (first-run (%bundle-doc-ids (rag:fuse sources "mine" :k 3)))
+           (second-run (%bundle-doc-ids (rag:fuse sources "mine" :k 3))))
+      (is (equal first-run second-run)))))

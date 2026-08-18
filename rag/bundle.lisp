@@ -24,3 +24,84 @@ a reordering is a regression, so nothing may sort it on the way out."
   (query "")
   (evidence nil)
   (modes nil))
+
+(defgeneric collect-evidence (source query &key k bounds)
+  (:documentation "Return a list of EVIDENCE for QUERY, best first.
+BOUNDS is the planner's region/window and is accepted by every method; unit
+1's sources ignore it (cl-llm#13 unit 2 supplies it)."))
+
+(defclass dense-source ()
+  ((embedder :initarg :embedder :reader dense-source-embedder)
+   (store :initarg :store :reader dense-source-store))
+  (:documentation "Vector retrieval as a bundle source."))
+
+(defun make-dense-source (embedder store)
+  (make-instance 'dense-source :embedder embedder :store store))
+
+(defclass sparse-source ()
+  ((store :initarg :store :reader sparse-source-store))
+  (:documentation "Sparse (BM25) retrieval as a bundle source."))
+
+(defun make-sparse-source (store)
+  (make-instance 'sparse-source :store store))
+
+(defun %hit->evidence (hit method)
+  "Wrap HIT as EVIDENCE attributed to METHOD.  STANDING is :INDETERMINATE:
+no claim has been consulted, which is not the same as having consulted one
+and found nothing (that is :SEARCHED-EMPTY, cl-llm#13 unit 3)."
+  (make-evidence :chunk (hit-chunk hit)
+                 :score (hit-score hit)
+                 :method method
+                 :standing :indeterminate))
+
+(defmethod collect-evidence ((source dense-source) query &key (k 5) bounds)
+  (declare (ignore bounds))
+  (mapcar (lambda (h) (%hit->evidence h :dense))
+          (store-search (dense-source-store source)
+                        (embed (dense-source-embedder source) query)
+                        k)))
+
+(defmethod collect-evidence ((source sparse-source) query &key (k 5) bounds)
+  (declare (ignore bounds))
+  (mapcar (lambda (h) (%hit->evidence h :sparse))
+          (sparse-search (sparse-source-store source) query k)))
+
+(defun %evidence->hit (evidence)
+  (make-hit (evidence-chunk evidence) (evidence-score evidence)))
+
+(defun fuse (sources query &key (k 5))
+  "Collect evidence from each SOURCE and merge it into one ranked BUNDLE.
+Ranking is RECIPROCAL-RANK-FUSION over each source's list, which is why the
+sources' incomparable native scores never share a scale.  The bundle's
+order is the contract; nothing downstream may re-sort it."
+  (let* ((per-source (mapcar (lambda (s) (collect-evidence s query :k k))
+                             sources))
+         (by-key (make-hash-table :test 'equal))
+         (fused (reciprocal-rank-fusion
+                 (mapcar (lambda (evs) (mapcar #'%evidence->hit evs))
+                         per-source))))
+    ;; RECIPROCAL-RANK-FUSION works on HITs, so map back to the EVIDENCE
+    ;; that produced each chunk, preferring the first source that offered it.
+    (loop for evs in per-source
+          do (dolist (e evs)
+               (let ((key (chunk-document-id (evidence-chunk e))))
+                 (unless (gethash key by-key)
+                   (setf (gethash key by-key) e)))))
+    (make-bundle
+     :query query
+     :evidence (loop for h in fused
+                     for key = (chunk-document-id (hit-chunk h))
+                     for e = (gethash key by-key)
+                     when e
+                       collect (make-evidence
+                                :chunk (evidence-chunk e)
+                                :score (hit-score h)
+                                :method (evidence-method e)
+                                :source (evidence-source e)
+                                :confidence (evidence-confidence e)
+                                :precision (evidence-precision e)
+                                :extent (evidence-extent e)
+                                :standing (evidence-standing e)))
+     :modes (remove-duplicates
+             (loop for evs in per-source
+                   when evs collect (evidence-method (first evs)))))))
