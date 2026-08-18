@@ -77,6 +77,22 @@ that passes on NIL is worse than none."
                                    :evidence (list (%ev "a" :method nil))
                                    :modes '(:dense))))))))
 
+(test all-four-scorers-run-over-a-real-fuse-bundle
+  "⚠ I2, cl-llm#13: every test above grades the hand-built %BUNDLE fixture;
+none ever hands a scorer FUSE's real output.  Build the real sources,
+FUSE them, and score the result -- the third instance of a guarantee
+stated in one task (the scorers work on a BUNDLE) and assumed by another
+(FUSE produces one) with nothing spanning the join."
+  (let* ((sources (%fuse-fixture-sources))
+         (bundle (rag:fuse sources "mine" :k 7))
+         (case (eval:make-case "mine" :expected '("a"))))
+    (is (= 1.0d0 (eval:score-value (re:bundle-recall-at-k case bundle))))
+    (is (= 1.0d0 (eval:score-value (re:bundle-containment case bundle))))
+    (is (= 1.0d0
+           (eval:score-value (re:bundle-standing-well-formed case bundle))))
+    (is (= 1.0d0
+           (eval:score-value (re:bundle-method-attributed case bundle))))))
+
 ;;; The seam Task 3 exists for: a variant's RUN-FN, driven by the harness's
 ;;; own RUN-SUITE, feeding a BUNDLE straight into all four scorers -- the
 ;;; spec's acceptance criterion (cl-llm#13 unit 1), not exercised anywhere

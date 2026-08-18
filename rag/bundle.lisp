@@ -73,7 +73,11 @@ and found nothing (that is :SEARCHED-EMPTY, cl-llm#13 unit 3)."
   "Collect evidence from each SOURCE and merge it into one ranked BUNDLE.
 Ranking is RECIPROCAL-RANK-FUSION over each source's list, which is why the
 sources' incomparable native scores never share a scale.  The bundle's
-order is the contract; nothing downstream may re-sort it."
+order is the contract; nothing downstream may re-sort it.
+
+The result is truncated to :K, matching RETRIEVE (hybrid.lisp) -- a caller
+asking for K never gets back up to 2K (cl-llm#13).  Sources still receive
+:K as their own candidate depth."
   (let* ((per-source (mapcar (lambda (s) (collect-evidence s query :k k))
                              sources))
          (by-key (make-hash-table :test 'equal))
@@ -89,21 +93,24 @@ order is the contract; nothing downstream may re-sort it."
                (let ((key (%chunk-key (evidence-chunk e))))
                  (unless (gethash key by-key)
                    (setf (gethash key by-key) e)))))
-    (make-bundle
-     :query query
-     :evidence (loop for h in fused
-                     for key = (%chunk-key (hit-chunk h))
-                     for e = (gethash key by-key)
-                     when e
-                       collect (make-evidence
-                                :chunk (evidence-chunk e)
-                                :score (hit-score h)
-                                :method (evidence-method e)
-                                :source (evidence-source e)
-                                :confidence (evidence-confidence e)
-                                :precision (evidence-precision e)
-                                :extent (evidence-extent e)
-                                :standing (evidence-standing e)))
-     :modes (remove-duplicates
-             (loop for evs in per-source
-                   when evs collect (evidence-method (first evs)))))))
+    (let ((evidence (loop for h in fused
+                          for key = (%chunk-key (hit-chunk h))
+                          for e = (gethash key by-key)
+                          when e
+                            collect (make-evidence
+                                     :chunk (evidence-chunk e)
+                                     :score (hit-score h)
+                                     :method (evidence-method e)
+                                     :source (evidence-source e)
+                                     :confidence (evidence-confidence e)
+                                     :precision (evidence-precision e)
+                                     :extent (evidence-extent e)
+                                     :standing (evidence-standing e)))))
+      (make-bundle
+       :query query
+       ;; Truncate to :K -- FUSED can hold up to one entry per source, i.e.
+       ;; up to 2K before dedup (I3, cl-llm#13).
+       :evidence (subseq evidence 0 (min k (length evidence)))
+       :modes (remove-duplicates
+               (loop for evs in per-source
+                     when evs collect (evidence-method (first evs))))))))

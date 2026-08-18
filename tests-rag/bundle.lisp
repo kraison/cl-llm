@@ -146,3 +146,31 @@ order or on which source answered first."
            (first-run (%bundle-doc-ids (rag:fuse sources "mine" :k 3)))
            (second-run (%bundle-doc-ids (rag:fuse sources "mine" :k 3))))
       (is (equal first-run second-run)))))
+
+(test fuse-truncates-to-k-when-both-sources-return-more
+  "⚠ I3, cl-llm#13: RETRIEVE (hybrid.lisp) truncates to :K; FUSE did not,
+so a caller could get back up to 2K.  Seven chunks, :K 3: dense's top 3 by
+cosine are (a g e), sparse's top 3 by BM25 are (g e f) -- disjoint enough
+that the deduped, fused union is 4 items, more than :K, so this is a real
+truncation, not a no-op."
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (dense-store (rag:make-memory-store))
+         (sparse-store (rag:make-sparse-store))
+         (texts '(("a" . "mine")
+                  ("b" . "beta beta beta mine mine mine mine")
+                  ("c" . "gamma gamma mine mine mine")
+                  ("d" . "delta delta delta mine mine mine")
+                  ("e" . "iota mine mine mine")
+                  ("f" . "omicron omicron mine mine mine mine")
+                  ("g" . "epsilon mine mine mine mine")))
+         (chunks (mapcar (lambda (p)
+                            (rag:make-chunk (cdr p) :document-id (car p)
+                                            :embedding (rag:embed
+                                                        embedder (cdr p))))
+                          texts)))
+    (rag:store-add dense-store chunks)
+    (rag:store-add sparse-store chunks)
+    (let* ((sources (list (rag:make-dense-source embedder dense-store)
+                          (rag:make-sparse-source sparse-store)))
+           (b (rag:fuse sources "mine" :k 3)))
+      (is (<= (length (rag:bundle-evidence b)) 3)))))

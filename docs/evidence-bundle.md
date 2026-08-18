@@ -53,6 +53,15 @@ struct rather than a re-encoding of it — a real struct, not a shadow copy,
 which is what extracting the vocabulary into `cl-temporal-extent` bought
 (§7).
 
+**`method` names the first source that offered a chunk, not every source
+that found it.** `fuse` (§4) fills its lookup with `(unless (gethash key
+by-key) …)` across each source's evidence in the order the caller listed
+them, so a chunk both `dense-source` and `sparse-source` return is
+attributed to whichever of the two the caller put first — `method` reads
+`:dense` even though `:sparse` also matched. This is a known limitation
+(§8), not a bug fixed by reordering `sources`; changing which source
+"wins" a shared chunk is a design question a later unit owns.
+
 **`standing` is never `NIL`.** The slot defaults to `:indeterminate`, so a
 caller who builds an `evidence` without naming a standing gets a value
 that still says something, rather than an absence that says nothing. The
@@ -147,6 +156,14 @@ whichever evidence was seen first (fixed during implementation; see
 `rag/bundle.lisp`'s `fuse`). `bundle-modes` is the set of methods whose
 source lists were non-empty.
 
+**`fuse` truncates its result to `:k`.** Each source is asked for `:k`
+candidates, so the deduplicated union can hold up to (num-sources * k)
+items before truncation; `fuse` cuts it down to `:k`, matching `retrieve`
+(`rag/hybrid.lisp`, which does `(subseq fused 0 (min k …))`) — the same
+keyword otherwise meant two different things depending which function a
+caller read (cl-llm#13, I3). Sources still receive `:k` as their own
+candidate depth, unchanged.
+
 ## 5. The four scorers
 
 `cl-llm/rag/eval` (new system, depending on both `cl-llm/rag` and
@@ -172,6 +189,22 @@ perfect score. `bundle-recall-at-k` therefore signals
 `eval:llm-eval-error` when `case-expected` is `NIL`, the same discipline
 `exact-match` (`eval/scorer.lisp`) already uses. Recall against nothing is
 not a measurement.
+
+**The other three scorers are vacuously true on an *empty bundle*, and
+that is intentional, not a gap.** `every` over `nil` evidence is `t`, so
+`bundle-containment`, `bundle-standing-well-formed` and
+`bundle-method-attributed` all score `1.0` when a bundle has no evidence
+at all (I4, cl-llm#13). This is a different case from the empty `:expected`
+above: an unpopulated `:expected` is a *definition* mistake — nobody
+finished writing the eval case — which is why `bundle-recall-at-k`
+signals. An **empty bundle** is a legitimate *retrieval outcome* — a query
+that genuinely found nothing — and turning that into an error would
+convert a real, if unhelpful, answer into a crash. `bundle-recall-at-k`
+is what still catches it: an empty bundle can never contain an expected
+document id, so recall drops to `0.0` even while the three hygiene
+scorers read `1.0`. Relatedly, `(bundle-projection <empty bundle>)` is
+`nil`, so a golden file holding `nil` (§6) matches *any* empty bundle,
+not just the one it was generated from.
 
 ### Driving scorers through the harness: `run-fn`
 
@@ -249,16 +282,39 @@ What actually closes the gap is a **committed** golden fixture,
 `write-golden`, run by hand, against an unmodified `fuse`) and checked
 into the repository rather than written inside the test. The test
 `a-real-fuse-bundle-matches-its-committed-golden`
-(`tests-rag-eval/golden.lisp`) builds the same five-chunk, two-source
-fixture the golden file was generated from, calls `fuse` fresh, and
-checks the result against that committed file — so a later `fuse` has
-to agree with evidence captured *before* that later change existed, not
-with itself. This was verified, not assumed: temporarily changing
-`fuse` to sort its evidence by document id (the fixture's real RRF
-order is `(a e b d c)`, not the alphabetical order a document-id sort
-would produce) turns this one test red with the rest of the suite still
-green; reverting turns it back green. That is the test standing between
-a reordering regression and a green suite.
+(`tests-rag-eval/golden.lisp`) builds the same seven-chunk, two-source
+fixture (`%fuse-fixture-sources`, `tests-rag-eval/suite.lisp`) the golden
+file was generated from, calls `fuse` fresh, and checks the result
+against that committed file — so a later `fuse` has to agree with
+evidence captured *before* that later change existed, not with itself.
+This was verified, not assumed: temporarily changing `fuse` to sort its
+evidence by document id (the fixture's real RRF order is `(g e f a b c
+d)`, not the alphabetical order a document-id sort would produce) turns
+this one test red with the rest of the suite still green; reverting turns
+it back green. That is the test standing between a reordering regression
+and a green suite.
+
+**A fixture built of exact ties can only catch tiebreak changes, not
+ranking changes (C1, cl-llm#13).** The unit's first version of
+`%fuse-fixture-sources` embedded only each chunk's distinguishing word
+(e.g. `"alpha"`, not the full `"alpha mine"` chunk text) while querying
+`"mine"`, so every dense cosine against the query was exactly `0.0`; and
+with one occurrence of `"mine"` per chunk and equal chunk lengths, every
+BM25 score was exactly equal too. Both modes' order then came entirely
+from tiebreaking (`top-k-collector`'s document-id order for dense, hash
+iteration plus a non-guaranteed-stable `sort` for sparse) — real, but not
+what `fuse`'s ranking exists to test. Changing `*rrf-k*` from 60 to 10 left
+the fused order unchanged, which is what exposed the degeneracy: RRF's
+`k` only matters when items are ranked by more than one score, and a
+tiebreak-only ordering has none. The rebuilt fixture embeds each chunk's
+own full text and varies how many times `"mine"` occurs and how many
+filler words surround it, so all seven dense cosines and all seven BM25
+scores are pairwise distinct — asserted directly in the test as well, on
+the fused bundle's scores, so this cannot silently regress back. Under
+the rebuilt fixture, `*rrf-k*` 60→10 *does* change the fused order
+(`f` and `a` swap) — verified the same way, by hand, reverted after — so
+this test is now evidence the fixture measures ranking, not just
+tiebreaking.
 
 Two functions, deliberately asymmetric:
 
@@ -337,3 +393,11 @@ model, not a stub of it.
   in §6 is what unit 1 ships; a `cl-llm/live`-style opt-in suite scoring
   against the real corpus is left to unit 3, once there is something
   (claim expansion) that fixtures cannot show.
+- **`method` attribution on a shared chunk is first-source-wins, not
+  every-source-that-matched (I5, cl-llm#13).** When both `dense-source`
+  and `sparse-source` return the same chunk, `fuse` (§2, §4) attributes it
+  to whichever source appears first in the caller's `sources` list; the
+  other source's contribution to that chunk's evidence is not recorded
+  anywhere. This is a known limitation, not a bug — deciding how a
+  multiply-found chunk should report its provenance is a design question
+  a later unit owns, not something this unit's `fuse` should guess at.

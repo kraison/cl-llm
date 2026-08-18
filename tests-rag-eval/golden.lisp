@@ -59,32 +59,6 @@ handles only the longer-actual case would still pass that test alone."
       (is-false ok-p)
       (is (equal (list '("b" :dense :indeterminate 1) nil) div)))))
 
-(defun %fuse-fixture-sources ()
-  "Five chunks over dense + sparse stores, real sources -- not the
-%BUNDLE fixture.  FUSE's RRF ordering over these is empirically (A E B D
-C), not the alphabetical (A B C D E) a document-id-sort regression would
-produce, so the two are guaranteed to diverge (verified by direct probe,
-not assumed -- see the golden fixture below, generated from this exact
-function by an unmodified FUSE)."
-  (let* ((embedder (rag:make-mock-embedder :dimension 8))
-         (dense-store (rag:make-memory-store))
-         (sparse-store (rag:make-sparse-store))
-         (chunks
-           (list (rag:make-chunk "alpha mine" :document-id "a"
-                                 :embedding (rag:embed embedder "alpha"))
-                 (rag:make-chunk "beta mine" :document-id "b"
-                                :embedding (rag:embed embedder "beta"))
-                 (rag:make-chunk "gamma mine" :document-id "c"
-                                :embedding (rag:embed embedder "gamma"))
-                 (rag:make-chunk "delta mine" :document-id "d"
-                                :embedding (rag:embed embedder "delta"))
-                 (rag:make-chunk "epsilon mine" :document-id "e"
-                                :embedding (rag:embed embedder "epsilon")))))
-    (rag:store-add dense-store chunks)
-    (rag:store-add sparse-store chunks)
-    (list (rag:make-dense-source embedder dense-store)
-          (rag:make-sparse-source sparse-store))))
-
 (defun %fuse-golden-fixture-path ()
   "The COMMITTED golden fixture for %FUSE-FIXTURE-SOURCES, generated
 once by WRITE-GOLDEN against an unmodified FUSE. Deliberately NOT
@@ -109,9 +83,23 @@ FUSE run over %FUSE-FIXTURE-SOURCES must still match evidence captured
 before this test existed. Ablating FUSE to SORT its evidence by
 document id (verified by hand: temporarily wrapping the EVIDENCE list
 in FUSE with (SORT ... #'STRING< :KEY (lambda (e) ...document-id...)))
-turns this RED, because the fixture's order (A E B D C) is not
+turns this RED, because the fixture's order (G E F A B C D) is not
 alphabetical; reverting FUSE turns it back GREEN. No committed golden
-file existed for FUSE's own output before this test."
-  (let ((sources (%fuse-fixture-sources)))
-    (is-true (re:check-golden (rag:fuse sources "mine" :k 5)
-                              (%fuse-golden-fixture-path)))))
+file existed for FUSE's own output before this test.
+
+⚠ C1, cl-llm#13: an earlier version of %FUSE-FIXTURE-SOURCES embedded
+only each chunk's distinguishing word, so every dense cosine against
+\"mine\" was exactly 0.0 and every BM25 score was exactly equal -- the
+fixture measured tiebreaking (document-id order), not ranking, and a
+document-id-sort ablation was the ONLY thing it could catch.  Changing
+*RRF-K* from 60 to 10 left the order unchanged, proof the fixture was
+degenerate.  The rebuilt fixture (suite.lisp) makes every dense cosine
+and every BM25 score pairwise distinct, so this DISTINCT-SCORES check
+below can never silently regress back to that; and *RRF-K* 60->10 now
+DOES change the fused order (verified by hand: f and a swap), which is
+the stronger ablation this test could not have passed before."
+  (let* ((sources (%fuse-fixture-sources))
+         (bundle (rag:fuse sources "mine" :k 7))
+         (scores (mapcar #'rag:evidence-score (rag:bundle-evidence bundle))))
+    (is (= (length scores) (length (remove-duplicates scores :test #'=))))
+    (is-true (re:check-golden bundle (%fuse-golden-fixture-path)))))
