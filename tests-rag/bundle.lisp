@@ -372,3 +372,80 @@ unchecked to a downstream filter.  The rest of the evidence still builds."
           (is (null (rag:evidence-box (first ev))))
           (is (string= "d1" (rag:chunk-document-id
                              (rag:evidence-chunk (first ev))))))))))
+
+(test a-bound-excludes-what-is-known-to-fall-outside-it
+  "Otherwise the filter does nothing and the absence test below passes
+vacuously."
+  (let ((inside (%ev-at "in" :extent (%interval 2005 2006)))
+        (outside (%ev-at "out" :extent (%interval 1990 1991)))
+        (b (rag:make-bounds :window (%interval 2004 2007)
+                            :window-standing :asserted)))
+    (let ((kept (rag:bounded-evidence (list inside outside) b)))
+      (is (= 1 (length kept)))
+      (is (string= "in" (rag:chunk-document-id
+                         (rag:evidence-chunk (first kept))))))))
+
+(test a-box-excludes-evidence-whose-geometry-lies-elsewhere
+  "The spatial half of the same rule.  Without it %OUTSIDE-BOX-P could
+return NIL always and every other test in this group would still pass."
+  (let ((inside (%ev-at "in" :box '(0 0 1 1)))
+        (outside (%ev-at "out" :box '(5 5 6 6)))
+        (b (rag:make-bounds :box '(0 0 2 2) :box-standing :asserted)))
+    (let ((kept (rag:bounded-evidence (list inside outside) b)))
+      (is (= 1 (length kept)))
+      (is (string= "in" (rag:chunk-document-id
+                         (rag:evidence-chunk (first kept))))))))
+
+(test an-extent-that-might-be-outside-the-window-is-not-excluded
+  "⚠ EXTENT-BEFORE-P and its siblings say :BEFORE is POSSIBLE;
+ALLEN-RELATION says it is CERTAIN.  This extent may start before the
+window or inside it, so a bound must keep it -- uncertainty is not
+exclusion, and writing the filter with the possibility predicates would
+throw away exactly the imprecise evidence this planner exists to serve
+(design, cl-llm#13 unit 2)."
+  (flet ((ts (y) (local-time:parse-timestring
+                  (format nil "~a-01-01T00:00:00Z" y))))
+    (let* ((window (%interval 2004 2007))
+           (maybe-before
+             (temporal-extent:make-interval
+              (temporal-extent:make-bound (ts 2000) (ts 2005))
+              (temporal-extent:make-bound (ts 2001) (ts 2006))
+              :semantics :validity))
+           (b (rag:make-bounds :window window
+                               :window-standing :asserted)))
+      (is (temporal-extent:extent-before-p maybe-before window)
+          ":BEFORE must be possible, or this test proves nothing")
+      (is (null (temporal-extent:allen-relation maybe-before window))
+          "and it must not be certain")
+      (is (= 1 (length (rag:bounded-evidence
+                        (list (%ev-at "fuzzy" :extent maybe-before))
+                        b)))))))
+
+(test absence-is-never-exclusion
+  "⚠ THE map-less tenant's guarantee.  If a bound rejected unknowns, the
+first spatial bound would empty a corpus with no geometry -- and the tenant
+that exists to prove the spatial facets are optional is the one it would
+break."
+  (let ((no-facet (%ev-at "plain"))
+        (b (rag:make-bounds :window (%interval 2004 2007)
+                            :window-standing :asserted
+                            :box '(0 0 1 1) :box-standing :asserted)))
+    (is (= 1 (length (rag:bounded-evidence (list no-facet) b))))))
+
+(test a-bound-with-no-halves-keeps-everything
+  (let ((evs (list (%ev-at "a" :extent (%interval 1990 1991))
+                   (%ev-at "b"))))
+    (is (= 2 (length (rag:bounded-evidence evs (rag:make-bounds)))))))
+
+(test a-source-honours-a-bound-it-is-given
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (store (rag:make-memory-store))
+         (old (temporal-extent:extent->sexp (%interval 1990 1991))))
+    (rag:store-add
+     store (list (rag:make-chunk "old mine" :document-id "d1"
+                                 :metadata (list :extent old)
+                                 :embedding (rag:embed embedder "old"))))
+    (is (null (rag:collect-evidence
+               (rag:make-dense-source embedder store) "old" :k 5
+               :bounds (rag:make-bounds :window (%interval 2004 2007)
+                                        :window-standing :asserted))))))

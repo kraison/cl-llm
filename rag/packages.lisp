@@ -36,6 +36,7 @@
    #:bounds #:make-bounds #:bounds-box #:bounds-box-standing
    #:bounds-window #:bounds-window-standing #:evidence-box
    #:temporal-bound #:spatial-bound #:plan-bounds
+   #:bounded-evidence
    ;; grows in later tasks
    ))
 

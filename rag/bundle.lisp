@@ -28,8 +28,9 @@ a reordering is a regression, so nothing may sort it on the way out."
 
 (defgeneric collect-evidence (source query &key k bounds)
   (:documentation "Return a list of EVIDENCE for QUERY, best first.
-BOUNDS is the planner's region/window and is accepted by every method; unit
-1's sources ignore it (cl-llm#13 unit 2 supplies it)."))
+BOUNDS is the planner's region/window; a method honours it by filtering
+through BOUNDED-EVIDENCE, which excludes only what BOUNDS is KNOWN to place
+outside it (design, cl-llm#13 unit 2)."))
 
 (defclass dense-source ()
   ((embedder :initarg :embedder :reader dense-source-embedder)
@@ -85,16 +86,18 @@ and found nothing (that is :SEARCHED-EMPTY, cl-llm#13 unit 3)."
                    :standing :indeterminate)))
 
 (defmethod collect-evidence ((source dense-source) query &key (k 5) bounds)
-  (declare (ignore bounds))
-  (mapcar (lambda (h) (%hit->evidence h :dense))
-          (store-search (dense-source-store source)
-                        (embed (dense-source-embedder source) query)
-                        k)))
+  (bounded-evidence
+   (mapcar (lambda (h) (%hit->evidence h :dense))
+           (store-search (dense-source-store source)
+                         (embed (dense-source-embedder source) query)
+                         k))
+   bounds))
 
 (defmethod collect-evidence ((source sparse-source) query &key (k 5) bounds)
-  (declare (ignore bounds))
-  (mapcar (lambda (h) (%hit->evidence h :sparse))
-          (sparse-search (sparse-source-store source) query k)))
+  (bounded-evidence
+   (mapcar (lambda (h) (%hit->evidence h :sparse))
+           (sparse-search (sparse-source-store source) query k))
+   bounds))
 
 (defun %evidence->hit (evidence)
   (make-hit (evidence-chunk evidence) (evidence-score evidence)))
@@ -220,3 +223,32 @@ pin one and let the other follow.  A supplied value is :ASSERTED."
                    :box-standing (if box :asserted box-standing)
                    :window (or window derived-window)
                    :window-standing (if window :asserted window-standing)))))
+
+(defun %outside-window-p (evidence window)
+  "True only when EVIDENCE's extent is KNOWN to lie wholly outside WINDOW.
+Uses ALLEN-RELATION, which answers NIL when more than one relation is
+possible; the EXTENT-BEFORE-P family would answer on mere possibility and
+so discard the imprecise evidence this planner exists to serve (design,
+cl-llm#13 unit 2)."
+  (let ((e (evidence-extent evidence)))
+    (and window e
+         (member (temporal-extent:allen-relation e window) '(:before :after))
+         t)))
+
+(defun %outside-box-p (evidence box)
+  "True only when EVIDENCE's box is KNOWN and does not overlap BOX."
+  (let ((b (evidence-box evidence)))
+    (and box b
+         (or (< (third b) (first box)) (> (first b) (third box))
+             (< (fourth b) (second box)) (> (second b) (fourth box))))))
+
+(defun bounded-evidence (evidence bounds)
+  "EVIDENCE minus what BOUNDS is KNOWN to exclude.  ⚠ Absence is never
+exclusion: an item whose facet is NIL always survives, or a corpus with no
+geometry would empty the moment a region existed (design, cl-llm#13 unit 2)."
+  (if (null bounds)
+      evidence
+      (remove-if (lambda (e)
+                   (or (%outside-window-p e (bounds-window bounds))
+                       (%outside-box-p e (bounds-box bounds))))
+                 evidence)))
