@@ -174,3 +174,28 @@ truncation, not a no-op."
                           (rag:make-sparse-source sparse-store)))
            (b (rag:fuse sources "mine" :k 3)))
       (is (<= (length (rag:bundle-evidence b)) 3)))))
+
+(test a-bounds-record-defaults-both-halves-to-indeterminate
+  "⚠ Each half carries its OWN reason: a document corpus has no space at
+all while having perfectly good validity time, so one shared standing
+would force a lie about one of them."
+  (let ((b (rag:make-bounds)))
+    (is (null (rag:bounds-box b)))
+    (is (null (rag:bounds-window b)))
+    (is (eq :indeterminate (rag:bounds-box-standing b)))
+    (is (eq :indeterminate (rag:bounds-window-standing b)))))
+
+(test the-two-halves-of-a-bound-carry-independent-reasons
+  (let ((b (rag:make-bounds :box '(0 0 1 1) :box-standing :asserted
+                            :window nil :window-standing :searched-empty)))
+    (is (equal '(0 0 1 1) (rag:bounds-box b)))
+    (is (eq :asserted (rag:bounds-box-standing b)))
+    (is (eq :searched-empty (rag:bounds-window-standing b)))))
+
+(test evidence-carries-a-box-beside-its-extent
+  "Unit 3's claim source and unit 2's metadata plumbing both write here, so
+a filter reads one place regardless of where the facet came from."
+  (let ((e (rag:make-evidence :chunk (rag:make-chunk "t" :document-id "d")
+                              :method :dense :box '(1 2 3 4))))
+    (is (equal '(1 2 3 4) (rag:evidence-box e)))
+    (is (null (rag:evidence-extent e)))))

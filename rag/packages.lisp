@@ -33,6 +33,8 @@
    #:bundle #:make-bundle #:bundle-query #:bundle-evidence #:bundle-modes
    #:collect-evidence #:dense-source #:make-dense-source
    #:sparse-source #:make-sparse-source #:fuse
+   #:bounds #:make-bounds #:bounds-box #:bounds-box-standing
+   #:bounds-window #:bounds-window-standing #:evidence-box
    ;; grows in later tasks
    ))
 

@@ -15,6 +15,7 @@ refused here -- that is BUNDLE-STANDING-WELL-FORMED's job (a later task)."
   (source nil)
   (confidence nil)
   (precision nil)
+  (box nil)           ; (min-lon min-lat max-lon max-lat), or NIL
   (extent nil)        ; a TEMPORAL-EXTENT:TEMPORAL-EXTENT, or NIL
   (standing :indeterminate))
 
@@ -114,3 +115,13 @@ asking for K never gets back up to 2K (cl-llm#13).  Sources still receive
        :modes (remove-duplicates
                (loop for evs in per-source
                      when evs collect (evidence-method (first evs))))))))
+
+(defstruct bounds
+  "The scope retrieval runs inside: a region and a window, each with its own
+reason.  A bound EXCLUDES ONLY WHAT IS KNOWN TO FALL OUTSIDE IT -- evidence
+whose facet is absent is never excluded, or a corpus with no geometry would
+empty the moment a region existed (design, cl-llm#13 unit 2)."
+  (box nil)                      ; (min-lon min-lat max-lon max-lat), or NIL
+  (box-standing :indeterminate)
+  (window nil)                   ; a TEMPORAL-EXTENT, or NIL
+  (window-standing :indeterminate))
