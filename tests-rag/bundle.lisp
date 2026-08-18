@@ -348,3 +348,27 @@ Task 5's filter sees nothing (cl-llm#13 unit 2, task 4)."
                        "TM-62" :k 5)))
       (is (equal '(0 0 1 1)
                  (rag:evidence-box (first (rag:bundle-evidence b))))))))
+
+(test a-malformed-box-in-metadata-yields-nil-not-a-crash
+  "⚠ The plan's global constraint outranks the brief's snippet (task-4
+review): a bound excludes only what is KNOWN to fall outside it, so a
+corrupted box must degrade to absent -- wrong arity, a non-REAL element,
+an improper list, a bare atom -- not signal and not pass through
+unchecked to a downstream filter.  The rest of the evidence still builds."
+  (let ((embedder (rag:make-mock-embedder :dimension 8)))
+    (dolist (bad-box (list '(0 0 1)              ; wrong arity
+                           '(0 0 1 :not-a-real)   ; non-real element
+                           (list* 0 0 1 2)        ; improper list
+                           42))                   ; not a list at all
+      (let ((store (rag:make-memory-store)))
+        (rag:store-add
+         store (list (rag:make-chunk "bad box" :document-id "d1"
+                                     :metadata (list :box bad-box)
+                                     :embedding (rag:embed
+                                                 embedder "bad box"))))
+        (let ((ev (rag:collect-evidence (rag:make-dense-source
+                                         embedder store)
+                                        "bad box" :k 1)))
+          (is (null (rag:evidence-box (first ev))))
+          (is (string= "d1" (rag:chunk-document-id
+                             (rag:evidence-chunk (first ev))))))))))

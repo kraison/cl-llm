@@ -46,15 +46,31 @@ BOUNDS is the planner's region/window and is accepted by every method; unit
 (defun make-sparse-source (store)
   (make-instance 'sparse-source :store store))
 
+(defun %valid-box-p (b)
+  "T if B is a proper list of exactly 4 REAL numbers -- the shape
+EVIDENCE-BOX promises downstream.  Does not call LENGTH: an improper B
+would make LENGTH signal, and a malformed box must read as absent, not
+raise (cl-llm#13 unit 2 review)."
+  (loop for tail = b then (cdr tail)
+        for i from 0
+        do (cond ((= i 4) (return (null tail)))
+                 ((not (consp tail)) (return nil))
+                 ((not (realp (car tail))) (return nil)))))
+
 (defun %chunk-facets (chunk)
   "Two values: the TEMPORAL-EXTENT and box CHUNK's metadata declares, or NIL
 for each.  :EXTENT holds the extent SEXP -- plain data, so it survives any
 store -- and SEXP->EXTENT signals on a malformed one rather than reading it
-as an absence."
+as an absence.  :BOX gets the opposite treatment: a malformed one (wrong
+arity, a non-REAL, an improper list) reads as absent rather than being
+passed through or signalled, so a corrupt facet degrades instead of
+crashing a downstream filter (design's bound-excludes-only-what-is-known
+constraint, cl-llm#13 unit 2)."
   (let ((md (chunk-metadata chunk)))
     (values (let ((s (getf md :extent)))
               (and s (temporal-extent:sexp->extent s)))
-            (getf md :box))))
+            (let ((b (getf md :box)))
+              (and b (%valid-box-p b) b)))))
 
 (defun %hit->evidence (hit method)
   "Wrap HIT as EVIDENCE attributed to METHOD.  STANDING is :INDETERMINATE:
