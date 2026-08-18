@@ -7,7 +7,10 @@
 (defun bundle-projection (bundle)
   "BUNDLE reduced to what is stable across runs: (DOCUMENT-ID METHOD
 STANDING RANK) per item, in order.  Scores and text are deliberately absent
--- floats drift and would make the diff fail for reasons nobody cares about."
+-- floats drift and would make the diff fail for reasons nobody cares about.
+⚠ RANK duplicates list position on purpose -- do not drop it as redundant.
+It is what keeps ordering checkable even if a later comparison sorts
+before diffing."
   (loop for e in (rag:bundle-evidence bundle)
         for rank from 0
         collect (list (let ((c (rag:evidence-chunk e)))
