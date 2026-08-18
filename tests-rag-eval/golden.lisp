@@ -37,3 +37,24 @@ explicit, and this test exists so making it implicit is a visible change."
     (let ((before (uiop:read-file-string path)))
       (re:check-golden (%bundle '("b" "a")) path)
       (is (string= before (uiop:read-file-string path))))))
+
+(test a-longer-actual-reports-the-added-item-as-the-divergence
+  "⚠ LOOP FOR ... IN stops at the shorter list, so a naive walk would
+never see this pair -- the outer EQUAL still catches the mismatch, but
+the diagnostic would silently degrade to the two whole lists."
+  (with-temp-golden (path)
+    (re:write-golden (%bundle '("a")) path)
+    (multiple-value-bind (ok-p div)
+        (re:check-golden (%bundle '("a" "b")) path)
+      (is-false ok-p)
+      (is (equal (list nil '("b" :dense :indeterminate 1)) div)))))
+
+(test a-shorter-actual-reports-the-missing-item-as-the-divergence
+  "⚠ The other direction -- an item dropped, not added.  A fix that
+handles only the longer-actual case would still pass that test alone."
+  (with-temp-golden (path)
+    (re:write-golden (%bundle '("a" "b")) path)
+    (multiple-value-bind (ok-p div)
+        (re:check-golden (%bundle '("a")) path)
+      (is-false ok-p)
+      (is (equal (list '("b" :dense :indeterminate 1) nil) div)))))

@@ -38,8 +38,14 @@ pair.  ⚠ Never rewrites PATH -- a self-healing golden file proves nothing."
         (actual (bundle-projection bundle)))
     (if (equal expected actual)
         (values t nil)
+        ;; `loop for ... in' over two lists stops at the shorter one, so
+        ;; a length mismatch (item added/dropped) would never surface an
+        ;; element-level pair.  Walk to the longer length via NTH instead
+        ;; -- O(n^2) but these lists are tens of items.
         (values nil
-                (loop for e in expected
-                      for a in actual
+                (loop for i from 0 below (max (length expected)
+                                              (length actual))
+                      for e = (nth i expected)
+                      for a = (nth i actual)
                       unless (equal e a) return (list e a)
                         finally (return (list expected actual)))))))
