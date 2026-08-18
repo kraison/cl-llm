@@ -1,13 +1,14 @@
 # The evidence bundle and its scoring
 
 **Date:** 2026-08-18
-**Status:** Shipped — cl-llm#13, unit 1 of the retrieval-fusion epic
+**Status:** Shipped — cl-llm#13, units 1–2 of the retrieval-fusion epic
 **Relationship:** Design:
-`docs/superpowers/specs/2026-08-18-evidence-bundle-design.md`. Builds on
-the reciprocal-rank fusion already shipped in `rag/hybrid.lisp` (`##
-Retrieval (RAG)` in the README). Extracted enough of the standing/extent
-vocabulary to `cl-temporal-extent` that this system can use it without
-depending on vivace-graph.
+`docs/superpowers/specs/2026-08-18-evidence-bundle-design.md` (unit 1) and
+`docs/superpowers/specs/2026-08-18-retrieval-planner-design.md` (unit 2).
+Builds on the reciprocal-rank fusion already shipped in `rag/hybrid.lisp`
+(`## Retrieval (RAG)` in the README). Extracted enough of the
+standing/extent vocabulary to `cl-temporal-extent` that this system can
+use it without depending on vivace-graph.
 
 ## 1. What a bundle is, and why not prose
 
@@ -41,9 +42,13 @@ changes):
   (source nil)                 ; source identity, or NIL
   (confidence nil)             ; number, or NIL
   (precision nil)              ; spatial precision, or NIL
+  (box nil)                    ; (min-lon min-lat max-lon max-lat), or NIL
   (extent nil)                 ; a TEMPORAL-EXTENT:TEMPORAL-EXTENT, or NIL
   (standing :indeterminate))   ; a standing keyword -- NEVER NIL
 ```
+
+`box` is unit 2's addition (§9) — evidence's spatial counterpart to
+`extent`, populated the same way, from chunk metadata.
 
 `method` is the only one of the six provenance fields fully known in unit
 1 — dense and sparse are the only sources that exist yet. `source`,
@@ -123,19 +128,17 @@ Unit 1 ships two methods:
   `evidence` with `:method :sparse`.
 
 Both wrap a `hit` via `%hit->evidence`, which is also where the
-`:indeterminate` standing described in §3 is set. Both methods declare
-`bounds` and ignore it — literally `(declare (ignore bounds))` in each
-`defmethod`.
+`:indeterminate` standing described in §3 is set, and both populate
+`extent`/`box` from the chunk's metadata (§9).
 
-**`bounds` is accepted now and used later.** It is the one piece of
-forward shape built ahead of need: unit 2's planner is what supplies it,
-and adding a keyword parameter to a generic *after* methods already exist
-means touching every one of them. Nothing else speculative is built —
-there is no `plan` stage and no `expand` stage in unit 1, because their
-signatures are exactly what units 2 and 3 exist to work out, and
-designing them now, with nothing to check them against, is how a
-signature comes out wrong. Unit 3's claim expansion becomes a third
-`collect-evidence` method on this same generic.
+**`bounds` is no longer accepted-and-ignored.** Unit 1 shipped the
+parameter ahead of the mechanism that would use it; unit 2 (§9) is that
+mechanism. Both `dense-source` and `sparse-source` now filter their
+results through `bounded-evidence` before returning them, so a caller
+that passes `:bounds` gets a scoped list back, not the unfiltered one.
+`fuse` does not yet thread `:bounds` through to its sources — see §9's
+last note. Unit 3's claim expansion becomes a third `collect-evidence`
+method on this same generic.
 
 `fuse` is what turns several sources into one bundle:
 
@@ -401,3 +404,125 @@ model, not a stub of it.
   anywhere. This is a known limitation, not a bug — deciding how a
   multiply-found chunk should report its provenance is a design question
   a later unit owns, not something this unit's `fuse` should guess at.
+
+## 9. The retrieval planner (unit 2)
+
+Unit 2 gives the `bounds` parameter (§4) a producer and a meaning: it
+bounds the region and window retrieval runs inside, *before* retrieval
+runs, rather than approximating relevance by hop count once results are
+back. The planner's output is a **scope**, not a ranking — weighting
+within that scope is unit 3's problem.
+
+### 9.1 `bounds`: two halves, two reasons
+
+```lisp
+(defstruct bounds
+  (box nil)               ; (min-lon min-lat max-lon max-lat), or NIL
+  (box-standing :indeterminate)
+  (window nil)             ; a TEMPORAL-EXTENT, or NIL
+  (window-standing :indeterminate))
+```
+
+Each half carries its own reason rather than one shared standing,
+because the two facets are not equally available: a document corpus can
+have perfectly good validity time and no spatial facet at all. A shared
+standing would force a lie about one of them. Both halves default to
+`:indeterminate`, matching how `evidence-standing` defaults (§2).
+
+The region is a **bounding box of four numbers, not a polygon**. Precise
+containment needs real geometry, and real geometry needs the graph
+engine — which is exactly what `cl-llm/rag` stays free of. `cl-llm/rag`
+depends on `cl-llm` and `cl-temporal-extent` and nothing else; the box is
+what lets the planner exist without widening that dependency. Polygon
+containment belongs with unit 3's claim traversal, which already needs
+the engine.
+
+### 9.2 Deriving a bound: `temporal-bound` and `spatial-bound`
+
+Two separately callable operations, each returning a value and a
+standing:
+
+```lisp
+(temporal-bound evidence)   ; => (values extent-or-nil standing)
+(spatial-bound  evidence)   ; => (values box-or-nil standing)
+```
+
+They are separate rather than one combined call because bounding the
+region and bounding the window are the two operations an agent will
+later invoke as distinct tools, behind the capstone's validator.
+
+| outcome                    | standing           | meaning              |
+|-----------------------------|---------------------|----------------------|
+| evidence carries the facet  | `:inferred`         | derived, not observed |
+| evidence exists, none does  | `:searched-empty`   | looked, found none    |
+| no evidence at all          | `:indeterminate`    | nothing to look at    |
+| the caller supplied it      | `:asserted`         | scope is asserted     |
+
+A derived bound is the enclosing extent, or box, over every seed that
+carries the facet — earliest start to latest end for the window, min/max
+of the four coordinates for the box.
+
+### 9.3 `plan-bounds`: supplied wins, halves resolve independently
+
+```lisp
+(plan-bounds evidence &key box window)   ; => a BOUNDS
+```
+
+A supplied `box` or `window` wins over a derived one and is marked
+`:asserted`. **The two halves resolve independently**, so a caller may
+pin the window and let the region be inferred — the common agent case,
+and the reason §9.2's two bounders are separate operations rather than
+one.
+
+### 9.4 The exclusion rule: absence is not exclusion, nor is uncertainty
+
+```lisp
+(bounded-evidence evidence bounds)   ; => a filtered list
+```
+
+**A bound excludes only what is known to fall outside it.** Evidence
+whose facet is absent is never excluded — a document corpus with no
+geometry survives a spatial bound intact, which is the map-less tenant's
+guarantee (S3, unit 1) carried one layer out.
+
+That rule is stronger than it first sounds on the temporal side. The
+window-exclusion test is `temporal-extent:allen-relation`, not the
+`extent-before-p`/`extent-after-p` family: `allen-relation` returns the
+single relation between two extents only when it is *certain*, and `NIL`
+when more than one relation is possible — where `extent-before-p`
+answers on mere *possibility*. So **uncertainty is not exclusion
+either**: an extent whose relation to the window is ambiguous is kept,
+not discarded. That is the whole reason the planner is safe to run over
+imprecise data, and it is why the exclusion test is `allen-relation`
+rather than the possibility predicates.
+
+### 9.5 The metadata contract: `:extent` signals, `:box` degrades
+
+Chunk metadata may carry two optional keys, both plain data so they
+survive persistence through any store:
+
+- **`:extent`** — the extent as a **sexp** (what `extent->sexp` and
+  `sexp->extent` exist for), decoded on read.
+- **`:box`** — four numbers, `(min-lon min-lat max-lon max-lat)`.
+
+**The two keys degrade differently, on purpose.** A malformed `:extent`
+**signals** `temporal-extent:invalid-extent` — bad temporal data is a
+definition mistake, not something to silently read as absence. A
+malformed `:box` — wrong arity, a non-`REAL` element, an improper list,
+or not a list at all — **reads as absent**, `NIL`, rather than signalling
+or being passed through unchecked: a corrupted box degrades instead of
+crashing a downstream filter, keeping faith with §9.4's exclusion rule,
+which only ever acts on a facet it is sure of. `dense-source` and
+`sparse-source` populate `evidence-extent`/`evidence-box` from these keys
+when present and leave them `NIL` when absent — a chunk with neither key
+behaves exactly as it did before this unit.
+
+### 9.6 What honours a bound today
+
+`dense-source` and `sparse-source` both filter through
+`bounded-evidence` before returning, so `(collect-evidence source query
+:bounds b)` scopes either source on its own. **`fuse` does not yet
+thread `:bounds` through to its sources** — it has no `:bounds` keyword
+at all — so a hybrid query built via `fuse` cannot be bounded yet. This
+is a current gap, not a design decision; wiring it through is unstarted
+work.

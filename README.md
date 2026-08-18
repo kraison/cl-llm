@@ -320,8 +320,16 @@ beyond `cl-llm/rag` itself. `cl-llm/rag/eval` adds four deterministic
 scorers over a bundle plus a capture-and-diff harness that treats
 ordering as the regression contract; it depends on both `cl-llm/rag` and
 `cl-llm/eval`, and, like `cl-llm/rag` itself, adds no graph dependency.
-See [`docs/evidence-bundle.md`](docs/evidence-bundle.md) for the records,
-the scorers, and what this first unit does and does not do.
+
+A retrieval **planner** (`rag:plan-bounds`, `rag:temporal-bound`,
+`rag:spatial-bound`) scopes retrieval *before* it runs: it bounds the
+region and window from the evidence at hand (or a caller-supplied one),
+and `dense-source`/`sparse-source` honour that bound via
+`rag:bounded-evidence`, excluding only evidence known to lie outside it.
+It lives in `cl-llm/rag` with no graph dependency, same as the bundle
+itself. See [`docs/evidence-bundle.md`](docs/evidence-bundle.md) for the
+records, the scorers, the planner, and what each unit does and does not
+do.
 
 ## Testing
 
