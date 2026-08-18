@@ -81,16 +81,18 @@ order is the contract; nothing downstream may re-sort it."
                  (mapcar (lambda (evs) (mapcar #'%evidence->hit evs))
                          per-source))))
     ;; RECIPROCAL-RANK-FUSION works on HITs, so map back to the EVIDENCE
-    ;; that produced each chunk, preferring the first source that offered it.
+    ;; that produced each chunk, preferring the first source that offered
+    ;; it.  Key by %CHUNK-KEY, RRF's own identity -- not document-id alone,
+    ;; which collapses a document's separate chunks into one (cl-llm#13).
     (loop for evs in per-source
           do (dolist (e evs)
-               (let ((key (chunk-document-id (evidence-chunk e))))
+               (let ((key (%chunk-key (evidence-chunk e))))
                  (unless (gethash key by-key)
                    (setf (gethash key by-key) e)))))
     (make-bundle
      :query query
      :evidence (loop for h in fused
-                     for key = (chunk-document-id (hit-chunk h))
+                     for key = (%chunk-key (hit-chunk h))
                      for e = (gethash key by-key)
                      when e
                        collect (make-evidence

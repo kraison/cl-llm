@@ -101,6 +101,31 @@ default that keeps the struct's docstring honest."
       (is (every (lambda (e) (rag:evidence-standing e))
                  (rag:bundle-evidence b))))))
 
+(test fuse-keeps-distinct-chunks-of-the-same-document
+  "⚠ DOCUMENT-CHUNKS (index.lisp) gives every chunk of a document the SAME
+document-id -- that is what chunking does.  RECIPROCAL-RANK-FUSION keys by
+%CHUNK-KEY, (document-id . text), because dense and sparse stores hold
+DIFFERENT chunk objects for the same slice (hybrid.lisp).  FUSE must key
+its evidence lookup the same way, or two chunks of one document collapse
+into N copies of whichever evidence was seen first."
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (dense-store (rag:make-memory-store))
+         (sparse-store (rag:make-sparse-store))
+         (c1 (rag:make-chunk "alpha fragment one" :document-id "d1"
+                             :embedding (rag:embed embedder "alpha fragment")))
+         (c2 (rag:make-chunk "beta fragment two" :document-id "d1"
+                             :embedding (rag:embed embedder "beta fragment"))))
+    (rag:store-add dense-store (list c1 c2))
+    (rag:store-add sparse-store (list c1 c2))
+    (let* ((sources (list (rag:make-dense-source embedder dense-store)
+                          (rag:make-sparse-source sparse-store)))
+           (b (rag:fuse sources "fragment" :k 2))
+           (texts (mapcar (lambda (e) (rag:chunk-text (rag:evidence-chunk e)))
+                          (rag:bundle-evidence b))))
+      (is (= 2 (length texts)))
+      (is (member "alpha fragment one" texts :test #'string=))
+      (is (member "beta fragment two" texts :test #'string=)))))
+
 (test fusion-order-is-deterministic
   "⚠ Ordering is the regression contract, so it must not depend on hash
 order or on which source answered first."
