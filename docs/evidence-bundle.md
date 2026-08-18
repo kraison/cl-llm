@@ -381,9 +381,10 @@ model, not a stub of it.
   `:dense` or `:sparse` in a bundle this unit produces, even though the
   slot's vocabulary already includes `:spatial :temporal :claim` for the
   units that add them.
-- **No planner.** `bounds` is threaded through `collect-evidence` and
-  every method ignores it; there is no code that produces or consumes a
-  region/window yet.
+- **No planner, as shipped.** `bounds` was threaded through
+  `collect-evidence` and every method ignored it; no code produced or
+  consumed a region/window. Unit 2 (§9) is what gives `bounds` a
+  producer and a consumer.
 - **No narration, and no LLM judge.** The four scorers are all
   deterministic; grading a narrated answer against a bundle is unit 4.
 - **No enrichment of `hit`.** `evidence` and `bundle` are new, distinct
@@ -483,7 +484,7 @@ one.
 **A bound excludes only what is known to fall outside it.** Evidence
 whose facet is absent is never excluded — a document corpus with no
 geometry survives a spatial bound intact, which is the map-less tenant's
-guarantee (S3, unit 1) carried one layer out.
+guarantee (S3, #12) carried one layer out.
 
 That rule is stronger than it first sounds on the temporal side. The
 window-exclusion test is `temporal-extent:allen-relation`, not the
