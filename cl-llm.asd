@@ -200,7 +200,8 @@
   :serial t
   :pathname "rag-eval/"
   :components ((:file "packages")
-               (:file "scorers"))
+               (:file "scorers")
+               (:file "golden"))
   :in-order-to ((test-op (test-op "cl-llm/rag/eval/tests"))))
 
 (defsystem "cl-llm/rag/eval/tests"
@@ -211,7 +212,8 @@
   :pathname "tests-rag-eval/"
   :components ((:file "packages")
                (:file "suite")
-               (:file "scorers"))
+               (:file "scorers")
+               (:file "golden"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-rag-eval-suite

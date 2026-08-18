@@ -6,4 +6,5 @@
                     (#:eval #:cl-llm.eval))
   (:export
    #:bundle-recall-at-k #:bundle-containment
-   #:bundle-standing-well-formed #:bundle-method-attributed))
+   #:bundle-standing-well-formed #:bundle-method-attributed
+   #:bundle-projection #:write-golden #:check-golden))
