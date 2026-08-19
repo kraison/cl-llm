@@ -102,16 +102,21 @@ and found nothing (that is :SEARCHED-EMPTY, cl-llm#13 unit 3)."
 (defun %evidence->hit (evidence)
   (make-hit (evidence-chunk evidence) (evidence-score evidence)))
 
-(defun fuse (sources query &key (k 5))
+(defun fuse (sources query &key (k 5) bounds)
   "Collect evidence from each SOURCE and merge it into one ranked BUNDLE.
 Ranking is RECIPROCAL-RANK-FUSION over each source's list, which is why the
 sources' incomparable native scores never share a scale.  The bundle's
 order is the contract; nothing downstream may re-sort it.
 
+:BOUNDS is passed to every source, which each apply it as a post-filter
+over their own top-:K (docs/evidence-bundle.md §9.6, cl-llm#19).
+
 The result is truncated to :K, matching RETRIEVE (hybrid.lisp) -- a caller
 asking for K never gets back up to 2K (cl-llm#13).  Sources still receive
 :K as their own candidate depth."
-  (let* ((per-source (mapcar (lambda (s) (collect-evidence s query :k k))
+  (let* ((per-source (mapcar (lambda (s)
+                               (collect-evidence s query :k k
+                                                         :bounds bounds))
                              sources))
          (by-key (make-hash-table :test 'equal))
          (fused (reciprocal-rank-fusion

@@ -136,15 +136,15 @@ parameter ahead of the mechanism that would use it; unit 2 (§9) is that
 mechanism. Both `dense-source` and `sparse-source` now filter their
 results through `bounded-evidence` before returning them, so a caller
 that passes `:bounds` gets a scoped list back, not the unfiltered one.
-`fuse` does not yet thread `:bounds` through to its sources — see §9.6,
-which also states what applying the bound as a post-filter costs. Unit
-3's claim expansion becomes a third `collect-evidence` method on this
-same generic.
+`fuse` passes `:bounds` on to every source it collects from — see §9.6,
+which states what applying the bound as a post-filter costs. Unit 3's
+claim expansion becomes a third `collect-evidence` method on this same
+generic.
 
 `fuse` is what turns several sources into one bundle:
 
 ```lisp
-(fuse sources query &key (k 5))   ; => a BUNDLE
+(fuse sources query &key (k 5) bounds)   ; => a BUNDLE
 ```
 
 It runs `collect-evidence` on each source, converts each source's
@@ -556,10 +556,11 @@ rather than left to be discovered. Pushing the bound down into a store's
 own search, so that `k` is filled from in-bounds candidates, needs a
 store-level predicate that does not exist yet; it is tracked as #19.
 
-**`fuse` does not yet thread `:bounds` through to its sources** — it has
-no `:bounds` keyword at all — so a hybrid query built via `fuse` cannot
-be bounded yet. This is a current gap, not a design decision; it is
-tracked as #18.
+**`fuse` takes `:bounds` and hands it to every source** (#18), so a hybrid
+query is scoped the same way a single-source one is. The post-filter cost
+above compounds there: each source filters its own top-`k` before the
+ranks are fused, so a bound can thin one source's list without the other
+making up the difference.
 
 ### 9.7 What unit 2 does not do
 

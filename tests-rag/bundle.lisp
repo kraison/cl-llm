@@ -482,3 +482,34 @@ that survived four reviews in unit 1."
         (is (string= "in" (rag:chunk-document-id
                            (rag:evidence-chunk (first ev)))))
         (is (eq :sparse (rag:evidence-method (first ev))))))))
+
+(test fuse-threads-a-bound-through-to-its-sources
+  "⚠ A hybrid query is the one a caller actually makes, so a bound that
+each source honours but FUSE never passes on is a bound nobody gets
+(cl-llm#18)."
+  (let* ((embedder (rag:make-mock-embedder :dimension 8))
+         (dense (rag:make-memory-store))
+         (sparse (rag:make-sparse-store))
+         (sexp #'temporal-extent:extent->sexp)
+         (in (rag:make-chunk
+              "TM-62 fuze survey" :document-id "in"
+              :metadata (list :extent (funcall sexp (%interval 2005 2006)))
+              :embedding (rag:embed embedder "fuze")))
+         (out (rag:make-chunk
+               "TM-62 fuze report" :document-id "out"
+               :metadata (list :extent (funcall sexp (%interval 1990 1991)))
+               :embedding (rag:embed embedder "fuze"))))
+    (rag:store-add dense (list in out))
+    (rag:store-add sparse (list in out))
+    (let ((sources (list (rag:make-dense-source embedder dense)
+                         (rag:make-sparse-source sparse)))
+          (b (rag:make-bounds :window (%interval 2004 2007)
+                              :window-standing :asserted)))
+      (is (= 2 (length (rag:bundle-evidence
+                        (rag:fuse sources "TM-62 fuze" :k 5))))
+          "both chunks fuse unbounded, so the bound has real work")
+      (let ((ev (rag:bundle-evidence
+                 (rag:fuse sources "TM-62 fuze" :k 5 :bounds b))))
+        (is (= 1 (length ev)) "the 1990 chunk is known outside the window")
+        (is (string= "in" (rag:chunk-document-id
+                           (rag:evidence-chunk (first ev)))))))))

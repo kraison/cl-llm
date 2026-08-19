@@ -326,7 +326,9 @@ A retrieval **planner** (`rag:plan-bounds`, `rag:temporal-bound`,
 carrying its own standing — from the evidence at hand or from a
 caller-supplied value, and `dense-source`/`sparse-source` honour it via
 `rag:bounded-evidence`, excluding only evidence *known* to lie outside
-it. The bound is applied as a **post-filter over each source's top-`k`**,
+it. `rag:fuse` takes `:bounds` too and hands it to every source, so a
+hybrid query is scoped the same way a single-source one is. The bound is
+applied as a **post-filter over each source's top-`k`**,
 not pushed down into the store, so a bounded query returns at most `k`
 and may return fewer than the same unbounded query would. That is
 intended for now; pushing the bound into the store's own search is
