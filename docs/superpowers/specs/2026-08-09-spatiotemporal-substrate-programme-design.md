@@ -270,8 +270,21 @@ defect class reappearing inside the index design.
 | S5 | Retrieval fusion | cl-llm | #13 |
 | S0 | Namespaces | vivace-graph | #110 |
 | S6 | Agent memory + decision trace | cl-llm | #14 |
+| S7 | Tenant four: cross-repo work tracking (sitrep) | sitrep *(private)* | #1 |
 
-Dependencies: M → S1 → {S2 ‖ S3} → S5; S1 → S4; {S4, S5, S0} → S6.
+Dependencies: M → S1 → {S2 ‖ S3} → S5; S1 → S4; {S4, S5, S0} → S6; S1 → S7.
+
+**S7 was added 2026-08-29**, after P2 closed. It gates nothing above it. Its purpose
+is to keep widening the evidence for §5.1's genericity claim, and it is the first
+tenant that *plans*: the only consumer of `unknown-bound` on intervals that have not
+happened yet, and the first to use the Allen relations as a query surface rather than
+as predicates. Like tenant three it is map-less, so it gives #138 no second consumer
+and registration stays deferred.
+
+S7 runs as one shared instance written to by several agent hosts, making it the first
+tenant to exercise **concurrent multi-producer writes**. Every tenant so far ingests
+from sources; none has had several live agents asserting claims about the same subjects
+at once, with supersession — not locking — as the resolution.
 
 ## 9. Phasing
 
