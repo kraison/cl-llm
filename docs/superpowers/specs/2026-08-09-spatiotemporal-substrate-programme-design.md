@@ -281,6 +281,11 @@ happened yet, and the first to use the Allen relations as a query surface rather
 as predicates. Like tenant three it is map-less, so it gives #138 no second consumer
 and registration stays deferred.
 
+S7 runs as one shared instance written to by several agent hosts, making it the first
+tenant to exercise **concurrent multi-producer writes**. Every tenant so far ingests
+from sources; none has had several live agents asserting claims about the same subjects
+at once, with supersession — not locking — as the resolution.
+
 ## 9. Phasing
 
 Bands, not a serial chain. The concurrency is load-bearing.
