@@ -165,7 +165,11 @@
 (defsystem "cl-llm/rag/vivace"
   :description "vivace-graph (graph-db) backed vector store for cl-llm/rag."
   :license "MIT"
-  :depends-on ("cl-llm/rag" "graph-db")
+  ;; graph-db/CORE, not the full graph-db: the chunk store is embedded
+  ;; and needs no HTTP server or replication transport, and the full
+  ;; system's :ningle/:clack web stack should not be the price of a
+  ;; vector store -- a headless service host found it exactly that way.
+  :depends-on ("cl-llm/rag" "graph-db/core")
   :serial t
   :pathname "vivace/"
   :components ((:file "packages")
