@@ -173,6 +173,12 @@ network access needed.
     (values answer hits)))
 ```
 
+`make-fallback-embedder` wraps a list of embedders (most-preferred
+first) into one that fails over on error and skips a dead embedder for
+a cooldown window — e.g. a GPU host over the network first, the local
+CPU instance as the spare. Every wrapped embedder must serve the same
+model; vectors from different models are not comparable.
+
 `make-index` combines an embedder, a chunker, and a vector store;
 `add-documents` chunks, embeds (in a single batch call), and stores.
 `rag-ask` retrieves the top `:k` chunks, assembles them into a numbered,

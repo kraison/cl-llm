@@ -10,6 +10,8 @@
    #:embedder #:embedder-model #:embed
    #:openai-compatible-embedder #:make-openai-compatible-embedder
    #:mock-embedder #:make-mock-embedder #:embedder-dimension
+   #:fallback-embedder #:make-fallback-embedder
+   #:fallback-embedders #:fallback-cooldown
    #:embedding #:as-embedding #:embedding-norm
    #:document #:make-document #:document-id #:document-text #:document-metadata
    #:chunk #:make-chunk #:chunk-text #:chunk-document-id #:chunk-metadata #:chunk-embedding

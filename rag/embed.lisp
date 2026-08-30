@@ -122,6 +122,55 @@ returns a list of EMBEDDINGs in input order."))
                               :message "could not parse the embeddings response as JSON"))))))
     (if (listp input) vectors (first vectors))))
 
+;;; Failover across embedders
+
+(defclass fallback-embedder (embedder)
+  ((embedders :initarg :embedders :reader fallback-embedders)
+   (cooldown :initarg :cooldown :reader fallback-cooldown)
+   (clock :initarg :clock :reader %fallback-clock)
+   (down-until :initarg :down-until :reader %fallback-down-until))
+  (:documentation "Tries each of EMBEDDERS in order; the first success
+answers.  An embedder that errors is skipped for COOLDOWN seconds so a
+dead primary costs one failed attempt per window, not one per call.
+Every embedder must serve the SAME model: vectors from different
+models are not comparable, and nothing here can check that for you.
+Trap: a primary that is unreachable-and-silent (host asleep) stalls
+one call for up to the full request timeout each time the cooldown
+expires.  The cooldown bookkeeping is unlocked -- a race costs an
+extra probe, never a wrong answer."))
+
+(defun make-fallback-embedder (embedders &key (cooldown 300)
+                                              (clock #'get-universal-time))
+  "EMBEDDERS is a non-empty list, most-preferred first.  CLOCK is a
+seam for tests."
+  (unless embedders
+    (error 'llm-rag-error
+           :message "make-fallback-embedder requires at least one embedder"))
+  (make-instance 'fallback-embedder
+                 :embedders embedders :cooldown cooldown :clock clock
+                 :model (embedder-model (first embedders))
+                 :down-until (make-array (length embedders)
+                                         :initial-element 0)))
+
+(defmethod embed ((embedder fallback-embedder) input)
+  (let* ((all (fallback-embedders embedder))
+         (down (%fallback-down-until embedder))
+         (now (funcall (%fallback-clock embedder)))
+         (live (loop for e in all for i from 0
+                     unless (> (aref down i) now)
+                       collect (cons i e)))
+         ;; Everything cooling down beats answering nothing: try all.
+         (candidates (or live (loop for e in all for i from 0
+                                    collect (cons i e))))
+         (last-error nil))
+    (dolist (pair candidates)
+      (handler-case (return-from embed (embed (cdr pair) input))
+        (error (e)
+          (setf last-error e
+                (aref down (car pair)) (+ now (fallback-cooldown
+                                               embedder))))))
+    (error last-error)))
+
 ;;; Deterministic mock (a bag-of-words hashing embedder)
 
 (defclass mock-embedder (embedder)

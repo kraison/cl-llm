@@ -200,3 +200,49 @@ error escaping from the float arithmetic inside AS-EMBEDDING."
 (test as-embedding-negative-infinity-component-signals-llm-rag-error
   (signals rag:llm-rag-error
     (rag:as-embedding (list (negative-infinity-single-float) 3.0))))
+
+;;; fallback-embedder
+
+(defclass %failing-embedder (rag:embedder)
+  ((calls :initform 0 :accessor %failing-calls)))
+
+(defmethod rag:embed ((e %failing-embedder) input)
+  (declare (ignore input))
+  (incf (%failing-calls e))
+  (error 'rag:llm-rag-error :message "down"))
+
+(test fallback-uses-the-primary-while-it-answers
+  (let* ((primary (rag:make-mock-embedder))
+         (spare (rag:make-mock-embedder :dimension 8))
+         (fb (rag:make-fallback-embedder (list primary spare))))
+    (is (= 32 (length (rag:embed fb "hello")))
+        "the primary's 32-dim vector, not the spare's 8")))
+
+(test fallback-fails-over-and-cools-the-dead-primary
+  (let* ((now 1000)
+         (dead (make-instance '%failing-embedder))
+         (spare (rag:make-mock-embedder))
+         (fb (rag:make-fallback-embedder
+              (list dead spare)
+              :cooldown 300 :clock (lambda () now))))
+    (is (= 32 (length (rag:embed fb "hello"))) "the spare answers")
+    (is (= 1 (%failing-calls dead)))
+    (rag:embed fb "again")
+    (is (= 1 (%failing-calls dead))
+        "inside the cooldown the dead primary is not probed")
+    (setf now 1301)
+    (rag:embed fb "later")
+    (is (= 2 (%failing-calls dead))
+        "after the cooldown the primary is probed again")))
+
+(test fallback-signals-when-every-embedder-fails
+  (let ((fb (rag:make-fallback-embedder
+             (list (make-instance '%failing-embedder)
+                   (make-instance '%failing-embedder)))))
+    (signals rag:llm-rag-error (rag:embed fb "hello"))
+    ;; Both now cooling down: a further call still tries them all
+    ;; rather than answering nothing.
+    (signals rag:llm-rag-error (rag:embed fb "hello"))))
+
+(test fallback-requires-an-embedder
+  (signals rag:llm-rag-error (rag:make-fallback-embedder '())))
