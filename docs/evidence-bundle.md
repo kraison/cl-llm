@@ -578,3 +578,45 @@ making up the difference.
 - **No claim traversal.** Seeds come from the two retrieval modes that
   exist.
 - **No push-down into the store.** §9.6, tracked as #19.
+
+## 10. Claim traversal (unit 3): `cl-llm/rag/claims`
+
+The third `collect-evidence` method §4 promised, in its own system —
+`cl-llm/rag` stays graph-free (§7); `cl-llm/rag/claims` depends on
+`graph-db/spacetime` and nothing tenant-shaped.
+
+```lisp
+(make-claim-source graph claim-class key-extractor &key renderer)
+```
+
+- `claim-class` is the tenant's **parent** claim class —
+  `claims-touching` takes the parent, so one source covers both
+  arities.
+- `key-extractor` is a function of the query string returning
+  `(namespace . key)` conses. **This is where the tenant's vocabulary
+  lives** (programme §5.1): the source walks whatever endpoints it is
+  handed and knows no tenant's key shapes itself.
+- `renderer` turns a claim into the line a model reads; the default
+  prints endpoints, relation, producer, standing, and the validity
+  window.
+
+Each touching claim becomes one `evidence`: `:method :claim`, the
+claim's **own** standing and confidence, its validity extent on the
+evidence (for `bounded-evidence`) *and* as a sexp in the chunk
+metadata (the §9.5 facet contract). The fusion identity is the claim's
+uniqueness tuple, so one claim reached through its subject and its
+object fuses to one item.
+
+§3's distinction goes live here: a **recognised endpoint with no
+claims yields a `:searched-empty` item** — "no claims touch
+device:d42" is a fact the bundle carries, scored at the bottom,
+carrying no extent so no bound can exclude it. An extractor that
+recognises nothing returns `NIL`: nothing was consulted, which is
+`:indeterminate` territory and not this source's to assert (§9.2).
+
+The candidate depth `:k` caps claims, not absences. Tests run against
+a real on-disk claim store (`cl-llm/rag/claims/tests`).
+
+The first consumer is the sitrep tenant (kraison/sitrep#31), whose
+extractor recognises issue and doc keys; the source itself would serve
+any claim family unchanged.

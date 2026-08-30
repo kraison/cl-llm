@@ -186,6 +186,17 @@ composed, never one replacing the other. `rag-ask` returns
 sources. For agentic use, `make-retrieval-tool` wraps an index as a
 `cl-llm:tool` the model can call to fetch its own cited context.
 
+### Claim traversal (`cl-llm/rag/claims`)
+
+`cl-llm/rag/claims` adds the third `collect-evidence` source (#13 unit 3):
+claims from a `graph-db/spacetime` store become evidence, each carrying the
+claim's own standing, confidence and validity extent — and a recognised
+endpoint with **no** claims becomes a `:searched-empty` item, so "looked
+and found nothing" survives into the bundle instead of reading as an
+omission. What counts as an endpoint key in a query is supplied by the
+caller (`key-extractor`); the source itself is tenant-neutral. See
+`docs/evidence-bundle.md` §10.
+
 ### Graph-backed stores (`cl-llm/rag/vivace`)
 
 `cl-llm/rag/vivace` lets a persistent [vivace-graph](https://github.com/kraison/vivace-graph)

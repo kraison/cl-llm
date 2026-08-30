@@ -172,6 +172,27 @@
                (:file "schema")
                (:file "store")))
 
+(defsystem "cl-llm/rag/claims"
+  :description "Claim traversal as an evidence-bundle source (#13 unit 3)."
+  :license "MIT"
+  :depends-on ("cl-llm/rag" "graph-db/spacetime")
+  :serial t
+  :pathname "claims/"
+  :components ((:file "packages")
+               (:file "source")))
+
+(defsystem "cl-llm/rag/claims/tests"
+  :description "On-disk-graph tests for cl-llm/rag/claims."
+  :license "MIT"
+  :depends-on ("cl-llm/rag/claims" "fiveam")
+  :serial t
+  :pathname "tests-claims/"
+  :components ((:file "packages")
+               (:file "source-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run! :cl-llm-rag-claims)
+               (error "cl-llm/rag/claims suite failed."))))
+
 (defsystem "cl-llm/rag/vivace/tests"
   :description "Offline (in-memory-graph) tests for cl-llm/rag/vivace."
   :license "MIT"
