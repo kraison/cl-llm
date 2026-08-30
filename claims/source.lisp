@@ -1,0 +1,158 @@
+;;;; claims/source.lisp -- claim traversal as a bundle source
+;;;; (cl-llm#13 unit 3).
+;;;;
+;;;; A CLAIM-SOURCE answers COLLECT-EVIDENCE from a graph-db/spacetime
+;;;; claim store: endpoint keys recognised in the query resolve to the
+;;;; claims touching them, each rendered as one EVIDENCE with the
+;;;; claim's own standing -- and a recognised key that yields NOTHING
+;;;; becomes a :SEARCHED-EMPTY item, the distinction the bundle's
+;;;; standing vocabulary exists to carry (docs/evidence-bundle.md §3).
+;;;;
+;;;; Domain-neutral by the programme's boundary rule (§5.1): nothing
+;;;; here names a tenant's concepts.  What counts as a key in a query
+;;;; is the tenant's knowledge, supplied as KEY-EXTRACTOR; this file
+;;;; only walks the claim indexes it is handed.
+
+(in-package #:cl-llm.rag.claims)
+
+(defclass claim-source ()
+  ((graph :initarg :graph :reader claim-source-graph)
+   (claim-class :initarg :claim-class :reader claim-source-class
+                :documentation "The tenant's PARENT claim class name --
+CLAIMS-TOUCHING takes the parent, so one source covers both arities.")
+   (key-extractor :initarg :key-extractor
+                  :reader claim-source-key-extractor
+                  :documentation "Function of the query string returning
+(NAMESPACE . KEY) conses -- the endpoints worth asking about.  This is
+where the tenant's vocabulary lives; an extractor that recognises
+nothing makes the source contribute nothing.")
+   (renderer :initarg :renderer :initform #'render-claim
+             :reader claim-source-renderer
+             :documentation "Function of a claim returning the text a
+model reads.  RENDER-CLAIM unless the tenant knows better."))
+  (:documentation "Claim traversal as a COLLECT-EVIDENCE source."))
+
+(defun make-claim-source (graph claim-class key-extractor &key renderer)
+  (make-instance 'claim-source
+                 :graph graph :claim-class claim-class
+                 :key-extractor key-extractor
+                 :renderer (or renderer #'render-claim)))
+
+(defun %endpoint (namespace key)
+  (format nil "~(~a~):~a" namespace key))
+
+(defun %binary-p (claim)
+  "True when CLAIM carries an object endpoint.  Reader-probed rather
+than type-probed: the tenant's class names are its own, and a unary
+claim's CLAIM-OBJECT-KEY reader does not exist to call."
+  (ignore-errors (and (st:claim-object-key claim) t)))
+
+(defun render-claim (claim)
+  "CLAIM as one line a model can read: endpoints, relation, producer,
+standing, and the validity extent when one is recorded."
+  (let ((extent (st:claim-extent claim)))
+    (format nil "~a ~(~a~)~@[ ~a~] (~(~a~), ~(~a~)~@[, ~a~])"
+            (%endpoint (st:claim-subject-namespace claim)
+                       (st:claim-subject-key claim))
+            (st:claim-relation claim)
+            (and (%binary-p claim)
+                 (%endpoint (st:claim-object-namespace claim)
+                            (st:claim-object-key claim)))
+            (st:claim-producer claim)
+            (st:claim-standing claim)
+            (and extent (%extent-line extent)))))
+
+(defun %extent-line (extent)
+  (let ((start (temporal-extent:bound-earliest
+                (temporal-extent:extent-start extent)))
+        (end (temporal-extent:bound-latest
+              (temporal-extent:extent-end extent))))
+    (format nil "~a..~a"
+            (if (eq start :unbounded) "?" (%day start))
+            (if (eq end :unbounded) "?" (%day end)))))
+
+(defun %day (ts)
+  (local-time:format-timestring
+   nil ts :format '(:year "-" (:month 2) "-" (:day 2))
+   :timezone local-time:+utc-zone+))
+
+(defun %claim-evidence (source claim score)
+  "CLAIM as EVIDENCE: the rendered line is the chunk text, the claim's
+own standing and confidence ride along, and the validity extent lands
+both on the EVIDENCE (for BOUNDED-EVIDENCE) and in the chunk metadata
+as a sexp (the §9.5 facet contract, so a chunk-level consumer reads
+the same window)."
+  (let* ((extent (st:claim-extent claim))
+         (text (funcall (claim-source-renderer source) claim)))
+    (rag:make-evidence
+     :chunk (rag:make-chunk
+             text
+             :document-id (%claim-doc-id claim)
+             :metadata (and extent
+                            (list :extent (temporal-extent:extent->sexp
+                                           extent))))
+     :score score
+     :method :claim
+     :confidence (st:claim-confidence claim)
+     :extent extent
+     :standing (st:claim-standing claim))))
+
+(defun %claim-doc-id (claim)
+  "The fusion identity: RRF keys on (DOCUMENT-ID . TEXT), so one claim
+reached through two queried endpoints must carry one id."
+  (format nil "claim:~a:~(~a~)~@[:~a~]:~(~a~)"
+          (%endpoint (st:claim-subject-namespace claim)
+                     (st:claim-subject-key claim))
+          (st:claim-relation claim)
+          (and (%binary-p claim)
+               (%endpoint (st:claim-object-namespace claim)
+                          (st:claim-object-key claim)))
+          (st:claim-producer claim)))
+
+(defun %absence-evidence (namespace key)
+  "The looked-and-found-nothing item (§3): a recognised endpoint with
+no claims is a FACT the bundle carries, not an omission.  No extent
+and no box, so no bound can exclude it."
+  (rag:make-evidence
+   :chunk (rag:make-chunk
+           (format nil "no claims touch ~a" (%endpoint namespace key))
+           :document-id (format nil "claim-absence:~a"
+                                (%endpoint namespace key)))
+   :score 0d0
+   :method :claim
+   :standing :searched-empty))
+
+(defmethod rag:collect-evidence ((source claim-source) query
+                                 &key (k 5) bounds)
+  "Claims touching every endpoint KEY-EXTRACTOR recognises in QUERY,
+best first, capped at K; then one :SEARCHED-EMPTY item per recognised
+endpoint that yielded nothing.  An extractor that recognises nothing
+returns NIL -- nothing was consulted, which is :INDETERMINATE
+territory and not this source's to assert (§9.2)."
+  (let ((keys (funcall (claim-source-key-extractor source) query))
+        (seen (make-hash-table :test 'equal))
+        (claims '())
+        (absences '()))
+    (dolist (pair keys)
+      (let ((touching (st:claims-touching (claim-source-graph source)
+                                          (claim-source-class source)
+                                          (car pair) (cdr pair)
+                                          :role :either)))
+        (if touching
+            (dolist (claim touching)
+              (let ((id (%claim-doc-id claim)))
+                (unless (gethash id seen)
+                  (setf (gethash id seen) t)
+                  (push claim claims))))
+            (push (%absence-evidence (car pair) (cdr pair))
+                  absences))))
+    (let* ((ordered (nreverse claims))
+           (top (subseq ordered 0 (min k (length ordered))))
+           (n (length top)))
+      (rag:bounded-evidence
+       (append (loop for claim in top
+                     for i from 0
+                     collect (%claim-evidence source claim
+                                              (float (- n i) 1d0)))
+               (nreverse absences))
+       bounds))))
