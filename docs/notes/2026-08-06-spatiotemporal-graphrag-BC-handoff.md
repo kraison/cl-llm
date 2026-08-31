@@ -87,8 +87,8 @@ Written 2026-08-06, at the end of the mine-action hromada-prospect session.
 (runbook §B4). The production host runs an older engine and is not yet bumped, so
 engine changes must not assume production is current.
 
-**Two upstream issues** fixed but still open on the tracker: vivace-graph #104
-(shared-index floor) and #105 (WKT EMPTY parse). The VG team closes them at their
+**Two upstream issues** fixed but still open on the tracker: kraison/vivace-graph#104
+(shared-index floor) and kraison/vivace-graph#105 (WKT EMPTY parse). The VG team closes them at their
 next release.
 
 **The absence-vs-value defect class** is the single most valuable thing Stage A

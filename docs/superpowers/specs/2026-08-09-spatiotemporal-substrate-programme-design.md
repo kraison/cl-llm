@@ -35,11 +35,11 @@ The handoff's framing claims were re-checked against the code, and two changed.
 
 **The logic engine is idle, and more built than the handoff says.** `grep` for
 `graph-db:select|select-flat|?-` across mine-action's `src/` returns **0 call sites**.
-But vivace-graph #45 phases 0 and 1 are complete and merged to master: control-flow
+But kraison/vivace-graph#45 phases 0 and 1 are complete and merged to master: control-flow
 core, `call/N`, `findall`/`bagof`/`setof` with free-var grouping, resource bounds,
 effect partitioning, snapshot query mode, `def-query`, the JSON pattern DSL, `catch/3`
 with ISO balls, NDJSON streaming. **C is a formalism over an existing engine, not a
-revival.** What is missing is Phase 2 indexing — vivace-graph #102: *"General ordered
+revival.** What is missing is Phase 2 indexing — kraison/vivace-graph#102: *"General ordered
 index is unreachable from Prolog: no index-backed generator predicate."*
 
 **The engine has no notion of time.** No `allen`, no valid-time, no transaction-time, no
@@ -63,7 +63,7 @@ app-specific part is most of the code. That is the encouraging shape for an extr
 - **It grew into a shipped multi-graph contract for 3.0**, which constrains this design
   directly. See §6.2.
 - **The general ordered index v1 shipped** and is merged to `experiment`, single-slot.
-- #93, #94, #102, #104, #105 remain open.
+- kraison/vivace-graph#93, kraison/vivace-graph#94, kraison/vivace-graph#102, kraison/vivace-graph#104, kraison/vivace-graph#105 remain open.
 
 ## 4. The record
 
@@ -94,7 +94,7 @@ extents are **computed, never materialised** — the algebra is closed and cheap
 nothing can go stale — and standing propagates.
 
 **Amended 2026-08-10 by S1a's design** (`vivace-graph`
-`docs/superpowers/specs/2026-08-10-temporal-extent-allen-standing-design.md`, #130).
+`docs/superpowers/specs/2026-08-10-temporal-extent-allen-standing-design.md`, kraison/vivace-graph#130).
 This section previously said a relation "inherits the weaker standing of its two
 endpoints". It does not: a computed relation carries the **set** of contributing
 standings. `asserted` and `inferred` have no defensible ordering — an operator's
@@ -200,7 +200,7 @@ Hard requirements on the substrate's API:
 derivation can observe an inconsistent instant and `rule-version` provenance will not
 record that it did. So the split is — the **validator** runs per-namespace and needs
 nothing from the namespace work; **inference spanning namespaces**, and the agent-memory
-capstone, need the single epoch (vivace-graph #94).
+capstone, need the single epoch (kraison/vivace-graph#94).
 
 ### 6.4 Asserted claims
 
@@ -262,13 +262,13 @@ defect class reappearing inside the index design.
 
 | | Unit | Repo | Issue |
 |---|---|---|---|
-| M | Multi-slot indexes | vivace-graph | #107 |
-| S1 | `graph-db/spacetime` — claim + time substrate | vivace-graph | #108 |
-| S2 | First tenant: spine becomes a tenant | mine-action | #55 |
+| M | Multi-slot indexes | vivace-graph | kraison/vivace-graph#107 |
+| S1 | `graph-db/spacetime` — claim + time substrate | vivace-graph | kraison/vivace-graph#108 |
+| S2 | First tenant: spine becomes a tenant | mine-action | kraison/mine-action#55 |
 | S3 | Document validity-time + supersession (map-less tenant) | cl-llm | #12 |
-| S4 | `graph-db/ontology` — formalism + validator | vivace-graph | #109 |
+| S4 | `graph-db/ontology` — formalism + validator | vivace-graph | kraison/vivace-graph#109 |
 | S5 | Retrieval fusion | cl-llm | #13 |
-| S0 | Namespaces | vivace-graph | #110 |
+| S0 | Namespaces | vivace-graph | kraison/vivace-graph#110 |
 | S6 | Agent memory + decision trace | cl-llm | #14 |
 | S7 | Tenant four: cross-repo work tracking (sitrep) | sitrep *(private)* | #1 |
 
@@ -278,7 +278,7 @@ Dependencies: M → S1 → {S2 ‖ S3} → S5; S1 → S4; {S4, S5, S0} → S6; S
 is to keep widening the evidence for §5.1's genericity claim, and it is the first
 tenant that *plans*: the only consumer of `unknown-bound` on intervals that have not
 happened yet, and the first to use the Allen relations as a query surface rather than
-as predicates. Like tenant three it is map-less, so it gives #138 no second consumer
+as predicates. Like tenant three it is map-less, so it gives kraison/vivace-graph#138 no second consumer
 and registration stays deferred.
 
 S7 runs as one shared instance written to by several agent hosts, making it the first
@@ -315,10 +315,10 @@ engine, already behind mine-action's `7ac1458` floor.
 
 **P5 Capstone** — S6. LLM-directed traversal lands here and **only** here, behind S4's
 validator; building the traversal first and the guardrail second is building the
-dangerous half first. Cross-namespace inference unlocks here too, gated on #94 and #102.
+dangerous half first. Cross-namespace inference unlocks here too, gated on kraison/vivace-graph#94 and kraison/vivace-graph#102.
 
-**E Orthogonal, pulled by measurement** — #102 (an index-backed generator predicate: on
-S5's path, and gating any Datalog — see §12.1), #104/#105 closure, and a dedicated
+**E Orthogonal, pulled by measurement** — kraison/vivace-graph#102 (an index-backed generator predicate: on
+S5's path, and gating any Datalog — see §12.1), kraison/vivace-graph#104/#105 closure, and a dedicated
 interval index *only if* §7's composite index does not already serve the temporal access
 path.
 
@@ -356,8 +356,8 @@ Each of these was earned by a specific failure.
 
 ## 12. Deferred and still open
 
-- **Cross-namespace inference** — C's second half. Gated on #94 and #102, and on
-  vivace-graph #45 Phase 3. See §12.1.
+- **Cross-namespace inference** — C's second half. Gated on kraison/vivace-graph#94 and kraison/vivace-graph#102, and on
+  kraison/vivace-graph#45 Phase 3. See §12.1.
 - **Expression / computed-key indexes.** Views keep the derived-key cases for now.
 - **Automatic index selection in the Prolog compiler** (scan-and-filter rewritten to an
   index range scan) — separately deferred, not required by this programme.
@@ -372,21 +372,21 @@ Each of these was earned by a specific failure.
   inherited.
 - **ANN / HNSW** — considered 2026-08-09 and **not on the path**. See §12.2.
 
-### 12.1 vivace-graph #45 phase accounting
+### 12.1 kraison/vivace-graph#45 phase accounting
 
 How much of the Prolog roadmap this programme needs. The short answer: **about half of
 Phase 2, one bullet of Phase 4, and nothing else** — until C's inference half.
 
-| #45 phase | Programme need |
+| kraison/vivace-graph#45 phase | Programme need |
 |---|---|
 | **0** Control-flow core | **None — done and merged.** Inherited free. |
 | **1** Safety / web-enablement | **None — done and merged.** Inherited free. |
 | **2a** Clause indexing for asserted clauses | **Conditional** — only if S4 compiles the ontology into many asserted clauses. See the gate below. |
-| **2b** Index-aware predicate resolution (#102) | **A narrow slice**, for S5. |
+| **2b** Index-aware predicate resolution (kraison/vivace-graph#102) | **A narrow slice**, for S5. |
 | **3** Datalog stratum + tabling | **None for this programme.** All of it for C's inference half, sequenced after P5. |
 | **4** Cost-based join reordering | **None.** Pure optimisation. |
 | **4** `shortest_path` / `reachable` / k-hop | **None.** `reachable` overlaps Phase 3; S5's weighted expansion is planner-bounded and belongs in Lisp. |
-| **4** Spatial/temporal predicates pushed into indexes | **Yes** — the same work as #102, for S5. |
+| **4** Spatial/temporal predicates pushed into indexes | **Yes** — the same work as kraison/vivace-graph#102, for S5. |
 | **4** First-class aggregation | **Weak form already shipped** (`findall` + length). Strong form is a want, not a need. |
 
 Phases 0 and 1 being already paid for is the single largest reason C is cheaper than the
@@ -412,9 +412,9 @@ selective. S5's access pattern, by contrast, *is* selective (place plus window),
 is exactly what a leading-prefix composite range serves. So:
 
 - S4 write-path validation → single-record lookup by identity. **M supplies this.** No
-  #45 work.
-- S4 batch pass → a sweep. No index, no #102.
-- S5 retrieval → selective. **This is where #102 and Phase 4's pushed-down predicates
+  kraison/vivace-graph#45 work.
+- S4 batch pass → a sweep. No index, no kraison/vivace-graph#102.
+- S5 retrieval → selective. **This is where kraison/vivace-graph#102 and Phase 4's pushed-down predicates
   land**, and the general-index design already identified the seam: mirror
   `spatial-query.lisp`, which wires the spatial index into Prolog as index-backed
   predicates — "thin wrappers over the v1 API, so build API first; Prolog is a wrapper,
@@ -430,7 +430,7 @@ makes it *terminate correctly*. That is the difference between a reasoner that r
 to answer and one that answers. Semi-naïve evaluation plus magic sets is then what makes
 derivation over 300k+ claims tractable rather than theoretical.
 
-⚠ **The trap.** Phase 3 is #45's declared flagship and "historically the direction this
+⚠ **The trap.** Phase 3 is kraison/vivace-graph#45's declared flagship and "historically the direction this
 engine has wanted to go." That is exactly the condition under which a programme quietly
 reorders itself around the most interesting engine work instead of the work that makes
 the substrate real. **Phase 3 is unlocked by this programme, not required by it** —
@@ -499,8 +499,8 @@ reveal. Measure it during S2/S3, when there is finally a bounded query to measur
 ## 13. Next step
 
 Each unit gets its own spec → plan → build cycle. The first is **M** (vivace-graph
-#107), whose spec must settle the multi-slot declaration surface, the class-level unique
-form and the tuple-NULL rule. **S1** (#108) is designed concurrently and built on M.
+kraison/vivace-graph#107), whose spec must settle the multi-slot declaration surface, the class-level unique
+form and the tuple-NULL rule. **S1** (kraison/vivace-graph#108) is designed concurrently and built on M.
 
 No unit is planned by this document. This document decides only what the units are,
 where they live, what order they go in, and what would make each of them wrong.
