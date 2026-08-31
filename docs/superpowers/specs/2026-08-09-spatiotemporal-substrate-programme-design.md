@@ -55,7 +55,7 @@ app-specific part is most of the code. That is the encouraging shape for an extr
 
 ### 3.1 What changed since the handoff was written
 
-- **vivace-graph #53 is CLOSED as completed** (`3f7ba97`). The multi-graph node-escape
+- **kraison/vivace-graph#53 is CLOSED as completed** (`3f7ba97`). The multi-graph node-escape
   class is fixed structurally: `maybe-init-node-data` resolves `(heap (node-home-graph
   node graph))`, so all thirteen call sites are correct at once and a future one is
   correct by default. The concern that a cross-graph claim layer would re-arm that SEGV
