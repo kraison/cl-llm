@@ -126,6 +126,6 @@ recall — those are kraison/cl-llm#14 and #24. And no registration: this
 tenant is map-less by design and proves nothing about it.
 
 Two engine findings from building it are recorded in the spec's §9:
-there is no as-of read over transaction time, and an unknown end bound
-is not clamped by its start (kraison/cl-temporal-extent#2), which is why
-`recall :at` uses its own predicate.
+there is no as-of read over transaction time (kraison/vivace-graph#300),
+and an unknown end bound was not clamped by its start
+(kraison/cl-temporal-extent#2, fixed the same day).

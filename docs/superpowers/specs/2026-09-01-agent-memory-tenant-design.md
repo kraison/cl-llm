@@ -153,10 +153,9 @@ recompute wrongly:
 | `standing`, `extent` | the claim's own, surfaced for the reader |
 
 Filters: `relation` and `producer` narrow the series; `at` (a timestamp)
-returns only beliefs valid at that instant. **Not** via
-`claims-touching`'s `:at` (see §9): the tenant's own predicate — start
-no later than `at`, end unknown or no earlier than `at`. Retracted
-claims are excluded unless `include-retracted`.
+returns only beliefs valid at that instant — `claims-touching`'s own
+`:at` (correct for open-ended extents since cl-temporal-extent#2, see
+§9). Retracted claims are excluded unless `include-retracted`.
 
 **Order is the contract** (programme §11): validity start descending,
 ties by `recorded-at` descending, then by object key. A reordering is a
@@ -224,8 +223,9 @@ same discipline as `tests-rag`'s golden.
   `extents-disjoint-p` is NIL and `claims-touching :at` returns an
   open-ended claim that starts *after* the instant. Every open-ended
   extent in the programme is exposed (a plan not yet finished, a run
-  still in force). Filed as kraison/cl-temporal-extent#2; `recall`
-  uses its own predicate until it lands.
+  still in force). Fixed as kraison/cl-temporal-extent#2 (PR #3, merged
+  2026-09-01); `recall :at` used its own predicate for one day and now
+  goes through the engine again.
 
 ## 10. Acceptance
 

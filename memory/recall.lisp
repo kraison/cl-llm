@@ -64,20 +64,6 @@ object key ascending."
                      (t (string< (%object-key-for-order a)
                                  (%object-key-for-order b)))))))))
 
-(defun %holds-at-p (claim at)
-  "True when CLAIM's validity possibly contains AT: start no later than
-AT, end unknown or no earlier than AT.  Not CLAIMS-TOUCHING's :AT --
-the algebra admits an unknown end that precedes its own start, so an
-open-ended belief starting AFTER the instant reads as :FINISHED-BY it
-(kraison/cl-temporal-extent#2)."
-  (let* ((e (st:claim-extent claim))
-         (start (te:bound-earliest (te:extent-start e)))
-         (end (te:extent-end e)))
-    (and (not (local-time:timestamp< at start))
-         (or (te:bound-unknown-p end)
-             (eq :unbounded (te:bound-latest end))
-             (not (local-time:timestamp< (te:bound-latest end) at))))))
-
 (defun recall (graph subject &key relation producer at include-retracted)
   "BELIEF-RECORDs about SUBJECT, ordered newest validity first (SS6).
 RELATION and PRODUCER narrow the series; AT keeps only beliefs valid at
@@ -86,6 +72,11 @@ Nothing recorded returns NIL -- which is not an absence standing."
   (%check-endpoint :subject subject)
   (let* ((all (st:claims-touching graph 'belief (car subject)
                                   (cdr subject) :role :subject))
+         ;; The engine's :AT is the validity filter (cl-temporal-extent#2
+         ;; fixed the open-ended case it used to get wrong).
+         (at-window (and at (st:claims-touching
+                             graph 'belief (car subject) (cdr subject)
+                             :role :subject :at at)))
          (wanted (remove-if-not
                   (lambda (c)
                     (and (or (null relation)
@@ -93,7 +84,7 @@ Nothing recorded returns NIL -- which is not an absence standing."
                          (or (null producer)
                              (string= producer (st:claim-producer c)))
                          (or include-retracted (st:claim-current-p c))
-                         (or (null at) (%holds-at-p c at))))
+                         (or (null at) (member c at-window))))
                   all))
          (series (make-hash-table :test 'equal)))
     ;; Successors are found within the full series, so a claim outside
