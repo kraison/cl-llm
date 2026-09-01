@@ -607,6 +607,11 @@ metadata (the §9.5 facet contract). The fusion identity is the claim's
 uniqueness tuple, so one claim reached through its subject and its
 object fuses to one item.
 
+A claim's `relation` and `producer` are canonical strings
+(`[a-z0-9-]`, producer also `/`; kraison/vivace-graph#160), enforced by
+the engine at commit -- so a renderer, a matcher, or a test fixture may
+assume strings and never a keyword (#25).
+
 §3's distinction goes live here: a **recognised endpoint with no
 claims yields a `:searched-empty` item** — "no claims touch
 device:d42" is a fact the bundle carries, scored at the bottom,

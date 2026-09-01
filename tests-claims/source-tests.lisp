@@ -32,7 +32,7 @@
   `(%call-with-graph (lambda (,g) ,@body)))
 
 (defun %seed (g &key (subject "d42") (object "s1")
-                     (relation :feeds) (producer :rule-a)
+                     (relation "feeds") (producer "rule-a")
                      (standing :observed) extent)
   (gdb:with-transaction ((graph-db::transaction-manager g))
     (let ((claim (make-probe-claim-binary
