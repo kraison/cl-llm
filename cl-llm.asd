@@ -212,7 +212,8 @@
   :components ((:file "packages")
                (:file "schema")
                (:file "write")
-               (:file "recall"))
+               (:file "recall")
+               (:file "capture"))
   ;; The test-op link: without it TEST-SYSTEM is a silent no-op
   ;; (docs/ci.md, kraison/cl-llm#26).
   :in-order-to ((test-op (test-op "cl-llm/memory/tests"))))
@@ -227,7 +228,8 @@
                (:file "harness")
                (:file "schema-tests")
                (:file "write-tests")
-               (:file "recall-tests"))
+               (:file "recall-tests")
+               (:file "capture-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! :cl-llm-memory)
                (error "cl-llm/memory suite failed."))))
