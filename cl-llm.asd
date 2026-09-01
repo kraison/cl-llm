@@ -183,7 +183,11 @@
   :serial t
   :pathname "claims/"
   :components ((:file "packages")
-               (:file "source")))
+               (:file "source"))
+  ;; Without this, (asdf:test-system :cl-llm/rag/claims) is a silent
+  ;; no-op -- CI's claims step ran nothing from ad0d2eb until this
+  ;; landed (kraison/cl-llm#26).
+  :in-order-to ((test-op (test-op "cl-llm/rag/claims/tests"))))
 
 (defsystem "cl-llm/rag/claims/tests"
   :description "On-disk-graph tests for cl-llm/rag/claims."

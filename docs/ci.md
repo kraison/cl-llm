@@ -12,3 +12,9 @@ earlier host-pin floor failed against tests needing same-day engine
 work.  The tested cl-llm tree is the pushed tree (quicklisp
 `local-projects` is neutralised).  Verdicts
 land in sitrep's mirror via the checks leg (kraison/sitrep#42).
+
+A green run is only evidence for the suites whose summary lines
+(`Did N checks`) appear in the job log: `asdf:test-system` on a
+system with no `:in-order-to` test-op is a silent no-op, and the
+claims step was exactly that from 2026-08-31 to 2026-09-01 (#26).
+Read the log once when a step is added, not just the verdict.
