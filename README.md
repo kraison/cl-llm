@@ -344,12 +344,13 @@ carrying its own standing — from the evidence at hand or from a
 caller-supplied value, and `dense-source`/`sparse-source` honour it via
 `rag:bounded-evidence`, excluding only evidence *known* to lie outside
 it. `rag:fuse` takes `:bounds` too and hands it to every source, so a
-hybrid query is scoped the same way a single-source one is. The bound is
-applied as a **post-filter over each source's top-`k`**,
-not pushed down into the store, so a bounded query returns at most `k`
-and may return fewer than the same unbounded query would. That is
-intended for now; pushing the bound into the store's own search is
-future work. The planner lives in `cl-llm/rag` with no graph dependency,
+hybrid query is scoped the same way a single-source one is. A bounded
+query **fills `k` from in-bounds candidates** (`rag:fill-bounded`): the
+bound is still applied to what a store returns, but the source asks for
+more until `k` survive or the store is exhausted, so a bounded query
+returns fewer than `k` only when fewer exist. Pushing the bound into the
+store's own scan is the engine's seam (kraison/vivace-graph#293). The
+planner lives in `cl-llm/rag` with no graph dependency,
 same as the bundle itself. See
 [`docs/evidence-bundle.md`](docs/evidence-bundle.md) for the records, the
 scorers, the planner, and what each unit does and does not do.

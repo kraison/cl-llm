@@ -155,3 +155,36 @@ a search that did not happen."
       (is (eq :searched-empty (rag:evidence-standing (first evs)))
           "an absence carries no extent, and a bound excludes only ~
            what it KNOWS to fall outside"))))
+
+(test a-bounded-claim-query-fills-k-from-claims-the-cap-would-have-cut
+  "cl-llm#19 for the claim source: the bound applies BEFORE the
+candidate cap.  CLAIMS-TOUCHING's order is not fixed, so instead of a
+control on the unbounded top-1 the same :k 1 query is bounded to each
+window in turn: cap-then-filter can satisfy at most one of the two,
+whichever claim happens to come first."
+  (flet ((year (y)
+           (temporal-extent:exact-bound
+            (local-time:parse-timestring
+             (format nil "~d-01-01T00:00:00Z" y))))
+         (top-text (evs)
+           (and (= 1 (length evs))
+                (rag:chunk-text (rag:evidence-chunk (first evs))))))
+    (with-claims-graph (g)
+      (%seed g :object "old"
+               :extent (temporal-extent:make-interval
+                        (year 1990) (year 1991) :standing :observed))
+      (%seed g :object "new"
+               :extent (temporal-extent:make-interval
+                        (year 2005) (year 2006) :standing :observed))
+      (flet ((bounded-to (y1 y2)
+               (rag:collect-evidence
+                (claims:make-claim-source
+                 g 'probe-claim (%extract-devices "d42"))
+                "d42" :k 1
+                :bounds (rag:make-bounds
+                         :window (temporal-extent:make-interval
+                                  (year y1) (year y2)
+                                  :standing :asserted)
+                         :window-standing :asserted))))
+        (is (search "sensor:new" (top-text (bounded-to 2004 2007))))
+        (is (search "sensor:old" (top-text (bounded-to 1989 1992))))))))

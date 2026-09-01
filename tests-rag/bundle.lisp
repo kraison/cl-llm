@@ -513,3 +513,84 @@ each source honours but FUSE never passes on is a bound nobody gets
         (is (= 1 (length ev)) "the 1990 chunk is known outside the window")
         (is (string= "in" (rag:chunk-document-id
                            (rag:evidence-chunk (first ev)))))))))
+
+(test a-bounded-dense-query-fills-k-from-below-the-unbounded-top-k
+  "cl-llm#19: a bound scopes the SEARCH, not just the result.  Two
+out-of-window chunks outrank the in-window one, so a post-filter over
+the unbounded top-1 returns nothing; the source must keep looking until
+k in-bounds hits come back when k in-bounds hits exist."
+  (let* ((embedder (rag:make-mock-embedder :dimension 32))
+         (store (rag:make-memory-store))
+         (sexp #'temporal-extent:extent->sexp)
+         (old (funcall sexp (%interval 1990 1991)))
+         (new (funcall sexp (%interval 2005 2006))))
+    (flet ((chunk (text id extent)
+             (rag:make-chunk text :document-id id
+                                  :metadata (list :extent extent)
+                                  :embedding (rag:embed embedder text))))
+      (rag:store-add store (list (chunk "fuze" "out1" old)
+                                 (chunk "fuze fuze" "out2" old)
+                                 (chunk "fuze survey" "in" new))))
+    (let ((source (rag:make-dense-source embedder store))
+          (b (rag:make-bounds :window (%interval 2004 2007)
+                              :window-standing :asserted)))
+      (is (not (string= "in" (rag:chunk-document-id
+                              (rag:evidence-chunk
+                               (first (rag:collect-evidence
+                                       source "fuze" :k 1))))))
+          "control: unbounded, the in-window chunk is NOT in the top-1")
+      (let ((ev (rag:collect-evidence source "fuze" :k 1 :bounds b)))
+        (is (= 1 (length ev)))
+        (is (string= "in" (rag:chunk-document-id
+                           (rag:evidence-chunk (first ev)))))))))
+
+(test a-bounded-sparse-query-fills-k-from-below-the-unbounded-top-k
+  "The sparse half of cl-llm#19 -- named separately because a bound
+mechanism built for one source and assumed for the other is the defect
+that survived four reviews in unit 1."
+  (let* ((store (rag:make-sparse-store))
+         (sexp #'temporal-extent:extent->sexp)
+         (old (funcall sexp (%interval 1990 1991)))
+         (new (funcall sexp (%interval 2005 2006))))
+    (flet ((chunk (text id extent)
+             (rag:make-chunk text :document-id id
+                                  :metadata (list :extent extent))))
+      (rag:store-add store (list (chunk "fuze fuze fuze" "out1" old)
+                                 (chunk "fuze fuze" "out2" old)
+                                 (chunk "fuze survey" "in" new))))
+    (let ((source (rag:make-sparse-source store))
+          (b (rag:make-bounds :window (%interval 2004 2007)
+                              :window-standing :asserted)))
+      (is (not (string= "in" (rag:chunk-document-id
+                              (rag:evidence-chunk
+                               (first (rag:collect-evidence
+                                       source "fuze" :k 1))))))
+          "control: unbounded, the in-window chunk is NOT in the top-1")
+      (let ((ev (rag:collect-evidence source "fuze" :k 1 :bounds b)))
+        (is (= 1 (length ev)))
+        (is (string= "in" (rag:chunk-document-id
+                           (rag:evidence-chunk (first ev)))))))))
+
+(test a-bounded-query-stops-at-the-store-when-fewer-than-k-are-in-bounds
+  "Termination guard for the escalation cl-llm#19 adds: with one
+in-bounds chunk and :k 5 the source returns that one and stops, rather
+than asking the store for ever more of what it has already given."
+  (let* ((embedder (rag:make-mock-embedder :dimension 32))
+         (store (rag:make-memory-store))
+         (sexp #'temporal-extent:extent->sexp)
+         (old (funcall sexp (%interval 1990 1991)))
+         (new (funcall sexp (%interval 2005 2006))))
+    (flet ((chunk (text id extent)
+             (rag:make-chunk text :document-id id
+                                  :metadata (list :extent extent)
+                                  :embedding (rag:embed embedder text))))
+      (rag:store-add store (list (chunk "fuze" "out1" old)
+                                 (chunk "fuze fuze" "out2" old)
+                                 (chunk "fuze survey" "in" new))))
+    (let ((ev (rag:collect-evidence
+               (rag:make-dense-source embedder store) "fuze" :k 5
+               :bounds (rag:make-bounds :window (%interval 2004 2007)
+                                        :window-standing :asserted))))
+      (is (= 1 (length ev)))
+      (is (string= "in" (rag:chunk-document-id
+                         (rag:evidence-chunk (first ev))))))))

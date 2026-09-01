@@ -125,10 +125,11 @@ and no box, so no bound can exclude it."
 (defmethod rag:collect-evidence ((source claim-source) query
                                  &key (k 5) bounds)
   "Claims touching every endpoint KEY-EXTRACTOR recognises in QUERY,
-best first, capped at K; then one :SEARCHED-EMPTY item per recognised
-endpoint that yielded nothing.  An extractor that recognises nothing
-returns NIL -- nothing was consulted, which is :INDETERMINATE
-territory and not this source's to assert (§9.2)."
+best first, BOUNDS applied and then capped at K (cl-llm#19); then one
+:SEARCHED-EMPTY item per recognised endpoint that yielded nothing.
+An extractor that recognises nothing returns NIL -- nothing was
+consulted, which is :INDETERMINATE territory and not this source's to
+assert (§9.2)."
   (let ((keys (funcall (claim-source-key-extractor source) query))
         (seen (make-hash-table :test 'equal))
         (claims '())
@@ -146,13 +147,15 @@ territory and not this source's to assert (§9.2)."
                   (push claim claims))))
             (push (%absence-evidence (car pair) (cdr pair))
                   absences))))
-    (let* ((ordered (nreverse claims))
-           (top (subseq ordered 0 (min k (length ordered))))
+    ;; Bound first, cap second: every touching claim is already in
+    ;; hand, so filling K from in-bounds claims costs nothing extra.
+    (let* ((kept (rag:bounded-evidence
+                  (loop for claim in (nreverse claims)
+                        collect (%claim-evidence source claim 0d0))
+                  bounds))
+           (top (subseq kept 0 (min k (length kept))))
            (n (length top)))
-      (rag:bounded-evidence
-       (append (loop for claim in top
-                     for i from 0
-                     collect (%claim-evidence source claim
-                                              (float (- n i) 1d0)))
-               (nreverse absences))
-       bounds))))
+      (loop for e in top
+            for i from 0
+            do (setf (rag:evidence-score e) (float (- n i) 1d0)))
+      (append top (nreverse absences)))))

@@ -136,8 +136,8 @@ parameter ahead of the mechanism that would use it; unit 2 (§9) is that
 mechanism. Both `dense-source` and `sparse-source` now filter their
 results through `bounded-evidence` before returning them, so a caller
 that passes `:bounds` gets a scoped list back, not the unfiltered one.
-`fuse` passes `:bounds` on to every source it collects from — see §9.6,
-which states what applying the bound as a post-filter costs. Unit 3's
+`fuse` passes `:bounds` on to every source it collects from — see §9.6
+for how a source fills `k` under a bound, and what it costs. Unit 3's
 claim expansion becomes a third `collect-evidence` method on this same
 generic.
 
@@ -413,9 +413,10 @@ Unit 2 gives the `bounds` parameter (§4) a producer and a meaning: it
 bounds the region and window an answer is drawn from, rather than
 approximating relevance by hop count once results are back. The planner's
 output is a **scope**, not a ranking — weighting within that scope is unit
-3's problem. How that scope is *applied* today is a post-filter over each
-source's results rather than a restriction pushed into the store; §9.6
-says plainly what that costs a caller.
+3's problem. How that scope is *applied* today is a filter over each
+source's results, re-asked at a deeper candidate depth until `k` survive,
+rather than a restriction pushed into the store; §9.6 says plainly what
+that costs a caller.
 
 ### 9.1 `bounds`: two halves, two reasons
 
@@ -542,25 +543,30 @@ behaves exactly as it did before this unit.
 `bounded-evidence` before returning, so `(collect-evidence source query
 :bounds b)` scopes either source on its own.
 
-**The bound is a post-filter over each source's top-`k`, not
-pre-retrieval scoping.** `collect-evidence` calls
-`store-search`/`sparse-search` with `k` first and drops the
-known-outside items from what comes back. The consequence a caller sees:
-a bounded query returns **at most `k`, and may return fewer than the same
-unbounded query would**. Ask for `:k 5` inside a window and you can get
-back 2, or 0, while the store still holds fifty in-bounds chunks that
-ranked below the unfiltered top 5. That is intended behaviour, not a bug
-— but it is the same shape as the "asking for `k` gets back fewer than
-`k`" defect this repo has already fixed once (#17), so it is stated here
-rather than left to be discovered. Pushing the bound down into a store's
-own search, so that `k` is filled from in-bounds candidates, needs a
-store-level predicate that does not exist yet; it is tracked as #19.
+**A bounded query fills `k` from in-bounds candidates** (`fill-bounded`,
+#19). The bound is still a filter over what a store returns — the store
+has no way to scope its own scan — but the source does not stop at the
+unbounded top-`k`: it asks for `k`, filters, and if fewer than `k`
+survive asks again at double the depth, until `k` survive or the store
+hands back fewer than it was asked for (exhausted). So `:k 5` inside a
+window returns 5 whenever five in-bounds chunks exist, and fewer only
+when fewer exist — the "asking for `k` gets back fewer than `k`" shape
+this repo fixed once already (#17) does not recur here. Unbounded, a
+source is asked exactly once.
+
+**What it costs.** Each escalation is another store search, and a tight
+bound over a large store ends at a scan of the whole store —
+`log2(store/k)` searches, the last one sorting everything. That is the
+honest consumer-side answer until the engine can scope the scan itself:
+an in-scan filter, a pre-resolved id set from the spatial index, or a
+resumable scan (kraison/vivace-graph#293, to be chosen by a selectivity
+measurement over the real corpus). `fill-bounded` is exported so a
+store-backed source added later gets the same contract for free.
 
 **`fuse` takes `:bounds` and hands it to every source** (#18), so a hybrid
-query is scoped the same way a single-source one is. The post-filter cost
-above compounds there: each source filters its own top-`k` before the
-ranks are fused, so a bound can thin one source's list without the other
-making up the difference.
+query is scoped the same way a single-source one is, and since each
+source now fills its own `k`, a bound no longer thins one source's list
+before the ranks are fused.
 
 ### 9.7 What unit 2 does not do
 
@@ -577,7 +583,8 @@ making up the difference.
   opaque function.
 - **No claim traversal.** Seeds come from the two retrieval modes that
   exist.
-- **No push-down into the store.** §9.6, tracked as #19.
+- **No push-down into the store.** §9.6: `k` is filled by re-asking,
+  not by scoping the scan (kraison/vivace-graph#293).
 
 ## 10. Claim traversal (unit 3): `cl-llm/rag/claims`
 
@@ -619,7 +626,10 @@ carrying no extent so no bound can exclude it. An extractor that
 recognises nothing returns `NIL`: nothing was consulted, which is
 `:indeterminate` territory and not this source's to assert (§9.2).
 
-The candidate depth `:k` caps claims, not absences. Tests run against
+The candidate depth `:k` caps claims, not absences, and a bound is
+applied *before* the cap (#19) — every touching claim is already in
+hand, so filling `k` from in-bounds claims costs nothing. Tests run
+against
 a real on-disk claim store (`cl-llm/rag/claims/tests`).
 
 The first consumer is the sitrep tenant (kraison/sitrep#31), whose

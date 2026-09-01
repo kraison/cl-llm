@@ -30,7 +30,8 @@ a reordering is a regression, so nothing may sort it on the way out."
   (:documentation "Return a list of EVIDENCE for QUERY, best first.
 BOUNDS is the planner's region/window; a method honours it by filtering
 through BOUNDED-EVIDENCE, which excludes only what BOUNDS is KNOWN to place
-outside it (design, cl-llm#13 unit 2)."))
+outside it (design, cl-llm#13 unit 2), and by filling K from what survives
+rather than from the unbounded top-K (FILL-BOUNDED, cl-llm#19)."))
 
 (defclass dense-source ()
   ((embedder :initarg :embedder :reader dense-source-embedder)
@@ -85,19 +86,37 @@ and found nothing (that is :SEARCHED-EMPTY, cl-llm#13 unit 3)."
                    :box box
                    :standing :indeterminate)))
 
+(defun fill-bounded (k bounds search)
+  "K in-bounds EVIDENCE when K exist.  SEARCH is a function of a candidate
+depth N returning EVIDENCE best first; without BOUNDS it is called once at
+K.  With BOUNDS the post-filter over the top-N is retried at a doubled N
+until K survive or the store hands back fewer than asked -- exhausted.
+Worst case a tight bound scans the whole store (log2(store/K) searches);
+scoping the search itself is the engine's seam, kraison/vivace-graph#293
+(cl-llm#19)."
+  (if (null bounds)
+      (funcall search k)
+      (loop with n = k
+            for evs = (funcall search n)
+            for kept = (bounded-evidence evs bounds)
+            when (or (>= (length kept) k) (< (length evs) n))
+              return (subseq kept 0 (min k (length kept)))
+            do (setf n (* 2 n)))))
+
 (defmethod collect-evidence ((source dense-source) query &key (k 5) bounds)
-  (bounded-evidence
-   (mapcar (lambda (h) (%hit->evidence h :dense))
-           (store-search (dense-source-store source)
-                         (embed (dense-source-embedder source) query)
-                         k))
-   bounds))
+  (let ((store (dense-source-store source))
+        (vector (embed (dense-source-embedder source) query)))
+    (fill-bounded k bounds
+                  (lambda (n)
+                    (mapcar (lambda (h) (%hit->evidence h :dense))
+                            (store-search store vector n))))))
 
 (defmethod collect-evidence ((source sparse-source) query &key (k 5) bounds)
-  (bounded-evidence
-   (mapcar (lambda (h) (%hit->evidence h :sparse))
-           (sparse-search (sparse-source-store source) query k))
-   bounds))
+  (let ((store (sparse-source-store source)))
+    (fill-bounded k bounds
+                  (lambda (n)
+                    (mapcar (lambda (h) (%hit->evidence h :sparse))
+                            (sparse-search store query n))))))
 
 (defun %evidence->hit (evidence)
   (make-hit (evidence-chunk evidence) (evidence-score evidence)))
@@ -108,8 +127,8 @@ Ranking is RECIPROCAL-RANK-FUSION over each source's list, which is why the
 sources' incomparable native scores never share a scale.  The bundle's
 order is the contract; nothing downstream may re-sort it.
 
-:BOUNDS is passed to every source, which each apply it as a post-filter
-over their own top-:K (docs/evidence-bundle.md §9.6, cl-llm#19).
+:BOUNDS is passed to every source; each fills its own :K from in-bounds
+candidates (FILL-BOUNDED; docs/evidence-bundle.md §9.6).
 
 The result is truncated to :K, matching RETRIEVE (hybrid.lisp) -- a caller
 asking for K never gets back up to 2K (cl-llm#13).  Sources still receive
