@@ -14,6 +14,26 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: engine deps at branch head
+        # cl-llm's claims tests now track vivace-graph EXPERIMENT
+        # (decided 2026-09-01; the floor pin failed against tests
+        # that need same-day engine work).  Own dep dir -- the
+        # mine-action runner shares this user, and two runners
+        # refreshing one checkout would race.
+        run: |
+          mkdir -p ~/ci-deps-cl-llm
+          for spec in "vivace-graph experiment" \
+                      "cl-temporal-extent master"; do
+            set -- $spec
+            if [ -d ~/ci-deps-cl-llm/$1/.git ]; then
+              git -C ~/ci-deps-cl-llm/$1 fetch -q origin
+              git -C ~/ci-deps-cl-llm/$1 checkout -qf origin/$2
+            else
+              git clone -q -b $2 https://github.com/kraison/$1 \
+                ~/ci-deps-cl-llm/$1
+            fi
+            echo "$1 @ $(git -C ~/ci-deps-cl-llm/$1 rev-parse --short HEAD)"
+          done
       - name: core + rag + claims
         run: |
           sbcl --dynamic-space-size 4096 --non-interactive \
@@ -24,11 +44,11 @@ jobs:
                             (list :tree (uiop:getcwd))
                             (list :directory
                                   (merge-pathnames
-                                   "src/vivace-graph-v3/"
+                                   "ci-deps-cl-llm/vivace-graph/"
                                    (user-homedir-pathname)))
                             (list :directory
                                   (merge-pathnames
-                                   "src/cl-temporal-extent/"
+                                   "ci-deps-cl-llm/cl-temporal-extent/"
                                    (user-homedir-pathname)))
                             :ignore-inherited-configuration))' \
             --eval '(ql:quickload (list :cl-llm/tests :cl-llm/rag/tests
