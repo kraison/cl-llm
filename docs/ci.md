@@ -1,7 +1,7 @@
 # CI
 
 `.github/workflows/test.yml` runs the offline suites (core, rag,
-claims) on every push to `main` and on pull requests, on the ma-dev
+claims, memory) on every push to `main` and on pull requests, on the ma-dev
 self-hosted runner (per-repo runner, `gh-runner-cl-llm.service`
 under the sitrep user).  The claims suite needs graph-db/spacetime,
 refreshed each run to vivace-graph EXPERIMENT head (plus

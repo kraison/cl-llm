@@ -203,6 +203,29 @@ omission. What counts as an endpoint key in a query is supplied by the
 caller (`key-extractor`); the source itself is tenant-neutral. See
 `docs/evidence-bundle.md` §10.
 
+### Agent memory (`cl-llm/memory`)
+
+`cl-llm/memory` is the third tenant of `graph-db/spacetime`: an agent's
+**beliefs** as claims, with a standing and a validity extent
+(kraison/cl-llm#16). "I looked and there was nothing" is a write, not a
+missing row; a belief that stopped being true is recalled *as
+superseded*, naming its successor; a belief that was wrong is retracted
+and stays readable as "believed from t1 to t2".
+
+```lisp
+;; mem = cl-llm.memory
+(gdb:with-transaction (:graph g)
+  (mem:record-belief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green")
+                     :producer "claude-code/odm" :standing :observed))
+(mem:recall g '(:repo . "cl-llm") :relation "ci-status")
+;; => (#S(belief-record :current-p t :superseded-by nil ...))
+```
+
+`capture-memory-dir` turns a directory of memory notes into one source
+node and one content belief per note; a second capture after an edit
+supersedes rather than overwrites. See
+[`docs/agent-memory.md`](docs/agent-memory.md).
+
 ### Graph-backed stores (`cl-llm/rag/vivace`)
 
 `cl-llm/rag/vivace` lets a persistent [vivace-graph](https://github.com/kraison/vivace-graph)
@@ -376,6 +399,16 @@ suite fixtures, tracked as cl-llm#11; not caused by, and not specific to, the
 ```sh
 sbcl --dynamic-space-size 4096 --non-interactive \
      --eval '(asdf:test-system :cl-llm/rag/vivace/tests)'
+```
+
+`cl-llm/rag/claims` and `cl-llm/memory` need `graph-db/spacetime` (from
+vivace-graph `experiment`) and run each test on a real on-disk graph
+under `/tmp`; CI refreshes the engine to `experiment` HEAD on every run
+(`docs/ci.md`):
+
+```sh
+sbcl --dynamic-space-size 4096 --non-interactive \
+     --eval '(asdf:test-system :cl-llm/memory)'
 ```
 
 The live suite (`cl-llm/live`) is a separate ASDF system that hits real

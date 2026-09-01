@@ -52,8 +52,10 @@ jobs:
                                    (user-homedir-pathname)))
                             :ignore-inherited-configuration))' \
             --eval '(ql:quickload (list :cl-llm/tests :cl-llm/rag/tests
-                                        :cl-llm/rag/claims/tests)
+                                        :cl-llm/rag/claims/tests
+                                        :cl-llm/memory/tests)
                                   :silent t)' \
             --eval '(asdf:test-system :cl-llm)' \
             --eval '(asdf:test-system :cl-llm/rag)' \
-            --eval '(asdf:test-system :cl-llm/rag/claims)'
+            --eval '(asdf:test-system :cl-llm/rag/claims)' \
+            --eval '(asdf:test-system :cl-llm/memory)'
