@@ -201,6 +201,33 @@
              (unless (symbol-call :fiveam :run! :cl-llm-rag-claims)
                (error "cl-llm/rag/claims suite failed."))))
 
+(defsystem "cl-llm/memory"
+  :description "Tenant three: an agent's beliefs as claims (#16)."
+  :license "MIT"
+  ;; graph-db/spacetime only -- never cl-llm core or cl-llm/rag: this
+  ;; tenant needs no LLM (spec 2026-09-01-agent-memory-tenant SS8).
+  :depends-on ("graph-db/spacetime" "ironclad" "babel")
+  :serial t
+  :pathname "memory/"
+  :components ((:file "packages")
+               (:file "schema"))
+  ;; The test-op link: without it TEST-SYSTEM is a silent no-op
+  ;; (docs/ci.md, kraison/cl-llm#26).
+  :in-order-to ((test-op (test-op "cl-llm/memory/tests"))))
+
+(defsystem "cl-llm/memory/tests"
+  :description "On-disk-graph tests for cl-llm/memory."
+  :license "MIT"
+  :depends-on ("cl-llm/memory" "fiveam")
+  :serial t
+  :pathname "tests-memory/"
+  :components ((:file "packages")
+               (:file "harness")
+               (:file "schema-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run! :cl-llm-memory)
+               (error "cl-llm/memory suite failed."))))
+
 (defsystem "cl-llm/rag/vivace/tests"
   :description "Offline (in-memory-graph) tests for cl-llm/rag/vivace."
   :license "MIT"
