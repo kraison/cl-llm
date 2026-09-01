@@ -153,10 +153,10 @@ recompute wrongly:
 | `standing`, `extent` | the claim's own, surfaced for the reader |
 
 Filters: `relation` and `producer` narrow the series; `at` (a timestamp)
-returns only beliefs valid at that instant — `claims-touching`'s own
-`:at`, so an extent-less claim cannot be returned (none exists here:
-`:temporal t` requires one). Retracted claims are excluded unless
-`include-retracted`.
+returns only beliefs valid at that instant. **Not** via
+`claims-touching`'s `:at` (see §9): the tenant's own predicate — start
+no later than `at`, end unknown or no earlier than `at`. Retracted
+claims are excluded unless `include-retracted`.
 
 **Order is the contract** (programme §11): validity start descending,
 ties by `recorded-at` descending, then by object key. A reordering is a
@@ -218,6 +218,14 @@ same discipline as `tests-rag`'s golden.
   retained (closed transaction extents), the query is not. To file on
   vivace-graph when `#14` starts, with this tenant as its consumer.
 - **Retraction keeps identity** (§3). Documented here; not a defect.
+- **An unknown end bound is not clamped by its start.** Found by the
+  first `recall :at` test: `[2026-09-03, unknown]` against the instant
+  2026-09-02 yields the Allen set `(:after :finished-by :before)`, so
+  `extents-disjoint-p` is NIL and `claims-touching :at` returns an
+  open-ended claim that starts *after* the instant. Every open-ended
+  extent in the programme is exposed (a plan not yet finished, a run
+  still in force). Filed as kraison/cl-temporal-extent#2; `recall`
+  uses its own predicate until it lands.
 
 ## 10. Acceptance
 
