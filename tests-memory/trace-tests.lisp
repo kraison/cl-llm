@@ -141,3 +141,69 @@ a TRACE claim (a prior decision's CONCLUDED) is itself evidence."
       (mem:conclude g (list :belief +ts+ "x" '(:v . "1")
                             :standing :inferred)
                     :producer +p+ :evidence (list 42) :rule "r"))))
+
+(defun %lapsed-belief (g &key (subject +ts+))
+  "A belief on SUBJECT / ci-status held over [2026-01-01, 2026-03-01],
+written closed: no current predecessor, so a re-assertion stages a
+fresh claim (SS7).  Written closed in one go -- RECORD-BELIEF would
+otherwise take its idempotent path against an open green belief on the
+same subject and hand back THAT one."
+  (gdb:with-transaction (:graph g)
+    (mem:record-belief g subject "ci-status" '(:verdict . "green")
+                       :producer +p+ :standing :observed
+                       :extent (te:make-interval
+                                (te:exact-bound (%ts "2026-01-01T00:00:00Z"))
+                                (te:exact-bound (%ts "2026-03-01T00:00:00Z"))
+                                :semantics :validity :standing :asserted))))
+
+(defun %refused-families (g id)
+  (sort (mapcar #'st:claim-object-key
+                (remove "refused" (%trace-claims g id)
+                        :key #'st:claim-relation :test-not #'string=))
+        #'string<))
+
+(test a-refused-proposal-is-recorded-and-writes-no-belief
+  "SS4 step 2 / SS7: the extent-disjointness validator refuses the
+overlap; the trace says so; RECALL shows no new belief."
+  (with-memory-graph (g)
+    (%lapsed-belief g)
+    (let ((d (mem:conclude g (list :belief +ts+ "ci-status"
+                                   '(:verdict . "green")
+                                   :standing :observed
+                                   :extent (%open-from
+                                            (%ts "2026-02-01T00:00:00Z")))
+                           :producer +p+ :rule "r")))
+      (is (eq :refused (mem:decision-outcome d)))
+      (is (null (mem:decision-claim d)))
+      (is (typep (mem:decision-report d) 'gdb:validation-report))
+      (is (equal '("subsystem") (%refused-families g (mem:decision-id d))))
+      (is (= 1 (length (mem:recall g +ts+ :relation "ci-status"
+                                   :include-retracted t)))
+          "the lapsed belief is the only one; nothing new was written"))))
+
+(test a-repeated-identity-is-refused-by-the-unique-family
+  (with-memory-graph (g)
+    (%lapsed-belief g)
+    (let ((d (mem:conclude g (list :belief +ts+ "ci-status"
+                                   '(:verdict . "green")
+                                   :standing :observed
+                                   :extent (%open-from
+                                            (%ts "2026-01-01T00:00:00Z")))
+                           :producer +p+ :rule "r")))
+      (is (eq :refused (mem:decision-outcome d)))
+      (is (member "unique" (%refused-families g (mem:decision-id d))
+                  :test #'string=)))))
+
+(test a-refused-decision-still-records-its-evidence
+  (with-memory-graph (g)
+    (%lapsed-belief g)
+    (let* ((e (%belief g "last-push" '(:sha . "abc")))
+           (d (mem:conclude g (list :belief +ts+ "ci-status"
+                                    '(:verdict . "green")
+                                    :standing :observed
+                                    :extent (%open-from
+                                             (%ts "2026-02-01T00:00:00Z")))
+                            :producer +p+ :evidence (list e) :rule "r")))
+      (is (equal '("evidence" "refused")
+                 (%relations (%trace-claims g (mem:decision-id d)))))
+      (is (typep (mem:decision-at d) 'local-time:timestamp)))))

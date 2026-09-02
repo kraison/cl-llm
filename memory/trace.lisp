@@ -67,6 +67,41 @@ outcome claim's RECORDED-AT."
   (dolist (cite (remove-duplicates cites :test #'string=))
     (%trace-claim graph id "evidence" :claim cite producer :observed)))
 
+(define-condition %refused (error)
+  ((report :initarg :report :reader %refused-report))
+  (:documentation "Unwinds CONCLUDE's transaction without committing
+(SS4 step 2); never escapes CONCLUDE."))
+
+(defun %staged-writes ()
+  "The open transaction's delta, for VALIDATE-WRITES.  Internal reader;
+export asked on kraison/vivace-graph#320."
+  (graph-db::writes gdb:*transaction*))
+
+(defun %violation-families (report-or-condition)
+  "(family . text) per violation, first per family, in family order."
+  (let ((rows (if (typep report-or-condition 'gdb:validation-report)
+                  (loop for (family nil detail)
+                          in (gdb:validation-report-violations
+                              report-or-condition)
+                        collect (cons (string-downcase (symbol-name family))
+                                      (princ-to-string detail)))
+                  (list (cons "commit"
+                              (princ-to-string report-or-condition))))))
+    (sort (remove-duplicates rows :key #'car :test #'string= :from-end t)
+          #'string< :key #'car)))
+
+(defun %write-refusal (graph id report cites producer)
+  "A fresh transaction recording the refusal (SS4 step 2/3)."
+  (let ((outcome nil))
+    (gdb:with-transaction (:graph graph)
+      (dolist (row (%violation-families report))
+        (setf outcome
+              (%trace-claim graph id "refused" :violation (car row)
+                            producer :observed :method (cdr row))))
+      (%write-evidence graph id cites producer))
+    (make-decision :id id :outcome :refused :report report
+                   :at (st:claim-recorded-at outcome))))
+
 (defun conclude (graph proposal
                  &key producer evidence rule rule-version confidence)
   "Decide PROPOSAL from EVIDENCE under RULE (SS4).  Owns its
@@ -81,14 +116,24 @@ Returns a DECISION."
   (let ((id (%mint-id))
         (cites (mapcar #'%cite-of evidence))
         (claim nil) (outcome nil))
-    (gdb:with-transaction (:graph graph)
-      (setf claim (%stage graph proposal producer rule rule-version
-                          confidence))
-      (setf outcome
-            (%trace-claim graph id "concluded" :claim (claim-cite claim)
-                          producer :inferred
-                          :method rule :rule-version rule-version
-                          :confidence confidence))
-      (%write-evidence graph id cites producer))
-    (make-decision :id id :outcome :concluded :claim claim
-                   :at (st:claim-recorded-at outcome))))
+    (handler-case
+        (progn
+          (gdb:with-transaction (:graph graph)
+            (setf claim (%stage graph proposal producer rule rule-version
+                                confidence))
+            (let ((report (gdb:validate-writes graph (%staged-writes))))
+              (when (gdb:validation-report-violations report)
+                (error '%refused :report report)))
+            (setf outcome
+                  (%trace-claim graph id "concluded" :claim
+                                (claim-cite claim) producer :inferred
+                                :method rule :rule-version rule-version
+                                :confidence confidence))
+            (%write-evidence graph id cites producer))
+          (make-decision :id id :outcome :concluded :claim claim
+                         :at (st:claim-recorded-at outcome)))
+      (%refused (c)
+        (%write-refusal graph id (%refused-report c) cites producer))
+      (gdb:constraint-violation (c)
+        ;; The report is advisory (SS2); the commit is the enforcement.
+        (%write-refusal graph id c cites producer)))))
