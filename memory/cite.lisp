@@ -75,14 +75,23 @@ or :ABSENT; CLAIM is the version believed then when :RESOLVED.
 CHANGED-SINCE is :RETRACTED, :SUPERSEDED, :UPDATED or NIL."
   cite family (state :absent) claim standing extent changed-since)
 
+(defun %stamp= (a b)
+  "Version stamps by value: LOCAL-TIME:TIMESTAMP is a CLOS instance, so
+EQUAL is EQ on it and the node cache can hand back one EQ instance for
+two lookups of the same claim, passing vacuously.  A claim predating
+the axis has a NIL stamp; two NILs match, one NIL is a change."
+  (cond ((and (null a) (null b)) t)
+        ((or (null a) (null b)) nil)
+        (t (local-time:timestamp= a b))))
+
 (defun %changed-since (as-of-version current)
   (cond ((and (st:claim-current-p as-of-version)
               (not (st:claim-current-p current)))
          :retracted)
         ((and (%open-p as-of-version) (not (%open-p current)))
          :superseded)
-        ((not (equal (st:claim-version-stamp as-of-version)
-                     (st:claim-version-stamp current)))
+        ((not (%stamp= (st:claim-version-stamp as-of-version)
+                       (st:claim-version-stamp current)))
          :updated)
         (t nil)))
 

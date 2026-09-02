@@ -77,11 +77,16 @@ instant returns the open version, flagged :SUPERSEDED."
         (is (eq :retracted (mem:cite-record-changed-since r)))))))
 
 (test an-unchanged-cite-has-no-changed-since
+  "The node cache is weak-valued and on by default, so two lookups of the
+same claim can hand back one EQ instance -- disabled here so the
+comparison is genuinely by value, not by luck (graph-db#... ; see the
+engine's own claims-touching-returns-each-claim-once)."
   (with-memory-graph (g)
-    (let* ((c (%one-belief g '(:verdict . "green")))
-           (r (mem:resolve-cite g (mem:claim-cite c) (local-time:now))))
-      (is (eq :resolved (mem:cite-record-state r)))
-      (is (null (mem:cite-record-changed-since r))))))
+    (let ((graph-db::*cache-enabled* nil))
+      (let* ((c (%one-belief g '(:verdict . "green")))
+             (r (mem:resolve-cite g (mem:claim-cite c) (local-time:now))))
+        (is (eq :resolved (mem:cite-record-state r)))
+        (is (null (mem:cite-record-changed-since r)))))))
 
 (test a-cite-created-after-the-instant-is-absent
   "A claim that did not exist at AT resolves :ABSENT, not to its
@@ -93,6 +98,41 @@ current version."
              (r (mem:resolve-cite g (mem:claim-cite c) at)))
         (is (eq :absent (mem:cite-record-state r)))
         (is (null (mem:cite-record-claim r)))))))
+
+(test changed-since-is-updated-on-an-in-place-edit
+  "A field edit that touches neither the transaction axis (retraction)
+nor validity (supersession) still moves the version stamp -- the third
+CHANGED-SINCE case (SS5)."
+  (with-memory-graph (g)
+    (let* ((c (%one-belief g '(:verdict . "green")))
+           (cite (mem:claim-cite c))
+           (at (local-time:now)))
+      (sleep 0.01)
+      (gdb:with-transaction (:graph g)
+        (let ((c2 (gdb:copy c)))
+          (setf (st:claim-confidence c2) 0.5d0)
+          (gdb:save c2)))
+      (let ((r (mem:resolve-cite g cite at)))
+        (is (eq :resolved (mem:cite-record-state r)))
+        (is (eq :updated (mem:cite-record-changed-since r)))))))
+
+(test an-absence-standing-is-not-a-resolved-absent-state
+  "SS3/global constraint: absence is not a value.  A recorded absence
+resolves :RESOLVED, with its STANDING carrying what the search found --
+:ABSENT names a cite that could not be resolved at all, not a belief-
+unary's standing."
+  (with-memory-graph (g)
+    (let* ((a (gdb:with-transaction (:graph g)
+                (mem:record-absence g +cs+ "no-such-relation"
+                                    :producer +p+
+                                    :standing :searched-empty)))
+           (cite (mem:claim-cite a))
+           (at (local-time:now)))
+      (let ((r (mem:resolve-cite g cite at)))
+        (is (eq :resolved (mem:cite-record-state r)))
+        (is (eq :searched-empty (mem:cite-record-standing r)))
+        (is (typep (mem:cite-record-claim r) 'mem:belief-unary))
+        (is (null (mem:cite-record-changed-since r)))))))
 
 (test a-swept-cite-is-absent
   (with-memory-graph (g)
