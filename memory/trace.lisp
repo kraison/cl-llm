@@ -196,6 +196,21 @@ or NIL when no such decision was recorded."
                            evidence)
          :refusals refusals)))))
 
+(defun trace-listing (graph decision-ids)
+  "The deterministic shape capture-and-diff compares (SS7): one row per
+id, in the given order, with no id or timestamp in it."
+  (loop for id in decision-ids
+        for rec = (trace graph id)
+        collect (list (decision-record-outcome rec)
+                      (decision-record-rule rec)
+                      (let ((c (decision-record-conclusion rec)))
+                        (and c (cite-record-cite c)))
+                      (mapcar (lambda (r) (list (cite-record-cite r)
+                                                (cite-record-state r)
+                                                (cite-record-changed-since r)))
+                              (decision-record-evidence rec))
+                      (mapcar #'car (decision-record-refusals rec)))))
+
 (defun decisions-citing (graph claim-or-cite)
   "Ids of the decisions whose EVIDENCE cites CLAIM-OR-CITE, RECORDED-AT
 descending then id (SS5).  NIL means no decisions cite it."

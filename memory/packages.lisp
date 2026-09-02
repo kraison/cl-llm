@@ -36,7 +36,7 @@
    ;; trace
    #:conclude #:decision #:decision-id #:decision-outcome
    #:decision-claim #:decision-report #:decision-at
-   #:trace #:decisions-citing
+   #:trace #:trace-listing #:decisions-citing
    #:decision-record #:decision-record-id #:decision-record-producer
    #:decision-record-at #:decision-record-rule
    #:decision-record-rule-version #:decision-record-confidence

@@ -304,3 +304,55 @@ NIL, which is 'no decisions', not an absence."
       (is (equal (mem:decisions-citing g e)
                  (mem:decisions-citing g (mem:claim-cite e))))
       (is (null (mem:decisions-citing g other))))))
+
+(defun %golden-trace-path ()
+  (asdf:system-relative-pathname :cl-llm "tests-memory/golden/trace.sexp"))
+
+(defparameter +other+ '(:repo . "other")
+  "The refused decision's subject: its lapsed belief must not share a
+series with +TS+'s open ci-status, or RECORD-BELIEF's idempotent path
+turns the refusal into a conclusion.")
+
+(defun %trace-fixture (g)
+  "Three decisions: one concluded, one refused, one whose ground moves.
+Returns their ids in that order."
+  (let* ((e1 (%belief g "ci-status" '(:verdict . "green")))
+         (e2 (%belief g "last-push" '(:sha . "abc")))
+         (d1 (mem:conclude g (list :belief +ts+ "releasable"
+                                   '(:verdict . "yes") :standing :inferred
+                                   :extent (%open-from
+                                            (%ts "2026-09-01T09:00:00Z")))
+                           :producer +p+ :evidence (list e1 e2)
+                           :rule "green-and-pushed" :rule-version "1")))
+    (%lapsed-belief g :subject +other+)
+    (let ((d2 (mem:conclude g (list :belief +other+ "ci-status"
+                                    '(:verdict . "green")
+                                    :standing :observed
+                                    :extent (%open-from
+                                             (%ts "2026-02-01T00:00:00Z")))
+                            :producer +p+ :evidence (list e2)
+                            :rule "re-assert")))
+      (sleep 0.01)
+      (let ((d3 (mem:conclude g (list :belief +ts+ "deployable"
+                                      '(:verdict . "yes")
+                                      :standing :inferred
+                                      :extent (%open-from
+                                               (%ts "2026-09-01T10:00:00Z")))
+                              :producer +p+ :evidence (list e1)
+                              :rule "green" :rule-version "1")))
+        (sleep 0.01)
+        (%belief g "ci-status" '(:verdict . "red")
+                 :start "2026-09-02T08:00:00Z")
+        (list (mem:decision-id d1) (mem:decision-id d2)
+              (mem:decision-id d3))))))
+
+(test trace-listing-matches-the-golden
+  "Capture-and-diff (programme SS11): ordering is the contract."
+  (with-memory-graph (g)
+    (let* ((ids (%trace-fixture g))
+           (rows (mem:trace-listing g ids))
+           (golden (with-open-file (in (%golden-trace-path))
+                     (let ((*package* (find-package :keyword)))
+                       (read in)))))
+      (is (equal golden rows)
+          "diff: ~s" (set-exclusive-or golden rows :test #'equal)))))
