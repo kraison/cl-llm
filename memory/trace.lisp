@@ -22,7 +22,11 @@ outcome claim's RECORDED-AT."
 ;; %FAMILY-PARENT-OF (cite.lisp) answers for any registered family and
 ;; signals on a non-claim, so it doubles as the membership test here.
 (defun %cite-of (x)
-  (cond ((cite-p x) x)
+  "CITE-P only checks shape; SPLIT-CITE actually parses, so call it to
+catch a malformed cite here -- before CONCLUDE's transaction opens --
+rather than later, when TRACE would signal on the whole decision
+(final review #14 unit 1 finding 1)."
+  (cond ((cite-p x) (split-cite x) x)
         ((ignore-errors (%family-parent-of x)) (claim-cite x))
         (t (%arg-error :evidence x "a claim or a cite string"))))
 

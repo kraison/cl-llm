@@ -126,7 +126,9 @@ from evidence under a named rule — or a refusal, and why (design:
 `docs/superpowers/specs/2026-09-02-decision-trace-design.md`,
 kraison/cl-llm#14 unit 1). The trace is claims in a second family,
 `trace`, on the endpoint `(:decision . id)`, so the reverse question —
-which decisions rest on this belief — is an index lookup.
+which decisions rest on this belief — is an index lookup. `trace`
+shadows `cl:trace`; refer to it as `mem:trace` (a local nickname) and
+do not `:use` the package.
 
 ```lisp
 (mem:conclude g (list :belief '(:repo . "cl-llm") "releasable"

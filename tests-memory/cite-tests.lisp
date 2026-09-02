@@ -79,8 +79,9 @@ instant returns the open version, flagged :SUPERSEDED."
 (test an-unchanged-cite-has-no-changed-since
   "The node cache is weak-valued and on by default, so two lookups of the
 same claim can hand back one EQ instance -- disabled here so the
-comparison is genuinely by value, not by luck (graph-db#... ; see the
-engine's own claims-touching-returns-each-claim-once)."
+comparison is genuinely by value, not by luck (see the engine's own
+tests/spacetime/claim-query-tests.lisp,
+CLAIMS-TOUCHING-RETURNS-EACH-CLAIM-ONCE, in vivace-graph)."
   (with-memory-graph (g)
     (let ((graph-db::*cache-enabled* nil))
       (let* ((c (%one-belief g '(:verdict . "green")))
@@ -144,3 +145,26 @@ unary's standing."
         (st:delete-claims-by-producer g 'mem:belief +p+))
       (is (eq :absent (mem:cite-record-state
                        (mem:resolve-cite g cite at)))))))
+
+(test changed-since-of-a-claim-against-itself-is-nil
+  "%CHANGED-SINCE compares a claim to itself: same CURRENT-P, same
+OPEN-P, same version stamp -- NIL, not a signal."
+  (with-memory-graph (g)
+    (let ((v (%one-belief g '(:verdict . "green"))))
+      (is (cl-llm.memory::%open-p v) "control: v is open")
+      (is (null (cl-llm.memory::%changed-since v v))))))
+
+(test open-p-does-not-signal-on-a-claim-with-no-validity-extent
+  "Final review #14 unit 1 finding 2: %OPEN-P must not blow up on a
+claim whose family carries no validity extent -- TE:EXTENT-END on NIL
+is a type error.  Both public writers always give a claim an extent,
+so there is no way to reach this through them; force it directly on a
+COPY inside an open transaction with its extent-sexp cleared, and
+never SAVE it -- the engine's own family constraints on a NIL extent
+are not under test here, only %OPEN-P's NIL branch."
+  (with-memory-graph (g)
+    (let ((c (%one-belief g '(:verdict . "green"))))
+      (gdb:with-transaction (:graph g)
+        (let ((c2 (gdb:copy c)))
+          (setf (st:claim-extent-sexp c2) nil)
+          (is (null (cl-llm.memory::%open-p c2))))))))

@@ -99,7 +99,9 @@ the axis has a NIL stamp; two NILs match, one NIL is a change."
   "CITE as of AT (SS5): find the claim by identity among the subject's
 claims, then ask the engine for the version believed at AT.  Never
 substitutes the current version -- it is consulted only for
-CHANGED-SINCE."
+CHANGED-SINCE.  A claim from a family with no validity extent can only
+report CHANGED-SINCE :RETRACTED, :UPDATED or NIL -- :SUPERSEDED needs
+%OPEN-P, which such a claim never satisfies."
   (multiple-value-bind (family ns key ikey) (split-cite cite)
     (let* ((current (find ikey (st:claims-touching graph family ns key
                                                    :role :subject)

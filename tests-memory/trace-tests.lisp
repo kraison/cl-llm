@@ -53,6 +53,38 @@ trace has one CONCLUDED and one EVIDENCE claim per cite."
           (is (string= "green-and-pushed"
                        (st:claim-method (mem:belief-record-claim r)))))))))
 
+(test conclude-supersedes-a-held-belief
+  "Final review #14 unit 1 finding 4: CONCLUDE's proposal can land on
+RECORD-BELIEF's supersession path, not only its idempotent or
+fresh-series paths -- the trace and RECALL must both show it."
+  (with-memory-graph (g)
+    (%belief g "ci-status" '(:verdict . "green"))
+    (let* ((d (mem:conclude g (list :belief +ts+ "ci-status"
+                                    '(:verdict . "red")
+                                    :standing :observed
+                                    :extent (%open-from
+                                             (%ts "2026-09-02T08:00:00Z")))
+                            :producer +p+ :rule "r")))
+      (is (eq :concluded (mem:decision-outcome d)))
+      (let ((records (mem:recall g +ts+ :relation "ci-status")))
+        (is (= 2 (length records)))
+        (destructuring-bind (red green) records
+          (is (string= "red" (st:claim-object-key
+                              (mem:belief-record-claim red))))
+          (is (mem:belief-record-current-p red))
+          (is (null (mem:belief-record-superseded-by red)))
+          (is (string= "green" (st:claim-object-key
+                                (mem:belief-record-claim green))))
+          (is (null (mem:belief-record-current-p green)))
+          ;; identity, not EQ: a fresh query need not hand back the
+          ;; same cached instance (vg node cache).
+          (is (equalp (gdb:id (mem:decision-claim d))
+                      (gdb:id (mem:belief-record-superseded-by green))))))
+      (let ((concluded (find "concluded" (%trace-claims g (mem:decision-id d))
+                             :key #'st:claim-relation :test #'string=)))
+        (is (string= (mem:claim-cite (mem:decision-claim d))
+                     (st:claim-object-key concluded)))))))
+
 (test conclude-an-absence
   (with-memory-graph (g)
     (let ((d (mem:conclude g (list :absence +ts+ "release-date"
@@ -141,6 +173,18 @@ a TRACE claim (a prior decision's CONCLUDED) is itself evidence."
       (mem:conclude g (list :belief +ts+ "x" '(:v . "1")
                             :standing :inferred)
                     :producer +p+ :evidence (list 42) :rule "r"))))
+
+(test an-unparseable-cite-string-as-evidence-is-an-argument-error
+  "Final review #14 unit 1 finding 1: CITE-P only checks for :: and |,
+so a malformed cite must fail SPLIT-CITE before the transaction opens
+-- not surface later as TRACE signalling on the whole decision."
+  (with-memory-graph (g)
+    (signals mem:belief-argument-error
+      (mem:conclude g (list :belief +ts+ "x" '(:v . "1")
+                            :standing :inferred)
+                    :producer +p+ :evidence (list "a::b|c") :rule "r"))
+    (is (null (st:claims-by-producer g 'mem:trace +p+))
+        "no trace claims either")))
 
 (defun %lapsed-belief (g &key (subject +ts+))
   "A belief on SUBJECT / ci-status held over [2026-01-01, 2026-03-01],
@@ -352,7 +396,8 @@ Returns their ids in that order."
     (let* ((ids (%trace-fixture g))
            (rows (mem:trace-listing g ids))
            (golden (with-open-file (in (%golden-trace-path))
-                     (let ((*package* (find-package :keyword)))
+                     (let ((*package* (find-package :keyword))
+                           (*read-eval* nil))
                        (read in)))))
       (is (equal golden rows)
           "diff: ~s" (set-exclusive-or golden rows :test #'equal)))))
