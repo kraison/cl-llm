@@ -32,4 +32,7 @@
    #:claim-cite #:cite-p #:split-cite #:resolve-cite
    #:cite-record #:cite-record-cite #:cite-record-family
    #:cite-record-state #:cite-record-claim #:cite-record-standing
-   #:cite-record-extent #:cite-record-changed-since))
+   #:cite-record-extent #:cite-record-changed-since
+   ;; trace
+   #:conclude #:decision #:decision-id #:decision-outcome
+   #:decision-claim #:decision-report #:decision-at))
