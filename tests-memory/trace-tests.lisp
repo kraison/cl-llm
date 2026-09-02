@@ -210,3 +210,97 @@ overlap; the trace says so; RECALL shows no new belief."
       (is (equal '("evidence" "refused")
                  (%relations (%trace-claims g (mem:decision-id d)))))
       (is (typep (mem:decision-at d) 'local-time:timestamp)))))
+
+(test trace-reconstructs-a-decision
+  (with-memory-graph (g)
+    (let* ((e1 (%belief g "ci-status" '(:verdict . "green")))
+           (e2 (%belief g "last-push" '(:sha . "abc")))
+           (d (mem:conclude g (list :belief +ts+ "releasable"
+                                    '(:verdict . "yes")
+                                    :standing :inferred)
+                            :producer +p+ :evidence (list e2 e1)
+                            :rule "r" :rule-version "2" :confidence 0.5))
+           (rec (mem:trace g (mem:decision-id d))))
+      (is (string= (mem:decision-id d) (mem:decision-record-id rec)))
+      (is (string= +p+ (mem:decision-record-producer rec)))
+      (is (eq :concluded (mem:decision-record-outcome rec)))
+      (is (string= "r" (mem:decision-record-rule rec)))
+      (is (string= "2" (mem:decision-record-rule-version rec)))
+      (is (= 0.5 (mem:decision-record-confidence rec)))
+      (is (local-time:timestamp= (mem:decision-at d)
+                                 (mem:decision-record-at rec)))
+      (let ((c (mem:decision-record-conclusion rec)))
+        (is (eq :resolved (mem:cite-record-state c)))
+        (is (string= "yes" (st:claim-object-key
+                            (mem:cite-record-claim c)))))
+      ;; SS5 order: evidence in cite-string order, whatever was passed
+      (let ((ev (mem:decision-record-evidence rec)))
+        (is (= 2 (length ev)))
+        (is (equal (sort (mapcar #'mem:claim-cite (list e1 e2)) #'string<)
+                   (mapcar #'mem:cite-record-cite ev)))
+        (is (every (lambda (r) (eq :resolved (mem:cite-record-state r)))
+                   ev))
+        (is (every (lambda (r) (null (mem:cite-record-changed-since r)))
+                   ev)))
+      (is (null (mem:decision-record-refusals rec))))))
+
+(test trace-of-an-unknown-id-is-nil
+  (with-memory-graph (g)
+    (is (null (mem:trace g "no-such-decision")))))
+
+(test trace-returns-the-evidence-as-believed-then
+  "SS5 / #14 acceptance: the ground moved after the decision; the trace
+still returns the version believed then, flagged."
+  (with-memory-graph (g)
+    (let* ((e (%belief g "ci-status" '(:verdict . "green")))
+           (d (mem:conclude g (list :belief +ts+ "releasable"
+                                    '(:verdict . "yes")
+                                    :standing :inferred)
+                            :producer +p+ :evidence (list e) :rule "r")))
+      (sleep 0.01)
+      (%belief g "ci-status" '(:verdict . "red")
+               :start "2026-09-02T08:00:00Z")
+      (let* ((rec (mem:trace g (mem:decision-id d)))
+             (r (first (mem:decision-record-evidence rec))))
+        (is (eq :resolved (mem:cite-record-state r)))
+        (is (string= "green" (st:claim-object-key
+                              (mem:cite-record-claim r))))
+        (is (te:bound-unknown-p
+             (te:extent-end (st:claim-extent (mem:cite-record-claim r)))))
+        (is (eq :superseded (mem:cite-record-changed-since r)))))))
+
+(test trace-of-a-refusal
+  (with-memory-graph (g)
+    (%lapsed-belief g)
+    (let* ((d (mem:conclude g (list :belief +ts+ "ci-status"
+                                    '(:verdict . "green")
+                                    :standing :observed
+                                    :extent (%open-from
+                                             (%ts "2026-02-01T00:00:00Z")))
+                            :producer +p+ :rule "r"))
+           (rec (mem:trace g (mem:decision-id d))))
+      (is (eq :refused (mem:decision-record-outcome rec)))
+      (is (null (mem:decision-record-conclusion rec)))
+      (is (equal '("subsystem")
+                 (mapcar #'car (mem:decision-record-refusals rec))))
+      (is (stringp (cdr (first (mem:decision-record-refusals rec))))))))
+
+(test decisions-citing-finds-the-conclusions-resting-on-a-belief
+  "SS5: the reverse direction, newest first; an uncited belief yields
+NIL, which is 'no decisions', not an absence."
+  (with-memory-graph (g)
+    (let* ((e (%belief g "ci-status" '(:verdict . "green")))
+           (other (%belief g "last-push" '(:sha . "abc")))
+           (d1 (mem:conclude g (list :belief +ts+ "a" '(:v . "1")
+                                     :standing :inferred)
+                             :producer +p+ :evidence (list e) :rule "r"))
+           (d2 (progn (sleep 0.01)
+                      (mem:conclude g (list :belief +ts+ "b" '(:v . "1")
+                                            :standing :inferred)
+                                    :producer +p+ :evidence (list e)
+                                    :rule "r"))))
+      (is (equal (list (mem:decision-id d2) (mem:decision-id d1))
+                 (mem:decisions-citing g e)))
+      (is (equal (mem:decisions-citing g e)
+                 (mem:decisions-citing g (mem:claim-cite e))))
+      (is (null (mem:decisions-citing g other))))))

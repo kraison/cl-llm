@@ -35,4 +35,10 @@
    #:cite-record-extent #:cite-record-changed-since
    ;; trace
    #:conclude #:decision #:decision-id #:decision-outcome
-   #:decision-claim #:decision-report #:decision-at))
+   #:decision-claim #:decision-report #:decision-at
+   #:trace #:decisions-citing
+   #:decision-record #:decision-record-id #:decision-record-producer
+   #:decision-record-at #:decision-record-rule
+   #:decision-record-rule-version #:decision-record-confidence
+   #:decision-record-outcome #:decision-record-conclusion
+   #:decision-record-evidence #:decision-record-refusals))

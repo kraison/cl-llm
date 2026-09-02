@@ -138,3 +138,75 @@ Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
       (gdb:constraint-violation (c)
         ;; The report is advisory (SS2); the commit is the enforcement.
         (%write-refusal graph id c cites producer)))))
+
+(defstruct decision-record
+  "TRACE's answer (SS5).  CONCLUSION is a CITE-RECORD or NIL; EVIDENCE a
+list of CITE-RECORDs in cite order; REFUSALS (family . text) in family
+order."
+  id producer at rule rule-version confidence outcome
+  conclusion evidence refusals)
+
+(defun %decision-claims (graph id)
+  (st:claims-touching graph 'trace :decision id :role :subject))
+
+(defun %recorded-instant (claim)
+  "RECORDED-AT as a TIMESTAMP; a trace claim always has one."
+  (let ((at (st:claim-recorded-at claim)))
+    (unless (typep at 'local-time:timestamp)
+      (%arg-error :claim claim "a trace claim with no recorded-at"))
+    at))
+
+(defun trace (graph decision-id)
+  "The decision DECISION-ID reconstructed as of its own instant (SS5),
+or NIL when no such decision was recorded."
+  (let* ((claims (%decision-claims graph decision-id))
+         (outcome (find-if (lambda (c)
+                             (member (st:claim-relation c)
+                                     '("concluded" "refused")
+                                     :test #'string=))
+                           claims)))
+    (when outcome
+      (let* ((at (%recorded-instant outcome))
+             (concluded (and (string= "concluded" (st:claim-relation outcome))
+                             outcome))
+             (evidence (sort (mapcar #'st:claim-object-key
+                                     (remove "evidence" claims
+                                             :key #'st:claim-relation
+                                             :test-not #'string=))
+                             #'string<))
+             (refusals (sort (loop for c in claims
+                                   when (string= "refused"
+                                                 (st:claim-relation c))
+                                     collect (cons (st:claim-object-key c)
+                                                   (st:claim-method c)))
+                             #'string< :key #'car)))
+        (make-decision-record
+         :id decision-id
+         :producer (st:claim-producer outcome)
+         :at at
+         ;; NIL on the refused path: the rule is not recorded there.
+         :rule (and concluded (st:claim-method concluded))
+         :rule-version (and concluded (st:claim-rule-version concluded))
+         :confidence (and concluded (st:claim-confidence concluded))
+         :outcome (if concluded :concluded :refused)
+         :conclusion (and concluded
+                          (resolve-cite graph (st:claim-object-key concluded)
+                                        at))
+         :evidence (mapcar (lambda (cite) (resolve-cite graph cite at))
+                           evidence)
+         :refusals refusals)))))
+
+(defun decisions-citing (graph claim-or-cite)
+  "Ids of the decisions whose EVIDENCE cites CLAIM-OR-CITE, RECORDED-AT
+descending then id (SS5).  NIL means no decisions cite it."
+  (let* ((cite (%cite-of claim-or-cite))
+         (claims (st:claims-touching graph 'trace :claim cite
+                                     :role :object :relation "evidence")))
+    (mapcar #'cdr
+            (sort (mapcar (lambda (c) (cons (%recorded-instant c)
+                                            (st:claim-subject-key c)))
+                          claims)
+                  (lambda (a b)
+                    (or (local-time:timestamp> (car a) (car b))
+                        (and (local-time:timestamp= (car a) (car b))
+                             (string< (cdr a) (cdr b)))))))))
