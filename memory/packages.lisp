@@ -5,10 +5,16 @@
   (:local-nicknames (#:st #:graph-db.spacetime)
                     (#:gdb #:graph-db)
                     (#:te #:temporal-extent))
+  ;; TRACE names the second claim family (spec SS3); CL:TRACE is a
+  ;; macro, and DEF-CLAIM-CLASSES defclass'es it -- shadow or the
+  ;; locked CL package refuses the definition.
+  (:shadow #:trace)
   (:export
    ;; schema
    #:belief #:belief-unary #:belief-binary
    #:make-belief-unary #:make-belief-binary
+   #:trace #:trace-unary #:trace-binary
+   #:make-trace-unary #:make-trace-binary
    #:memory-note #:note-name #:note-description #:note-type
    #:note-modified #:note-body
    ;; write

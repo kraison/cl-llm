@@ -85,7 +85,8 @@ first — the same rule the engine's report applies to its signalling
 families.
 
 **A cite** is the string `"<family>|<identity-key>"`: the parent claim
-class's name, downcased, then the engine's `claim-identity-key`. The
+class's symbol, package-qualified and downcased
+(`cl-llm.memory::belief`), then the engine's `claim-identity-key`. The
 key's first three fields are producer, subject namespace and subject key
 (`|` and `\` escaped inside string fields), so a cite resolves to one
 `claims-touching` call on the subject plus a `string=` on the key. The
