@@ -108,3 +108,36 @@ belief, and the trace is new."
       (mem:conclude g (list :wish +ts+ "x") :producer +p+ :rule "r"))
     (is (null (st:claims-by-producer g 'mem:trace +p+))
         "no trace claims either")))
+
+(test evidence-may-cite-any-claim-family
+  "SS3/SS6: a decision cites any claim family, not only BELIEF -- here
+a TRACE claim (a prior decision's CONCLUDED) is itself evidence."
+  (with-memory-graph (g)
+    (let* ((e (%belief g "ci-status" '(:verdict . "green")))
+           (d1 (mem:conclude g (list :belief +ts+ "releasable"
+                                     '(:verdict . "yes")
+                                     :standing :inferred)
+                             :producer +p+ :evidence (list e)
+                             :rule "r"))
+           (concluded (find "concluded"
+                            (%trace-claims g (mem:decision-id d1))
+                            :key #'st:claim-relation :test #'string=))
+           (d2 (mem:conclude g (list :belief +ts+ "shippable"
+                                     '(:verdict . "yes")
+                                     :standing :inferred)
+                             :producer +p+ :evidence (list concluded)
+                             :rule "r2"))
+           (evidence (find "evidence"
+                           (%trace-claims g (mem:decision-id d2))
+                           :key #'st:claim-relation :test #'string=)))
+      (is (string= (mem:claim-cite concluded)
+                   (st:claim-object-key evidence)))
+      (is (= 0 (search "cl-llm.memory::trace|"
+                       (st:claim-object-key evidence)))))))
+
+(test a-non-claim-as-evidence-is-an-argument-error
+  (with-memory-graph (g)
+    (signals mem:belief-argument-error
+      (mem:conclude g (list :belief +ts+ "x" '(:v . "1")
+                            :standing :inferred)
+                    :producer +p+ :evidence (list 42) :rule "r"))))

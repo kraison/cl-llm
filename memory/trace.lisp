@@ -18,14 +18,12 @@ outcome claim's RECORDED-AT."
                    :semantics :validity :standing :asserted))
 
 ;; No shared CLAIM class exists across families -- each parent from
-;; DEF-CLAIM-CLASSES stands alone (kraison/vivace-graph#321).  BELIEF's
-;; parent covers both arities EVIDENCE ever cites.
-(defparameter +belief-class+
-  (st:claim-family-parent (st:claim-family 'belief)))
-
+;; DEF-CLAIM-CLASSES stands alone (kraison/vivace-graph#321).
+;; %FAMILY-PARENT-OF (cite.lisp) answers for any registered family and
+;; signals on a non-claim, so it doubles as the membership test here.
 (defun %cite-of (x)
   (cond ((cite-p x) x)
-        ((typep x +belief-class+) (claim-cite x))
+        ((ignore-errors (%family-parent-of x)) (claim-cite x))
         (t (%arg-error :evidence x "a claim or a cite string"))))
 
 (defun %check-proposal (proposal)
