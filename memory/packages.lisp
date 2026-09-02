@@ -27,4 +27,9 @@
    #:belief-record-extent
    ;; capture
    #:capture-memory-dir #:capture-listing #:read-frontmatter
-   #:body-digest))
+   #:body-digest
+   ;; cite
+   #:claim-cite #:cite-p #:split-cite #:resolve-cite
+   #:cite-record #:cite-record-cite #:cite-record-family
+   #:cite-record-state #:cite-record-claim #:cite-record-standing
+   #:cite-record-extent #:cite-record-changed-since))
