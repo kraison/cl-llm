@@ -119,11 +119,59 @@ capstone's job (kraison/cl-llm#14).
 `(name digest start current-p superseded-by-digest)`; the test suite
 diffs it against `tests-memory/golden/capture.sexp`.
 
+## Decisions and their trace
+
+A **decision** is what `conclude` records: a belief or an absence written
+from evidence under a named rule — or a refusal, and why (design:
+`docs/superpowers/specs/2026-09-02-decision-trace-design.md`,
+kraison/cl-llm#14 unit 1). The trace is claims in a second family,
+`trace`, on the endpoint `(:decision . id)`, so the reverse question —
+which decisions rest on this belief — is an index lookup.
+
+```lisp
+(mem:conclude g (list :belief '(:repo . "cl-llm") "releasable"
+                      '(:verdict . "yes") :standing :inferred)
+              :producer "claude-code/odm"
+              :evidence (list ci-belief push-belief)   ; claims or cites
+              :rule "green-and-pushed" :rule-version "1")
+;; => #S(decision :outcome :concluded :claim <the belief> ...)
+```
+
+`conclude` **owns its transaction** (call it outside `with-transaction`):
+it stages the write, validates the transaction's delta with the engine's
+`validate-writes`, and commits — or unwinds and records the refusal
+structurally, one `refused` claim per constraint family. A refused
+decision writes no belief and still records what it was looking at.
+
+Evidence is cited **by claim identity**
+(`"cl-llm.memory::belief|<identity-key>"`, `claim-cite`), so a cite
+survives retraction and regeneration. `trace` reads a decision back
+**as of its own instant**: every cite resolves to the version believed
+then (`:resolved`), or reports `:reaped` (past the family's retention)
+or `:absent` (swept), and a resolved cite carries `changed-since` —
+`:retracted`, `:superseded`, `:updated` or NIL. The as-of version is what
+you get; the current one only sets the flag.
+
+```lisp
+(mem:trace g (mem:decision-id d))
+;; => #S(decision-record :outcome :concluded :rule "green-and-pushed"
+;;       :evidence
+;;       (#S(cite-record :state :resolved :changed-since :superseded ...)
+;;        #S(cite-record :state :resolved :changed-since nil ...)) ...)
+(mem:decisions-citing g ci-belief)   ; => decision ids, newest first
+```
+
+**Order is the contract:** evidence in cite-string order, refusals in
+family order, `decisions-citing` by `recorded-at` descending then id.
+`trace-listing` renders decisions as rows for capture-and-diff
+(`tests-memory/golden/trace.sexp`).
+
 ## What this is not
 
-No traversal, no tool surface, no planner, no LLM, no cross-namespace
-recall — those are kraison/cl-llm#14 and #24. And no registration: this
-tenant is map-less by design and proves nothing about it.
+No tool surface, no bounded traversal, no LLM, no banner parsing
+(kraison/cl-llm#14 units 2 and 3) and no cross-namespace recall (#24).
+And no registration: this tenant is map-less by design and proves
+nothing about it.
 
 Two engine findings from building it are recorded in the spec's §9:
 there is no as-of read over transaction time (kraison/vivace-graph#300),

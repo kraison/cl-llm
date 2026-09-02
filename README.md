@@ -226,6 +226,12 @@ node and one content belief per note; a second capture after an edit
 supersedes rather than overwrites. See
 [`docs/agent-memory.md`](docs/agent-memory.md).
 
+`conclude` records a **decision** — a belief written from cited evidence
+under a named rule, or a structurally recorded refusal — and `trace`
+reads it back as of its own instant, each cite resolved to the version
+believed then and flagged if it has moved since (kraison/cl-llm#14 unit
+1; `docs/agent-memory.md`).
+
 ### Graph-backed stores (`cl-llm/rag/vivace`)
 
 `cl-llm/rag/vivace` lets a persistent [vivace-graph](https://github.com/kraison/vivace-graph)
