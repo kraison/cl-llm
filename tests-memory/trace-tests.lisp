@@ -192,7 +192,10 @@ overlap; the trace says so; RECALL shows no new belief."
                            :producer +p+ :rule "r")))
       (is (eq :refused (mem:decision-outcome d)))
       (is (member "unique" (%refused-families g (mem:decision-id d))
-                  :test #'string=)))))
+                  :test #'string=))
+      (is (= 1 (length (mem:recall g +ts+ :relation "ci-status"
+                                   :include-retracted t)))
+          "the lapsed belief is the only one; nothing new was written"))))
 
 (test a-refused-decision-still-records-its-evidence
   (with-memory-graph (g)

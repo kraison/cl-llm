@@ -106,7 +106,8 @@ export asked on kraison/vivace-graph#320."
                  &key producer evidence rule rule-version confidence)
   "Decide PROPOSAL from EVIDENCE under RULE (SS4).  Owns its
 transaction; signals BELIEF-ARGUMENT-ERROR when one is already open.
-Returns a DECISION."
+Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
+:REFUSED and REPORT set, never signalled."
   (when gdb:*transaction*
     (%arg-error :transaction gdb:*transaction*
                 "CONCLUDE owns its transaction; call it outside one"))
