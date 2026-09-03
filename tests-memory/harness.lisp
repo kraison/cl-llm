@@ -41,5 +41,13 @@
   (te:make-interval (te:exact-bound ts) (te:unknown-bound)
                     :semantics :validity :standing :asserted))
 
+(defun %tomorrow ()
+  "A whole-minute instant one day ahead of now, for closing a
+transaction period: it must close after it opened, and a literal date
+went stale on 2026-09-03 (PR #31 CI).  Whole-minute so TIMESTAMP=
+survives the extent's sexp round-trip."
+  (local-time:timestamp+
+   (local-time:timestamp-minimize-part (local-time:now) :sec) 1 :day))
+
 (defparameter +p+ "claude-code/test"
   "The producer every test writes under, canonical (vg#160).")

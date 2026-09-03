@@ -142,7 +142,7 @@ is current."
                                             (%ts "2026-09-01T08:00:00Z")))))
       (is-true (st:claim-current-p c) "control")
       (gdb:with-transaction ((graph-db::transaction-manager g))
-        (mem:retract-belief c :at (%ts "2026-09-03T00:00:00Z")))
+        (mem:retract-belief c :at (%tomorrow)))
       (let ((c2 (first (%touching g))))
         (is-false (st:claim-current-p c2))
         (is (te:bound-unknown-p (te:extent-end (st:claim-extent c2)))
