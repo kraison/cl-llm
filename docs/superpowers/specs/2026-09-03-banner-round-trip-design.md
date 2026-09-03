@@ -200,9 +200,9 @@ shows it.
   scripts the `conclude` call. Asserts: one decision per candidate
   note, none for a `superseded`-only note; the decision's evidence cite
   equals the `carries` record's cite byte for byte; the producer is the
-  agent's; the tool set offered was exactly three (assert on the
-  `tools` the mock saw — it ignores them, so assert on the scope's
-  tools via the loop's request).
+  agent's; and `annotation-tools`, the exported function
+  `annotate-banners` builds its tool set with, returns exactly the
+  three names.
 - **The pass, live**: `cl-llm/agent/live`, skipping without
   `CL_LLM_LIVE`; on the fixture corpus, at least one decision, its
   evidence `:resolved`, rule `read-banner`, rule-version non-empty.
