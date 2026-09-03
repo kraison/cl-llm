@@ -275,9 +275,9 @@ derived window is one round trip away. The result:
 ```
 
 in bundle order, which is the contract. `plan-bounds` (`query`;
-optional `k`) returns the `bounds` object alone, from a seed retrieval:
-the derivation as a callable, which `#13` unit 2 built as separate
-operations for exactly this.
+optional `endpoints`, `k`) returns the `bounds` object alone, from a
+seed retrieval: the derivation as a callable, which `#13` unit 2 built
+as separate operations for exactly this.
 
 ## 8. The query tool
 

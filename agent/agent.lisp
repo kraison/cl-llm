@@ -2,24 +2,6 @@
 
 (in-package #:cl-llm.agent)
 
-;; Stubs for Task 6, which fills in agent/planner-tools.lisp for real
-;; (#14 unit 2); MAKE-PLANNER-TOOLS's callees live here until then.
-(defun %retrieve-tool (scope)
-  (declare (ignore scope))
-  (llm:make-tool
-   "retrieve"
-   "Not yet implemented."
-   '()
-   (lambda () (error "not implemented"))))
-
-(defun %plan-bounds-tool (scope)
-  (declare (ignore scope))
-  (llm:make-tool
-   "plan-bounds"
-   "Not yet implemented."
-   '()
-   (lambda () (error "not implemented"))))
-
 (defun make-memory-tools (scope)
   (list (%recall-tool scope) (%trace-tool scope)
         (%decisions-citing-tool scope)
