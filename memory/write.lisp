@@ -27,9 +27,15 @@
          :argument argument :value value :reason reason))
 
 (defun %check-endpoint (argument pair)
+  "(namespace-keyword . key-string), the namespace canonical -- the rule
+SPLIT-CITE applies on the way back, so no belief is written whose own
+cite cannot resolve (#32)."
   (unless (and (consp pair) (keywordp (car pair)) (stringp (cdr pair)))
     (%arg-error argument pair
-                "must be (namespace-keyword . key-string)")))
+                "must be (namespace-keyword . key-string)"))
+  (unless (st:canonical-relation-p (string-downcase
+                                    (symbol-name (car pair))))
+    (%arg-error argument pair "namespace must be canonical [a-z0-9-]")))
 
 (defun %check-producer (producer)
   (unless (st:canonical-producer-p producer)
