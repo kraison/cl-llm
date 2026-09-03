@@ -409,13 +409,91 @@ returns exactly one decision, and its evidence cite is the same
 string byte for byte — a cite the model reads in one tool result is
 the exact string it is expected to pass back in the next.
 
+## The first consumer: annotate-banners
+
+`cl-llm/agent`'s `annotate-banners` (`agent/annotate.lisp`, spec
+`2026-09-03-banner-round-trip` §5) is the tool surface's first
+consumer: a model reads one note's hand-written banner (scanned by
+`cl-llm/memory`'s `scan-banners`, `docs/agent-memory.md`) and
+concludes what it overturns.
+
+```lisp
+(agent:annotate-banners stores dir &key provider producer
+                                        (max-tool-turns 4)
+                                        (model-name "unknown"))
+;; => (((name . position) . decision-id-or-nil) ...), name then
+;;    position order
+```
+
+`stores` and `producer` are as everywhere else in this doc (`stores`'
+first is the writable one); `dir` is a memory directory, the same
+shape `capture-memory-dir` reads; `model-name` rides the system
+prompt only, for the record. One `ask` per **banner** in `dir` — not
+per note — that is `UPDATE`, `CORRECTION` or `STALE`: a note can carry
+more than one prose-target banner (the fixture `two.md`), and asking
+once per note with every banner bundled into one prompt left
+`conclude`'s evidence cite ambiguous between them (finding 1, #14 unit
+3 final review). A `SUPERSEDED` banner is not read here at all:
+capture already turns it into deterministic claims on its own — an
+`annotates` belief always, `superseded-by` too when it links
+(`docs/agent-memory.md`) — and there is nothing left in it for a model
+to conclude.
+
+The model gets exactly three tools (`annotation-tools`, a fixed
+subset of `make-agent-tools`' eight): `recall`, `retrieve`,
+`conclude`. `retrieve`, called with the note's name as query and
+`endpoints ["memory-note:<name>"]`, returns every claim touching the
+note — including **every** banner's `annotates` claim when the note
+carries more than one, so the prompt tells the model which is this
+ask's own: the banner's identity, `banner:<name>#<n>`, rides the
+prompt verbatim (`%banner-block`), and the model matches it against
+the evidence item whose rendered **text** begins with that same
+string — `retrieve`'s claim renderer always leads with the subject
+endpoint (`docs/agent-memory.md`'s claim shape) — and cites that
+item's cite. The banner's own text does **not** ride any tool result:
+the claim renderer emits a one-line summary, not the banner's words,
+so the text rides the **user prompt** instead, verbatim, under the
+note line, ahead of `retrieve` ever being called. The system prompt
+tells the model this in as many words and gives it the rest of the
+contract: call `retrieve` once, find the item by its `banner:<name>#<n>`
+prefix, call `conclude` once — subject `(memory-note . name)`,
+relation `overturns`, object `(proposition . <one sentence>)`,
+standing `inferred`, rule `read-banner`, rule-version `<model-name>`,
+evidence `[that cite]` — then reply `done`, or, if the banner
+overturns nothing statable, reply `no`.
+
+A banner the model declines — it never calls `conclude`, or concludes
+something that is not the newest decision by this producer citing
+this banner's own `annotates` claim (`%banner-annotates-cite`, keyed
+on `<name>#<position>`) since the call began — comes back as
+`((name . position) . NIL)` in the results list. **NIL is a normal
+outcome, not an error**: the model may decline, and a declined
+annotation still means the pass ran the banner through and got an
+answer. `producer` here is always the **agent's own**, distinct from
+whatever produced the underlying capture (`capture-memory-dir`'s
+`:producer`) — the two are never conflated, so a decision's trace
+names who read the banner, not who captured it.
+
+**The live suite** (`cl-llm/agent/live`, `live-agent/`) runs
+`annotate-banners` against a real provider — `llm:*provider*`,
+Anthropic by default, so `ANTHROPIC_API_KEY` must be set. It is
+gated exactly like `cl-llm/live` and `cl-llm/rag/live`: skipped via
+FiveAM's `skip` whenever `CL_LLM_LIVE` is unset or `0`, so it loads
+and runs offline with nothing skipped that should not be, and is
+never run by CI (`docs/ci.md`):
+
+```sh
+CL_LLM_LIVE=1 sbcl --eval '(asdf:test-system :cl-llm/agent/live)'
+```
+
+It depends on `cl-llm/agent/tests` for the two-store on-disk harness
+(`with-stores`, `%banner-dir`) rather than duplicating it.
+
 ## What this is not
 
 - **No cross-store consistent instant.** Reads run per store and
   merge; one epoch spanning several stores at once is S6b's job
   (`#24`), not this one's.
-- **No banner round-trip.** Turning the hand-written supersession
-  banners inside memory notes into claims is unit 3, not built here.
 - **The `query` tool loads the web stack.** The guard pipeline lives
   in `graph-db/gui`, which depends on ningle, clack and cl-json;
   `cl-llm/agent/prolog` therefore pulls that in, until

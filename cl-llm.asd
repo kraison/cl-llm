@@ -214,6 +214,7 @@
                (:file "write")
                (:file "recall")
                (:file "capture")
+               (:file "banners")
                (:file "cite")
                (:file "trace"))
   ;; The test-op link: without it TEST-SYSTEM is a silent no-op
@@ -234,7 +235,8 @@
                (:file "capture-tests")
                (:file "cite-tests")
                (:file "trace-tests")
-               (:file "store-tests"))
+               (:file "store-tests")
+               (:file "banner-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! :cl-llm-memory)
                (error "cl-llm/memory suite failed."))))
@@ -252,20 +254,24 @@ retrieval planner (#14 unit 2)."
                (:file "render")
                (:file "memory-tools")
                (:file "planner-tools")
-               (:file "agent"))
+               (:file "agent")
+               (:file "annotate"))
   :in-order-to ((test-op (test-op "cl-llm/agent/tests"))))
 
 (defsystem "cl-llm/agent/tests"
   :description "On-disk, two-store, scripted-model tests for cl-llm/agent."
   :license "MIT"
-  :depends-on ("cl-llm/agent" "fiveam")
+  ;; cl-llm/memory/tests for %REPLACE-ALL-IN-FILE, shared rather than
+  ;; duplicated (#14 unit 3 residual).
+  :depends-on ("cl-llm/agent" "cl-llm/memory/tests" "fiveam")
   :serial t
   :pathname "tests-agent/"
   :components ((:file "packages")
                (:file "harness")
                (:file "memory-tools-tests")
                (:file "planner-tools-tests")
-               (:file "loop-tests"))
+               (:file "loop-tests")
+               (:file "annotate-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! :cl-llm-agent)
                (error "cl-llm/agent suite failed."))))
@@ -291,6 +297,18 @@ retrieval planner (#14 unit 2)."
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! :cl-llm-agent-prolog)
                (error "cl-llm/agent/prolog suite failed."))))
+
+(defsystem "cl-llm/agent/live"
+  :description "Live: annotate-banners against a real provider.
+Requires CL_LLM_LIVE=1."
+  :license "MIT"
+  :depends-on ("cl-llm/agent" "cl-llm/agent/tests" "fiveam")
+  :serial t
+  :pathname "live-agent/"
+  :components ((:file "packages") (:file "live"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run! :cl-llm-agent-live)
+               (error "cl-llm/agent/live suite failed."))))
 
 (defsystem "cl-llm/rag/vivace/tests"
   :description "Offline (in-memory-graph) tests for cl-llm/rag/vivace."

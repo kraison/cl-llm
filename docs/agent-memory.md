@@ -113,9 +113,11 @@ text-indexed) and one belief — subject `(:memory-note . name)`, relation
 Capture again after editing a note in place and the old content claim
 is **superseded, not overwritten** — the "suite is 486 pass / 1 fail"
 that had been false for days stays readable as what was believed, and
-until when. Nothing here parses prose or calls a model; turning the
-hand-written supersession banners *inside* the notes into claims is the
-capstone's job (kraison/cl-llm#14).
+until when. Capture also reads each note's hand-written banners by
+their line shape and records them as claims (no prose parsing, no
+model — see "Banners" below); reading a banner's prose and concluding
+what it overturns is `annotate-banners`, in `cl-llm/agent`
+(`docs/agent-tools.md`).
 
 `capture-listing` renders a directory's recall as rows of
 `(name digest start current-p superseded-by-digest)`; the test suite
@@ -196,11 +198,102 @@ omitted. Building a tool surface a model calls over several stores —
 scope, caps, the writable one — is `docs/agent-tools.md`
 (kraison/cl-llm#14 unit 2).
 
+## Banners
+
+The proving corpus's notes carry hand-written supersession banners in
+prose — a fact stopped being true, and someone said so in the body
+rather than editing it out. `scan-banners` (`memory/banners.lisp`,
+spec `2026-09-03-banner-round-trip` §3) finds four line shapes, each a
+`**WORD ...**` (or `> **WORD ...**`, or `⚠ **WORD ...**`) heading a
+paragraph or a blockquote:
+
+- `SUPERSEDED` — the note's premise no longer holds; usually links to
+  its replacement.
+- `UPDATE` — new information layered on, nothing retracted.
+- `CORRECTION` — the note was wrong, possibly about a specific claim
+  elsewhere; may link to what it corrects.
+- `STALE` — the note describes a past state (a host, a branch) that
+  has since moved on; usually links to the current state.
+
+A banner's **date** is the first `YYYY-MM-DD` on its heading line, or
+NIL when undated; its **link** is the first `[[name]]` anywhere in its
+text, or NIL; word matching is on a boundary, so `UPDATE` never
+matches `UPDATED`.
+
+Capture (`%capture-banner`, `memory/capture.lisp`, spec §4) turns each
+scanned banner into a `memory-banner` source node — `bn-key`
+(`"<note>#<position>"`), `bn-note`, `bn-position`, `bn-kind`,
+`bn-date` (RFC 3339, the banner's own date or the note's `modified`
+stamp when undated), `bn-dated-p`, `bn-link`, `bn-text` — and one
+`annotates` belief:
+
+```
+(:banner . "<note>#<n>") --annotates--> (:memory-note . name)
+```
+
+with `method` the banner's kind. **The banner is the subject**, not
+the note: a belief series is single-valued per `(producer, subject,
+relation)`, and a note can carry several banners, so the note cannot
+be the subject of `annotates` without one banner's claim silently
+superseding another's. A reader reaches a note's banners the other
+way round, through the claims touching it as *object* — `recall
+(:memory-note . name)` for the note's own beliefs, or
+`claims-touching :role :either` to include what points at it.
+
+A `SUPERSEDED` or `STALE` banner that carries a link additionally
+writes `(:memory-note . name) --superseded-by--> (:memory-note .
+link)`, straight on the note this time — that relation is
+single-valued per note by design, so when a note carries more than
+one such banner only the **last by position** writes it
+(`%last-replacing-banner`); the others still get their own
+`annotates` claim.
+
+Capture reflects the file as truth (`%assert-from-file`,
+`memory/write.lisp`), and the two beliefs above split differently
+between supersession and correction because their objects don't move
+the same way. `annotates`' object is always the banner's own note —
+the same banner key always names the same note — so it can never be a
+supersession; a re-dated or re-kinded banner under the same key is
+always a **correction**: `record-belief`'s own idempotent path would
+otherwise keep the old date or kind unchanged, so `%assert-from-file`
+retracts the current claim and records the file's state fresh instead
+(`a-re-dated-banner-corrects-not-supersedes`, which bumps a banner's
+date later and still gets a correction, not a supersession).
+`superseded-by`'s object is the *link*, which can genuinely change
+from one capture to the next: a different link with a later validity
+start is an ordinary **supersession** of the note's series, the same
+as any other belief; a different link with a non-later start, or the
+same link re-dated, is a **correction**. Either way only the last
+replacing banner by position ever writes it.
+
+A banner dropped from the file — the author deleted or folded it in —
+must not leave its claims looking current: after writing the banners
+the current scan still finds, capture retracts any of this producer's
+`annotates` beliefs whose subject key `"<note>#<n>"` names a position
+past what is present now, and, when no replacing banner with a link
+remains, retracts a current `superseded-by` belief on the note too
+(`%retract-removed-banners`, `%retract-stale-superseded-by`,
+`memory/capture.lisp`, finding 2, #14 unit 3 final review). A note
+with two banners where only the second is removed keeps the first's
+`annotates` belief untouched — retraction is per banner, by position,
+not a blanket sweep of the note's claims.
+
+`capture-memory-dir` takes a `:banners` keyword (default `T`); passing
+`:banners nil` restores unit 1's behaviour exactly — content beliefs
+only, no banner nodes or claims.
+
+`banner-listing` renders a directory's banners as capture-and-diff
+rows — per note in name order, per banner in position order,
+`(note position kind date link text-digest dated-p)` — diffed against
+`tests-memory/golden/banners.sexp` in the test suite.
+
 ## What this is not
 
 The tool surface is `docs/agent-tools.md` (kraison/cl-llm#14 unit 2);
-no LLM, no banner parsing (kraison/cl-llm#14 units 2 and 3) and no
-cross-namespace recall (#24).
+no cross-namespace recall (#24). Banner *parsing* is this module's
+(`memory/banners.lisp`, `memory/capture.lisp`); reading a banner and
+concluding what it overturns is a model's job, over the tool surface
+— `cl-llm/agent`'s `annotate-banners` (`docs/agent-tools.md`).
 And no registration: this tenant is map-less by design and proves
 nothing about it.
 
