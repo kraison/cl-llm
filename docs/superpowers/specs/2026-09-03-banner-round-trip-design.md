@@ -168,14 +168,19 @@ a tool set of **three**: `recall`, `retrieve`, `conclude`. The system
 prompt states the job in the tools' vocabulary:
 
 > You are annotating one note of an agent's memory. Call `retrieve`
-> with endpoint `memory-note:<name>`; the item whose relation is
-> `annotates` is the banner, and its `cite` is your evidence. Read the
-> banner text (retrieve with endpoint `banner:<name>#<n>` if you need
-> it). Then call `conclude` once: subject-namespace `memory-note`,
-> subject-key `<name>`, relation `overturns`, object-namespace
-> `proposition`, object-key one sentence stating what the banner
-> overturns, standing `inferred`, rule `read-banner`, rule-version
-> `<model>`, evidence the banner record's `cite`. Then reply `done`.
+> with query the note's name and endpoints `["memory-note:<name>"]`;
+> the item whose cite contains `|annotates|` is the banner, and its
+> cite is your evidence. Read the banner text in that item. Then call
+> `conclude` once: subject-namespace `memory-note`, subject-key
+> `<name>`, relation `overturns`, object-namespace `proposition`,
+> object-key one sentence stating what the banner overturns, standing
+> `inferred`, rule `read-banner`, rule-version `<model>`, evidence
+> [that cite]. Then reply `done`. If the banner overturns nothing you
+> can state, reply `no`.
+
+(`retrieve`'s JSON evidence items carry no `relation` field, only
+`cite`; a claim's rendered `text` is a one-line summary, not the
+banner's prose — the model reads that summary, not the note body.)
 
 `producer` is the agent's, required, distinct from the capture
 producer. The function returns a list of `(note . decision-or-nil)`:

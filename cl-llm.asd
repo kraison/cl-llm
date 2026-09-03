@@ -254,7 +254,8 @@ retrieval planner (#14 unit 2)."
                (:file "render")
                (:file "memory-tools")
                (:file "planner-tools")
-               (:file "agent"))
+               (:file "agent")
+               (:file "annotate"))
   :in-order-to ((test-op (test-op "cl-llm/agent/tests"))))
 
 (defsystem "cl-llm/agent/tests"
@@ -267,7 +268,8 @@ retrieval planner (#14 unit 2)."
                (:file "harness")
                (:file "memory-tools-tests")
                (:file "planner-tools-tests")
-               (:file "loop-tests"))
+               (:file "loop-tests")
+               (:file "annotate-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! :cl-llm-agent)
                (error "cl-llm/agent suite failed."))))

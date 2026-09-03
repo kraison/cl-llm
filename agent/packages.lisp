@@ -18,4 +18,6 @@
    ;; render
    #:json-bool
    ;; tools
-   #:make-agent-tools #:make-memory-tools #:make-planner-tools))
+   #:make-agent-tools #:make-memory-tools #:make-planner-tools
+   ;; annotate
+   #:annotation-tools #:annotate-banners #:*annotation-instructions*))
