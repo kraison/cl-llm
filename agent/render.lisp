@@ -33,7 +33,8 @@ as an empty result, not an error.  For reads (SS6)."
 
 (defun %canonical-name-p (string)
   "Non-empty and [a-z0-9-] only -- ST:CANONICAL-RELATION-P's rule
-(GH #160), mirrored here since that predicate is graph-db-internal."
+(GH #160), spelled out here so a bad namespace reports as this tool
+set's error; MEMORY/CITE.LISP calls the exported predicate directly."
   (and (stringp string) (plusp (length string))
        (every (lambda (ch)
                 (or (char<= #\a ch #\z) (char<= #\0 ch #\9)

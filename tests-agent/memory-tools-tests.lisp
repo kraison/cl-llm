@@ -444,21 +444,39 @@ decision's own record.  Control: a belief cite still retracts."
       (is-true (st:claim-current-p (funcall concluded))
                "the decision's own record still stands"))))
 
-(test decisions-citing-never-interns-a-namespace-from-a-cite
-  "Final review important 3: SPLIT-CITE read the subject namespace with
-INTERN, so any model string minted a keyword.  A fabricated cite is an
-argument error and mints nothing."
+(defun %fabricated-cite (namespace)
+  "A syntactically valid BELIEF cite over NAMESPACE that names no claim.
+Field order is CLAIM-IDENTITY-KEY's: producer, subject namespace and
+key, object namespace and key, relation, extent start."
+  (concatenate 'string "cl-llm.memory::belief|claude-code/test|:"
+               namespace "|k|:verdict|yes|r"
+               "|((9680 28800 0) (9680 28800 0))"))
+
+(test decisions-citing-refuses-a-noncanonical-namespace-in-a-cite
+  "Final review important 3: SPLIT-CITE interned whatever a model sent.
+It now applies the write path's rule -- validate as canonical, then
+intern -- so an uncanonical namespace is an argument error and mints
+nothing unrecoverable."
   (with-stores (w p)
-    (let ((tools (agent:make-agent-tools (list w p) :producer +p+))
-          (cite (concatenate
-                 'string "cl-llm.memory::belief|claude-code/test"
-                 "|:zzzfabricated|k|:verdict|yes|r"
-                 "|((9680 28800 0) (9680 28800 0))")))
+    (let ((tools (agent:make-agent-tools (list w p) :producer +p+)))
       (signals llm:llm-tool-error
         (llm:call-tool (%tool tools "decisions-citing")
-                       (%args "cite" cite)))
-      (is (null (find-symbol "ZZZFABRICATED" :keyword))
-          "control: the namespace was never interned"))))
+                       (%args "cite" (%fabricated-cite "zzz fab"))))
+      (is (null (find-symbol "ZZZ FAB" :keyword))
+          "control: the uncanonical namespace was never interned"))))
+
+(test decisions-citing-a-canonical-unknown-namespace-is-an-empty-array
+  "The other half of the rule: a canonical namespace nothing was
+recorded under parses, and the answer is \"no decisions\", not an
+error -- a fresh image must be able to trace a decision whose evidence
+namespace it has not read a claim under yet.  Canonical names may be
+interned by design (bounded growth, as on the write path), so nothing
+here asserts about interning."
+  (with-stores (w p)
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (r (%call tools "decisions-citing"
+                     "cite" (%fabricated-cite "zzzcanonical"))))
+      (is (= 0 (length (json:jget r "decisions")))))))
 
 (test trace-names-the-store-the-decision-resolved-against
   "Final review important 2: one belief recorded identically in both

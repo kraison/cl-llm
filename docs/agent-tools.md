@@ -88,13 +88,17 @@ several tool sets — a test builds its own over its own on-disk
 stores, and nothing here is process-global.
 
 One further thing the tools do on the model's behalf: every
-namespace the model sends, on a write or in an endpoint, is
-validated as canonical (`[a-z0-9-]+`) and then interned as a
+namespace the model sends, on a write, in an endpoint, or inside a
+cite, is validated as canonical (`[a-z0-9-]+`) and then interned as a
 keyword. The alphabet is bounded but the count is not: any canonical
 string the model invents becomes a namespace, there and then, with
-no registry to consult first. A read never mints one — an
-unrecognised namespace just reads back as nothing recorded, never an
-error.
+no registry to consult first. An uncanonical one is refused, never
+interned — minting it would be unrecoverable. `recall`'s own
+`subject-namespace` never mints at all: an unrecognised namespace
+just reads back as nothing recorded, never an error. A cite whose
+namespace is canonical but unknown likewise parses and resolves to
+nothing, since a fresh image must be able to trace a decision before
+it has read a claim under that namespace.
 
 ## The tools
 

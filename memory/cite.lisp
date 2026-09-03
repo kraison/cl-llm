@@ -54,9 +54,8 @@ engine's rendering, kept here until kraison/vivace-graph#321 lands."
   "Four values: the family's parent symbol, the subject namespace
 keyword, the subject key, and the identity key.  A cite the engine did
 not render is a BELIEF-ARGUMENT-ERROR -- including one whose namespace
-is interned nowhere, since no claim can exist under a namespace never
-recorded, and a model string must not mint one (#14 unit 2 final
-review)."
+is not canonical, so no caller string can mint an unrecoverable
+keyword (#14 unit 2 final review)."
   (unless (cite-p cite) (%arg-error :cite cite "not a cite"))
   (let* ((bar (position #\| cite))
          (family (%parse-family (subseq cite 0 bar)))
@@ -67,10 +66,15 @@ review)."
     (let ((ns (second fields)))
       (unless (and (plusp (length ns)) (char= #\: (char ns 0)))
         (%arg-error :cite cite "subject namespace is not a keyword"))
-      (let ((kw (find-symbol (string-upcase (subseq ns 1)) :keyword)))
-        (unless kw
-          (%arg-error :cite cite "names no recorded subject namespace"))
-        (values family kw (third fields) ikey)))))
+      ;; The write path's rule (%KEYWORD, agent/render.lisp): validate,
+      ;; then intern -- growth is bounded to canonical names.  FIND-SYMBOL
+      ;; alone was wrong: a fresh image's first TRACE would fail on a
+      ;; namespace nothing had been read under yet (#14 unit 2 review).
+      (let ((name (subseq ns 1)))
+        (unless (st:canonical-relation-p name)
+          (%arg-error :cite cite "subject namespace is not canonical"))
+        (values family (intern (string-upcase name) :keyword)
+                (third fields) ikey)))))
 
 (defstruct cite-record
   "One cite resolved AS OF an instant (SS5).  STATE is :RESOLVED, :REAPED

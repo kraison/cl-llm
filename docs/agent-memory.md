@@ -157,10 +157,15 @@ or `:absent` (swept), and a resolved cite carries `changed-since` —
 you get; the current one only sets the flag. A `cite-record` from
 `trace` also carries `cite-record-store`, the name of the store the
 cite was actually resolved against (NIL when none was), so a cite two
-stores hold is not mistaken for the wrong copy. `split-cite` reads the
-subject namespace with `find-symbol`, never `intern`: a cite naming a
-namespace nothing was ever recorded under is a `belief-argument-error`,
-so no caller-supplied string can mint a keyword.
+stores hold is not mistaken for the wrong copy. `split-cite` applies
+the write path's namespace rule: the subject namespace must be
+canonical (`[a-z0-9-]+`, `st:canonical-relation-p`) or the cite is a
+`belief-argument-error` — validated first, then interned, so a
+caller string can only ever mint a recoverable name. A cite over a
+canonical namespace nothing was recorded under parses fine and
+resolves `:absent`; it is not an error, because a fresh image must be
+able to trace a decision before it has read a claim under that
+namespace.
 
 ```lisp
 (mem:trace g (mem:decision-id d))
