@@ -7,13 +7,17 @@
 (defun %banner-dir ()
   (asdf:system-relative-pathname :cl-llm "tests-memory/fixtures/banners/"))
 
-(defun %annotates-cite (g name)
-  "The cite of NAME's first ANNOTATES belief."
-  (mem:claim-cite
-   (first (remove "annotates"
-                  (st:claims-touching g 'mem:belief :memory-note name
-                                      :role :object)
-                  :key #'st:claim-relation :test-not #'string=))))
+(defun %annotates-cite-for (g name position)
+  "The cite of NAME's ANNOTATES belief whose subject is
+\"<name>#<position>\", computed independently of the production code
+under test (finding 1, #14 unit 3 final review)."
+  (let ((key (format nil "~a#~a" name position)))
+    (mem:claim-cite
+     (find-if (lambda (c)
+                (and (string= "annotates" (st:claim-relation c))
+                     (string= key (st:claim-subject-key c))))
+              (st:claims-touching g 'mem:belief :memory-note name
+                                  :role :object)))))
 
 (test annotation-tools-are-exactly-three
   (with-stores (w p)
@@ -26,13 +30,30 @@
   (let ((start (+ 6 (search "note: " text))))
     (subseq text start (position #\Newline text :start start))))
 
-(defun %retrieve-annotates-cite (result)
-  "The ANNOTATES item's cite in a retrieve tool RESULT, read from what
-the mock actually received back -- not a value computed on the side."
+(defun %banner-key-from-prompt (text)
+  "The literal banner:<name>#<n> that %BANNER-BLOCK embeds in the user
+prompt -- the mock's own way to tell which of a note's banners this
+ASK concerns, matching retrieve's rendered subject endpoint (finding
+1, #14 unit 3 final review)."
+  (let* ((start (search "banner:" text))
+         (end (position-if (lambda (c) (member c '(#\Space #\Newline)))
+                           text :start start)))
+    (subseq text start end)))
+
+(defun %retrieve-annotates-cite (result key)
+  "The evidence item's cite in a retrieve tool RESULT whose rendered
+TEXT begins with KEY (\"banner:<name>#<n>\") followed by \" annotates\",
+read from what the mock actually received back -- not a value computed
+on the side.  Picking by KEY, not merely by |annotates| in the cite,
+is the fix under test: a note with two prose banners returns two
+ANNOTATES items and only one is this ASK's own (finding 1, #14 unit 3
+final review)."
   (let* ((r (json:parse (llm:part-content result)))
          (ev (coerce (json:jget r "evidence") 'list))
+         (prefix (format nil "~a annotates" key))
          (ann (find-if (lambda (e)
-                         (search "|annotates|" (or (json:jget e "cite") "")))
+                         (let ((text (json:jget e "text")))
+                           (and text (eql 0 (search prefix text)))))
                        ev)))
     (json:jget ann "cite")))
 
@@ -42,10 +63,12 @@ wires the scope, the producer and the evidence.  Simplified per Task 3
 controller ruling 2: the responder counts turns instead of inspecting
 JSON shape -- turn 1 retrieves the note, turn 2 concludes citing what
 retrieve returned (read back from the mock's own tool-result), turn 3
-says done."
+says done.  Finding 1 (#14 unit 3 final review): TWO's two prose
+banners each get their own ASK and cite their own banner, not an
+arbitrary one."
   (with-stores (w p)
     (mem:capture-memory-dir w (%banner-dir) :producer "capture/test")
-    (let* ((name nil)
+    (let* ((name nil) (key nil)
            (provider
              (llm:make-mock-provider
               :responder
@@ -56,6 +79,7 @@ says done."
                                     (first (llm:message-content
                                             (car (last msgs)))))))
                          (setf name (%note-name-from-prompt text))
+                         (setf key (%banner-key-from-prompt text))
                          ;; Pins the controller fix: the banner's own
                          ;; text rides the user prompt, not a tool
                          ;; result (Task 3 review, ruling 1).
@@ -76,22 +100,42 @@ says done."
                         "rule" "read-banner" "rule-version" "mock"
                         "evidence"
                         (vector (%retrieve-annotates-cite
-                                 (%last-tool-result c)))))
+                                 (%last-tool-result c) key))))
                     (t "done"))))))
            (results (agent:annotate-banners (list w p) (%banner-dir)
                                             :provider provider
                                             :producer "claude-code/agent"
                                             :model-name "mock")))
-      ;; update, correction, stale, two -- not superseded, not plain
-      (is (equal '("correction" "stale" "two" "update")
-                 (sort (mapcar #'car results) #'string<)))
+      ;; update, correction, stale, two#1, two#2 -- one ASK per prose
+      ;; banner, not per note (finding 1, #14 unit 3 final review).
+      (is (equal '(("correction" . 1) ("stale" . 1) ("two" . 1)
+                   ("two" . 2) ("update" . 1))
+                 (sort (mapcar #'car results)
+                       (lambda (a b)
+                         (or (string< (car a) (car b))
+                             (and (string= (car a) (car b))
+                                  (< (cdr a) (cdr b))))))))
       (is (every #'cdr results) "every candidate got a decision")
-      (let* ((id (cdr (assoc "correction" results :test #'string=)))
+      (let* ((id1 (cdr (assoc (cons "two" 1) results :test #'equal)))
+             (id2 (cdr (assoc (cons "two" 2) results :test #'equal)))
+             (rec1 (mem:trace w id1 :scope (list w p)))
+             (rec2 (mem:trace w id2 :scope (list w p)))
+             (cite1 (mem:cite-record-cite
+                     (first (mem:decision-record-evidence rec1))))
+             (cite2 (mem:cite-record-cite
+                     (first (mem:decision-record-evidence rec2)))))
+        (is (string= (%annotates-cite-for w "two" 1) cite1)
+            "TWO#1's decision cites TWO#1's own banner")
+        (is (string= (%annotates-cite-for w "two" 2) cite2)
+            "TWO#2's decision cites TWO#2's own banner")
+        (is (string/= cite1 cite2)
+            "the two decisions cite different banners, not an arbitrary one"))
+      (let* ((id (cdr (assoc (cons "correction" 1) results :test #'equal)))
              (rec (mem:trace w id :scope (list w p))))
         (is (string= "claude-code/agent" (mem:decision-record-producer rec)))
         (is (string= "read-banner" (mem:decision-record-rule rec)))
         (is (string= "mock" (mem:decision-record-rule-version rec)))
-        (is (string= (%annotates-cite w "correction")
+        (is (string= (%annotates-cite-for w "correction" 1)
                      (mem:cite-record-cite
                       (first (mem:decision-record-evidence rec)))))
         (is (eq :resolved (mem:cite-record-state
@@ -105,7 +149,8 @@ says done."
            (results (agent:annotate-banners (list w p) (%banner-dir)
                                             :provider provider
                                             :producer "claude-code/agent")))
-      (is (= 4 (length results)))
+      (is (= 5 (length results))
+          "correction, stale, two#1, two#2, update -- one per banner")
       (is (every (lambda (r) (null (cdr r))) results))
       (is (null (st:claims-by-producer w 'mem:trace "claude-code/agent"))
           "control: nothing was written"))))

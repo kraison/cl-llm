@@ -136,6 +136,41 @@ whole capture under plain RECORD-BELIEF; going through
                        (cons :memory-note (banner-link banner))
                        :producer producer :extent extent)))
 
+(defun %removed-banner-p (name n-now key)
+  "True when KEY (a subject key touching NAME as ANNOTATES object) is a
+banner past position N-NOW -- one the current scan no longer carries
+(finding 2, #14 unit 3 final review)."
+  (let ((prefix (format nil "~a#" name)))
+    (and (>= (length key) (length prefix))
+         (string= prefix key :end2 (length prefix))
+         (let ((pos (parse-integer key :start (length prefix)
+                                   :junk-allowed t)))
+           (and pos (> pos n-now))))))
+
+(defun %retract-removed-banners (graph name producer n-now)
+  "Retract PRODUCER's current ANNOTATES belief on every banner past
+position N-NOW: the file no longer carries it, so its belief must not
+be left looking current (banners spec SS4, finding 2, #14 unit 3 final
+review).  Same producer filter as %CURRENT-PREDECESSOR, so another
+producer's belief is never touched."
+  (dolist (c (st:claims-touching graph 'belief :memory-note name
+                                 :role :object))
+    (when (and (typep c 'belief-binary)
+               (string= "annotates" (st:claim-relation c))
+               (string= producer (st:claim-producer c))
+               (st:claim-current-p c)
+               (%open-p c)
+               (%removed-banner-p name n-now (st:claim-subject-key c)))
+      (retract-belief c))))
+
+(defun %retract-stale-superseded-by (graph name producer)
+  "No replacing banner remains on NAME: retract PRODUCER's current
+SUPERSEDED-BY belief on it, if any (finding 2, #14 unit 3 final
+review) -- %CURRENT-PREDECESSOR's own producer filter."
+  (let ((pred (%current-predecessor graph producer (cons :memory-note name)
+                                    "superseded-by")))
+    (when pred (retract-belief pred))))
+
 (defun %capture-note (graph path producer banners)
   (multiple-value-bind (fm body) (read-frontmatter path)
     (let* ((name (or (getf fm :name) (pathname-name path)))
@@ -166,10 +201,11 @@ whole capture under plain RECORD-BELIEF; going through
         (let ((bs (scan-banners body)))
           (dolist (b bs)
             (%capture-banner graph name b modified producer))
+          (%retract-removed-banners graph name producer (length bs))
           (let ((last (%last-replacing-banner bs)))
-            (when last
-              (%capture-superseded-by graph name last
-                                      modified producer))))))))
+            (if last
+                (%capture-superseded-by graph name last modified producer)
+                (%retract-stale-superseded-by graph name producer))))))))
 
 (defun %note-files (dir)
   (sort (remove "MEMORY" (uiop:directory-files dir "*.md")

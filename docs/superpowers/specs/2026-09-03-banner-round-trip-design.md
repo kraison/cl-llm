@@ -143,6 +143,21 @@ banner with an equal or earlier date is a correction too — via
 `%assert-from-file`, not the `belief-successor-before-predecessor`
 error plain `record-belief` would raise.
 
+A banner removed from the file — the author deleted or folded it into
+the note it introduced — is not in the scanner's next result, so
+capture must retract what it once wrote for it: after writing the
+current scan's banners, capture finds every current `annotates`
+belief this producer holds whose subject key `"<note>#<n>"` names NAME
+with `n` greater than the number of banners now present, and retracts
+each; then, when no replacing banner with a link remains among the
+current scan, retracts a current `superseded-by` belief on the note
+under this producer too, if one exists (`%current-predecessor`'s own
+producer filter, so another producer's belief is never touched). A
+note with two banners where only the later is removed keeps the
+earlier's `annotates` belief untouched, since retraction is scoped to
+positions past what the file still carries, not a blanket sweep
+(finding 2, #14 unit 3 final review).
+
 **Capture.** `capture-memory-dir` gains the banner pass: after the
 note's content belief, scan the body and record each banner in the same
 transaction. A new keyword `:banners` (default T) turns it off for a
@@ -161,36 +176,43 @@ note, ordering as the contract, green twice.
 
 `(annotate-banners stores dir &key provider producer (max-tool-turns 4))`
 in `cl-llm/agent`, file `agent/annotate.lisp` — the first consumer of
-the tool surface. It scans `dir` with the same scanner, keeps notes
-with an `update`, `correction` or `stale` banner, and for each runs one
-`llm:ask` with a scope over `stores` (the first is the write store) and
-a tool set of **three**: `recall`, `retrieve`, `conclude`. The user
-turn itself carries the note's name and every prose banner's own text,
-verbatim (kind, date, position, then the banner's body) — because
-`retrieve`'s claim renderer emits a one-line claim summary, not the
-banner's prose, so the tool surface alone cannot supply it; the pass
-puts the text in the prompt instead. The system prompt states the job
-in the tools' vocabulary:
+the tool surface. It scans `dir` with the same scanner and keeps every
+`update`, `correction` or `stale` banner; for each it runs one
+`llm:ask` with a scope over `stores` (the first is the write store)
+and a tool set of **three**: `recall`, `retrieve`, `conclude`. One
+`ask` per **banner**, not per note: a note can carry more than one
+prose-target banner (the fixture `two.md`), and bundling them into one
+prompt with one `conclude` left the evidence cite ambiguous between
+them (finding 1, #14 unit 3 final review). The user turn itself
+carries the note's name and that one banner's own identity
+(`banner:<name>#<n>`), kind, date, position and text, verbatim —
+because `retrieve`'s claim renderer emits a one-line claim summary,
+not the banner's prose, so the tool surface alone cannot supply it;
+the pass puts the text in the prompt instead, and the identity is how
+the model tells this banner's own `retrieve` item from a sibling
+banner's when the note carries more than one. The system prompt states
+the job in the tools' vocabulary:
 
-> You are annotating one note of an agent's memory. The banner's own
-> text is below, in this prompt, under the note line -- read it there,
-> not through a tool. Call `retrieve` with query the note's name and
-> endpoints `["memory-note:<name>"]` only to get its evidence cite: the
-> item whose cite contains `|annotates|` is the banner's belief, and
-> its cite is what you cite. Then call `conclude` once: subject-namespace
-> `memory-note`, subject-key `<name>`, relation `overturns`,
-> object-namespace `proposition`, object-key one sentence stating what
-> the banner overturns, standing `inferred`, rule `read-banner`,
-> rule-version `<model>`, evidence [that cite]. Then reply `done`. If
-> the banner overturns nothing you can state, reply `no`.
+> You are annotating one banner of one note in an agent's memory. The
+> banner's own text is below, in this prompt, under the note line --
+> read it there, not through a tool. Call `retrieve` with query the
+> note's name and endpoints `["memory-note:<name>"]` only: the
+> evidence item whose text begins with `banner:<name>#<n>` is this
+> banner's own belief, and its cite is what you cite. Then call
+> `conclude` once: subject-namespace `memory-note`, subject-key
+> `<name>`, relation `overturns`, object-namespace `proposition`,
+> object-key one sentence stating what the banner overturns, standing
+> `inferred`, rule `read-banner`, rule-version `<model>`, evidence
+> [that cite]. Then reply `done`. If the banner overturns nothing you
+> can state, reply `no`.
 
 `producer` is the agent's, required, distinct from the capture
-producer. The function returns a list of `(note . decision-or-nil)`:
-a note the model did not conclude on is `nil`, reported, never an
-error — the model may decline, and a declined annotation is not a
-failure of the pass. Every bound is the operator's: `max-tool-turns`,
-the scope, the provider; the tool caps are `make-agent-tools`'
-defaults.
+producer. The function returns a list of `((note . position) .
+decision-or-nil)`: a banner the model did not conclude on is `nil`,
+reported, never an error — the model may decline, and a declined
+annotation is not a failure of the pass. Every bound is the
+operator's: `max-tool-turns`, the scope, the provider; the tool caps
+are `make-agent-tools`' defaults.
 
 Nothing in the pass parses the model's text; what it wrote is in the
 store, as a decision, with the banner belief as evidence, and `trace`
@@ -215,16 +237,23 @@ shows it.
   kind; an `update` note carries and writes no `superseded-by`; a
   second capture writes nothing new (control: claim counts); the
   banner node holds the text; a banner without a date has `dated-p`
-  NIL and starts at the note's stamp.
+  NIL and starts at the note's stamp; a banner removed from the file
+  retracts its `annotates` belief and, when no replacing banner
+  remains, the note's `superseded-by` too, with the control that both
+  were current before the edit; removing the second of two banners on
+  one note leaves the first's belief untouched (finding 2, #14 unit 3
+  final review).
 - **Golden**: `banner-listing` over the fixture corpus; green twice.
 - **The pass, offline**: `annotate-banners` over the fixture corpus with
   a `mock-provider` whose responder reads the last tool result and
   scripts the `conclude` call. Asserts: one decision per candidate
-  note, none for a `superseded`-only note; the decision's evidence cite
-  equals the `carries` record's cite byte for byte; the producer is the
-  agent's; and `annotation-tools`, the exported function
-  `annotate-banners` builds its tool set with, returns exactly the
-  three names.
+  banner, none for a `superseded`-only note; a note with two prose
+  banners (`two.md`) gets two decisions, each citing its own banner's
+  `annotates` claim and the two cites differing (finding 1, #14 unit 3
+  final review); the decision's evidence cite equals the `carries`
+  record's cite byte for byte; the producer is the agent's; and
+  `annotation-tools`, the exported function `annotate-banners` builds
+  its tool set with, returns exactly the three names.
 - **The pass, live**: `cl-llm/agent/live`, skipping without
   `CL_LLM_LIVE`; on the fixture corpus, at least one decision, its
   evidence `:resolved`, rule `read-banner`, rule-version non-empty.

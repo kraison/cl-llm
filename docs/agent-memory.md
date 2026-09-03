@@ -266,6 +266,18 @@ as any other belief; a different link with a non-later start, or the
 same link re-dated, is a **correction**. Either way only the last
 replacing banner by position ever writes it.
 
+A banner dropped from the file — the author deleted or folded it in —
+must not leave its claims looking current: after writing the banners
+the current scan still finds, capture retracts any of this producer's
+`annotates` beliefs whose subject key `"<note>#<n>"` names a position
+past what is present now, and, when no replacing banner with a link
+remains, retracts a current `superseded-by` belief on the note too
+(`%retract-removed-banners`, `%retract-stale-superseded-by`,
+`memory/capture.lisp`, finding 2, #14 unit 3 final review). A note
+with two banners where only the second is removed keeps the first's
+`annotates` belief untouched — retraction is per banner, by position,
+not a blanket sweep of the note's claims.
+
 `capture-memory-dir` takes a `:banners` keyword (default `T`); passing
 `:banners nil` restores unit 1's behaviour exactly — content beliefs
 only, no banner nodes or claims.

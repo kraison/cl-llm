@@ -246,6 +246,76 @@ ruling, #14 unit 3 task 2 review)."
       (ignore-errors
        (uiop:delete-directory-tree (pathname dir) :validate t)))))
 
+(defun %remove-banner-from-file (path position modified)
+  "Rewrite PATH's frontmatter (bumping MODIFIED) and body with banner
+POSITION's own text spliced out -- the file no longer carries it
+(finding 2, #14 unit 3 final review).  Splices the exact TEXT
+SCAN-BANNERS collected rather than retyping the fixture, so unicode in
+the fixture (em dashes, curly quotes) can't be mistyped."
+  (multiple-value-bind (fm body) (mem:read-frontmatter path)
+    (let* ((target (find position (mem:scan-banners body)
+                         :key #'mem:banner-position))
+           (text (mem:banner-text target))
+           (start (search text body))
+           (end (+ start (length text)))
+           (new-body (concatenate 'string (subseq body 0 start)
+                                  (subseq body end))))
+      (with-open-file (o path :direction :output :if-exists :supersede
+                         :external-format :utf-8)
+        (format o "---~%name: ~a~%description: ~a~%metadata:~%  ~
+type: ~a~%  modified: ~a~%---~%~a"
+                (getf fm :name) (getf fm :description) (getf fm :type)
+                modified new-body)))))
+
+(test removing-a-banner-retracts-its-annotates-and-superseded-by
+  "The scanner only sees what the file still has; a banner dropped
+from the file must not leave its ANNOTATES and SUPERSEDED-BY beliefs
+looking current (finding 2, #14 unit 3 final review)."
+  (let ((dir (%copy-banner-fixture-to-temp)))
+    (unwind-protect
+         (with-two-stores (g b)
+           (declare (ignore b))
+           (mem:capture-memory-dir g dir :producer +p+)
+           ;; control: before the edit, both beliefs are current
+           (is (= 1 (length (mem:recall g '(:banner . "superseded#1")
+                                        :relation "annotates"))))
+           (is (= 1 (length (mem:recall g '(:memory-note . "superseded")
+                                        :relation "superseded-by"))))
+           (%remove-banner-from-file (merge-pathnames "superseded.md" dir)
+                                     1 "2026-07-23T10:00:00Z")
+           (mem:capture-memory-dir g dir :producer +p+)
+           (is (null (mem:recall g '(:banner . "superseded#1")
+                                 :relation "annotates"))
+               "the removed banner's ANNOTATES belief is retracted")
+           (is (null (mem:recall g '(:memory-note . "superseded")
+                                 :relation "superseded-by"))
+               "no replacing banner remains, so SUPERSEDED-BY is retracted"))
+      (uiop:delete-directory-tree (pathname dir) :validate t))))
+
+(test removing-the-second-of-two-banners-retracts-only-that-one
+  "TWO's UPDATE (position 1) must stay current when only its
+CORRECTION (position 2) is dropped from the file (finding 2, #14 unit
+3 final review)."
+  (let ((dir (%copy-banner-fixture-to-temp)))
+    (unwind-protect
+         (with-two-stores (g b)
+           (declare (ignore b))
+           (mem:capture-memory-dir g dir :producer +p+)
+           (is (= 1 (length (mem:recall g '(:banner . "two#1")
+                                        :relation "annotates"))))
+           (is (= 1 (length (mem:recall g '(:banner . "two#2")
+                                        :relation "annotates"))))
+           (%remove-banner-from-file (merge-pathnames "two.md" dir)
+                                     2 "2026-07-13T10:00:00Z")
+           (mem:capture-memory-dir g dir :producer +p+)
+           (is (= 1 (length (mem:recall g '(:banner . "two#1")
+                                        :relation "annotates")))
+               "the surviving banner's belief is untouched")
+           (is (null (mem:recall g '(:banner . "two#2")
+                                 :relation "annotates"))
+               "the removed banner's belief is retracted"))
+      (uiop:delete-directory-tree (pathname dir) :validate t))))
+
 (defun %banner-golden-path ()
   (asdf:system-relative-pathname :cl-llm "tests-memory/golden/banners.sexp"))
 
