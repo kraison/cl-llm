@@ -246,6 +246,9 @@ loads `graph-db/gui` until kraison/vivace-graph#322). `annotate-banners`
 is the first consumer — a model reads a note's hand-written banner and
 concludes what it overturns, live-tested under `cl-llm/agent/live`
 (`CL_LLM_LIVE=1`). Guide: [`docs/agent-tools.md`](docs/agent-tools.md).
+`scripts/run-memory.sh` runs one long-lived image over the store,
+reached from a session over SWANK (`docs/agent-memory.md`, "Running a
+memory image").
 
 ### Graph-backed stores (`cl-llm/rag/vivace`)
 
