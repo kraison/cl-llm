@@ -36,8 +36,9 @@ WITH the grounding instructions, never in place of them. Returns (values answer 
   "Build a cl-llm tool that retrieves cited context from INDEX, for the
 agentic path where the model decides whether to retrieve."
   (llm:make-tool "retrieve-context"
-                 "Retrieve relevant, cited passages from the knowledge
-base for a query."
+                 (concatenate 'string
+                              "Retrieve relevant, cited passages from "
+                              "the knowledge base for a query.")
                  '((query :type string))
                  (lambda (query)
                    (assemble-context (retrieve index query :k k)))))

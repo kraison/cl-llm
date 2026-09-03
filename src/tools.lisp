@@ -20,18 +20,18 @@
    (function :initarg :function :reader tool-function)
    (parameter-names :initarg :parameter-names :reader tool-parameter-names
                      :initform nil
-                     :documentation "Parameter names, as downcased strings, in
-the declaration order recorded by DEFTOOL at macroexpansion time. CALL-TOOL
-uses this -- rather than re-deriving order from the schema's \"required\" list
-plus an alphabetical sort of whatever remains -- because a hash-table's
-iteration order is unspecified and an alphabetical sort does not match the
-Lisp function's actual (declaration-order) lambda list. Both would silently
-swap two optional parameters declared out of alphabetical order.")
+                     :documentation "Parameter names, as downcased strings,
+in the declaration order, computed by MAKE-TOOL when the tool is built.
+CALL-TOOL uses this -- rather than re-deriving order from the schema's
+\"required\" list plus an alphabetical sort of whatever remains -- because a
+hash-table's iteration order is unspecified and an alphabetical sort does not
+match the Lisp function's actual (declaration-order) lambda list. Both would
+silently swap two optional parameters declared out of alphabetical order.")
    (parameter-specs :initarg :parameter-specs :reader tool-parameter-specs
                      :initform nil
                      :documentation "PARAMETER-SPEC structs, one per declared
-parameter, in the same declaration order as PARAMETER-NAMES. Recorded by
-DEFTOOL at macroexpansion time so POSITIONAL-ARGUMENTS never has to
+parameter, in the same declaration order as PARAMETER-NAMES. Computed by
+MAKE-TOOL when the tool is built, so POSITIONAL-ARGUMENTS never has to
 re-derive requiredness or default values from the JSON schema -- which
 cannot represent \"no default\" and \"default is NIL\" distinguishably once
 the value has round-tripped through JSON."))
