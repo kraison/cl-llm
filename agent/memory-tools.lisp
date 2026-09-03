@@ -140,6 +140,9 @@ to the write store (SS6)."
                    (and c (progn (note-cite scope (mem:claim-cite c)
                                             (scope-write-store scope))
                                  (mem:claim-cite c))))
+    ;; MEM:TRACE never returns NIL here: both CONCLUDE paths -- commit
+    ;; and %WRITE-REFUSAL (memory/trace.lisp) -- write an outcome claim
+    ;; before returning, so D's id always resolves to one.
     "refusals" (map 'vector
                     (lambda (f) (json:jobject "family" (car f)
                                               "text" (cdr f)))
@@ -209,8 +212,8 @@ Validated and traced like conclude."
                (list :absence
                      (cons (%keyword subject-namespace) subject-key)
                      relation
-                     :standing (%check-standing standing
-                                                 +absence-standings+))
+                     :standing (%check-standing
+                                standing +absence-standings+))
                :producer (scope-producer scope)
                :evidence (%evidence-pairs scope evidence)
                :rule rule :rule-version rule-version)))
@@ -230,10 +233,22 @@ a read-only store is an error."
          (error "store ~a is not writable in this scope"
                 (mem:store-name g)))
        (multiple-value-bind (family ns key) (mem:split-cite cite)
-         (let ((claim (find cite
-                            (st:claims-touching g family ns key
-                                                :role :subject)
-                            :key #'mem:claim-cite :test #'string=)))
+         ;; CLAIMS-TOUCHING returns retracted claims too, and a
+         ;; claim's identity key -- hence its cite -- survives
+         ;; retraction (claim-identity-key).  Prefer the still-current
+         ;; claim over whichever CLAIMS-TOUCHING hands back first, in
+         ;; case two ever share a cite; the unrestricted search is
+         ;; only a fallback so RETRACT-BELIEF can still report
+         ;; "already retracted" when every match is dead.
+         (let ((claim (or (find cite
+                                (st:claims-touching g family ns key
+                                                    :role :subject
+                                                    :current t)
+                                :key #'mem:claim-cite :test #'string=)
+                          (find cite
+                                (st:claims-touching g family ns key
+                                                    :role :subject)
+                                :key #'mem:claim-cite :test #'string=))))
            (unless claim (error "no claim for cite ~a" cite))
            (let ((retracted
                    (gdb:with-transaction (:graph g)

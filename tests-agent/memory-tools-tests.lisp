@@ -227,7 +227,7 @@ regardless of which store either lives in (spec SS5/SS6)."
       (is (string= "concluded" (json:jget c "outcome")))
       (is (string= "cl-llm-memory" (json:jget c "store")))
       (is (mem:cite-p (json:jget c "claim-cite")))
-      (is (= 0 (length (json:jget c "refusals"))))
+      (is (equalp #() (json:jget c "refusals")))
       (let ((t2 (%call tools "trace" "decision-id" (json:jget c "id"))))
         (is (string= "owner-says" (json:jget t2 "rule")))
         (is (string= cite (json:jget (first (coerce (json:jget t2 "evidence")
@@ -311,26 +311,79 @@ window trips the validator; no belief is written."
                        (%args "cite" (mem:claim-cite theirs))))
       (is (= 1 (length (mem:recall p +subj+ :relation "owner")))
           "control: the private belief stands")
-      (signals llm:llm-tool-error
+      (signals (llm:llm-tool-error "already retracted")
         (llm:call-tool (%tool tools "retract")
-                       (%args "cite" (mem:claim-cite own)))
-        "already retracted"))))
+                       (%args "cite" (mem:claim-cite own)))))))
+
+(test retract-then-conclude-at-the-same-valid-from-is-refused
+  "Review finding 1 asked whether RETRACT then CONCLUDE at the same
+VALID-FROM leaves two live claims sharing one cite -- CLAIMS-TOUCHING
+returns retracted claims too, and a claim's identity key (hence its
+cite) survives retraction.  Verified empirically (see the fix report):
+BELIEF's own :UNIQUE identity tuple is canonicalized by the same
+EXTENT-SEXP-START-KEY function CLAIM-CITE uses (spacetime/claim.lisp,
+DEF-CLAIM-CLASSES: \"the extent START joins both identity tuples\"), so
+the engine refuses the second write outright -- a retracted claim still
+holds its slot.  This locks in that safety property; RETRACT is still
+made to prefer a CURRENT claim over CLAIMS-TOUCHING's first hit as
+defense in depth, in case a future write path (bulk import, a schema
+relaxation) ever produces a genuine collision this constraint no longer
+catches."
+  (with-stores (w p)
+    (let* ((own (%belief w "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite own))
+           (tools (agent:make-agent-tools (list w p) :producer +p+)))
+      (%call tools "retract" "cite" cite)
+      (let ((c (%call tools "conclude"
+                      "subject-namespace" "repo" "subject-key" "cl-llm"
+                      "relation" "ci-status" "object-namespace" "verdict"
+                      "object-key" "green" "rule" "r"
+                      "valid-from" "2026-09-01T08:00:00Z")))
+        (is (string= "refused" (json:jget c "outcome")))
+        (is (null (json:jget c "claim-cite")))
+        (is (string= "unique"
+                     (json:jget (first (coerce (json:jget c "refusals")
+                                               'list))
+                                "family"))))
+      (is (null (mem:recall w +subj+ :relation "ci-status"))
+          "nothing live survives either write"))))
 
 (test conclude-rejects-a-noncanonical-namespace-and-writes-nothing
   "Controller ruling 2: every namespace the model supplies to a write
 tool goes through the validating %KEYWORD, so a namespace that is not
-[a-z0-9-]+ is a tool error, never a silent intern."
+[a-z0-9-]+ is a tool error, never a silent intern -- on either side of
+conclude's proposal, and on conclude-absence too -- and no partial
+write survives it."
   (with-stores (w p)
-    (let ((tools (agent:make-agent-tools (list w p) :producer +p+)))
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (before-beliefs (st:claims-touching w 'mem:belief :repo
+                                               "cl-llm" :role :subject))
+           (before-traces (st:claims-by-producer w 'mem:trace +p+)))
       (signals llm:llm-tool-error
         (llm:call-tool (%tool tools "conclude")
                        (%args "subject-namespace" "Repo Name"
                               "subject-key" "cl-llm"
                               "relation" "x" "object-namespace" "v"
                               "object-key" "1" "rule" "r")))
-      (is (null (mem:recall w +subj+ :relation "x")))
-      (is (null (mem:recall p +subj+ :relation "x"))
-          "control: nothing was written anywhere"))))
+      (signals llm:llm-tool-error
+        (llm:call-tool (%tool tools "conclude")
+                       (%args "subject-namespace" "repo"
+                              "subject-key" "cl-llm"
+                              "relation" "x" "object-namespace" "Bad NS"
+                              "object-key" "1" "rule" "r")))
+      (signals llm:llm-tool-error
+        (llm:call-tool (%tool tools "conclude-absence")
+                       (%args "subject-namespace" "Repo Name"
+                              "subject-key" "cl-llm"
+                              "relation" "x" "rule" "r"
+                              "standing" "searched-empty")))
+      (is (= (length before-beliefs)
+             (length (st:claims-touching w 'mem:belief :repo "cl-llm"
+                                         :role :subject)))
+          "control: no belief claim was written")
+      (is (= (length before-traces)
+             (length (st:claims-by-producer w 'mem:trace +p+)))
+          "control: no decision/trace claim was written"))))
 
 (test conclude-signals-on-an-evidence-cite-out-of-scope
   "Controller ruling 3: a cite the model passed that CITE-STORE cannot
