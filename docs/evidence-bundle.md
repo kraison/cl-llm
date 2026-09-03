@@ -593,7 +593,8 @@ The third `collect-evidence` method §4 promised, in its own system —
 `graph-db/spacetime` and nothing tenant-shaped.
 
 ```lisp
-(make-claim-source graph claim-class key-extractor &key renderer)
+(make-claim-source graph claim-class key-extractor
+                   &key renderer include-retracted)
 ```
 
 - `claim-class` is the tenant's **parent** claim class —
@@ -603,6 +604,10 @@ The third `collect-evidence` method §4 promised, in its own system —
   `(namespace . key)` conses. **This is where the tenant's vocabulary
   lives** (programme §5.1): the source walks whatever endpoints it is
   handed and knows no tenant's key shapes itself.
+- `include-retracted`, off by default: the source collects current
+  claims only, as `recall` does, because a corrected belief leaves a
+  retracted twin on the same tuple that renders identically
+  (cl-llm#37). Pass true to see the record of what was believed.
 - `renderer` turns a claim into the line a model reads; the default
   prints endpoints, relation, producer, standing, and the validity
   window.

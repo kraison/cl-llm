@@ -217,3 +217,22 @@ whichever claim happens to come first."
                          :window-standing :asserted))))
         (is (search "sensor:new" (top-text (bounded-to 2004 2007))))
         (is (search "sensor:old" (top-text (bounded-to 1989 1992))))))))
+
+(test retracted-claims-are-excluded-unless-asked
+  "#37: a corrected belief leaves a retracted twin on the same tuple that
+renders identically; the source hands the model current claims only,
+unless built with :INCLUDE-RETRACTED."
+  (with-claims-graph (g)
+    (let ((old (%seed g :object "s1")))
+      (%seed g :object "s2")
+      (gdb:with-transaction ((graph-db::transaction-manager g))
+        (st:retract-claim old))
+      (is (= 1 (length (rag:collect-evidence
+                        (claims:make-claim-source
+                         g 'probe-claim (%extract-devices "d42"))
+                        "d42"))))
+      (is (= 2 (length (rag:collect-evidence
+                        (claims:make-claim-source
+                         g 'probe-claim (%extract-devices "d42")
+                         :include-retracted t)
+                        "d42")))))))
