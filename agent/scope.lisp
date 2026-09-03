@@ -32,6 +32,11 @@ returned (SS6)."
     (unless (st:canonical-producer-p producer)
       (%scope-error "PRODUCER is required: a canonical string ~
                      \"<agent>/<host>\""))
+    (unless (and (integerp k) (plusp k))
+      (%scope-error "K must be a positive integer, not ~s" k))
+    (unless (and (integerp max-rows) (plusp max-rows))
+      (%scope-error "MAX-ROWS must be a positive integer, not ~s"
+                    max-rows))
     (%make-scope :stores stores :write-store write :producer producer
                  :sources sources :k k :max-rows max-rows)))
 

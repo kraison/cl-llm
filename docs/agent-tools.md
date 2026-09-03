@@ -174,10 +174,13 @@ Found in whichever store of the scope holds it — decision ids are
 random and unique. `confidence` is present when the decision that
 made the claim gave one (omitted otherwise). Each evidence cite
 resolves in the store its evidence claim names, when that store is
-in scope; a cite naming a store the tool set was not built with
-reports `state: "absent"` and carries **no `store` key at all** —
-never falling back to the decision's own store, which would falsely
-suggest it was found. A refused decision has no `conclusion` and no
+in scope, and the item's `store` is **the store it was resolved
+against** — so a belief held identically by two stores still reports
+the half this decision cited. A cite naming a store the tool set was
+not built with reports `state: "absent"` and carries **no `store` key
+at all** — never falling back to the decision's own store, which
+would falsely suggest it was found. A refused decision has no
+`conclusion` and no
 `rule`/`rule-version`/`confidence` (omitted); `refusals` is
 `[{"family": ..., "text": ...}]`, one per constraint family that
 objected.
@@ -252,11 +255,15 @@ Parameters: `cite`.
 }
 ```
 
-Only a claim in `write-store` can be retracted — a cite that resolves
-to a store elsewhere in scope is an error result ("not writable in
-this scope"), since retraction is a write. Among claims sharing a
-cite, the still-current one is preferred; a cite that resolves to
-nothing, or only to an already-retracted claim, is an error result.
+Only a **belief** is retractable, and only one in `write-store`. A
+cite from any other family — a `trace` cite, say, naming a decision's
+own record, which `query` makes visible — is an error result ("only
+beliefs are retractable"); `mem:retract-belief` refuses one too, so
+the rule holds below the tool as well. A cite that resolves to a store
+elsewhere in scope is an error result ("not writable in this scope"),
+since retraction is a write. Among claims sharing a cite, the
+still-current one is preferred; a cite that resolves to nothing, or
+only to an already-retracted claim, is an error result.
 
 ### `retrieve`
 
@@ -298,13 +305,13 @@ Runs `fuse` over one belief claim source per store in scope plus any
 unbounded fusion through `plan-bounds` and then applied — so a
 second call inside that derived window is one round trip away.
 `bounds.box` is present only when a spatial bound applies; here it is
-absent because nothing has one. `truncated` compares the returned
-count to `k`, so a page that exactly fills `k` reads as truncated
-even when nothing more exists — a cheap, conservative signal, not a
-guarantee more is there. A recognised endpoint with nothing recorded
-comes back as its own evidence item, `standing: "searched-empty"`,
-with no `cite` — "looked and found nothing" survives into the
-bundle rather than reading as an omission.
+absent because nothing has one. `truncated` means **more evidence
+existed past `k`**, the same as in `recall`: the fusion runs at
+`k + 1` and the extra item is cut, so a page that exactly fills `k`
+with nothing behind it is not truncated. A recognised endpoint with
+nothing recorded comes back as its own evidence item, `standing:
+"searched-empty"`, with no `cite` — "looked and found nothing"
+survives into the bundle rather than reading as an omission.
 
 ### `plan-bounds`
 
@@ -323,8 +330,8 @@ Parameters: `text`; optional `store` (default the first in scope),
   "store": "cl-llm-memory",
   "columns": ["c", "r"],
   "rows": [
-    ["cl-llm.memory::belief|...", "ci-status"],
-    ["cl-llm.memory::belief|...", "last-push"]
+    ["9f8e7d6c5b4a39281706f5e4d3c2b1a0", "ci-status"],
+    ["1a2b3c4d5e6f70819293a4b5c6d7e8f9", "last-push"]
   ],
   "truncated": false
 }
@@ -347,7 +354,11 @@ object with optional fields.
 Because the whitelist enumerates the store's own schema types, a
 query can walk `belief` and `trace` vertices with generic predicates
 — `(is-a ?c belief-binary) (node-slot-value ?c relation ?r)` — and no
-tenant-specific code. A store outside the scope is an error result. A
+tenant-specific code. Note what `?c` holds above: a **node id**, a
+32-hex string, not a cite. `query` is for walking the graph, not for
+producing evidence — the cites `conclude` and `retract` take come
+from `recall` and `retrieve`, never from a query row. A store outside
+the scope is an error result. A
 store that declares **edge** types is refused up front, pending
 kraison/vivace-graph#322 (§"What this is not"). Every refusal the
 guard or the engine produces — disallowed reader syntax, an

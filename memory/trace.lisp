@@ -191,10 +191,15 @@ order."
 (defun %resolve-in (cite store-name graph scope at)
   "CITE resolved in the store its evidence claim named, when that store
 is in SCOPE; unit-1 evidence (no store) resolves in GRAPH; a store out
-of scope is :ABSENT (SS4.3)."
+of scope is :ABSENT (SS4.3).  The record's STORE is the store actually
+resolved against, so a cite held by two stores reports the one this
+decision named -- not whichever a cache saw first (#14 unit 2 final
+review)."
   (let ((g (if store-name (%store-in-scope store-name scope) graph)))
     (if g
-        (resolve-cite g cite at)
+        (let ((r (resolve-cite g cite at)))
+          (setf (cite-record-store r) (store-name g))
+          r)
         (make-cite-record :cite cite :state :absent))))
 
 (defun trace (graph decision-id &key (scope (list graph)))
@@ -233,9 +238,11 @@ resolves in the store it names, when that store is in SCOPE (SS4.3)."
          :rule-version (and concluded (st:claim-rule-version concluded))
          :confidence (and concluded (st:claim-confidence concluded))
          :outcome (if concluded :concluded :refused)
+         ;; The conclusion is always the deciding store's own claim, so
+         ;; it resolves in GRAPH -- %RESOLVE-IN with no named store.
          :conclusion (and concluded
-                          (resolve-cite graph (st:claim-object-key concluded)
-                                        at))
+                          (%resolve-in (st:claim-object-key concluded)
+                                       nil graph scope at))
          :evidence (mapcar (lambda (pair)
                              (%resolve-in (car pair) (cdr pair)
                                           graph scope at))

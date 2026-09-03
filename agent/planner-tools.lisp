@@ -85,9 +85,8 @@ touching the named endpoints (\"namespace:key\"), plus any other
 sources configured, fused into one ranked list.  from/to (RFC 3339)
 scope retrieval to a validity window; otherwise a window is derived
 from what the query first finds and applied.  Each claim item carries
-its cite for use as evidence in conclude.  truncated compares the
-returned count to k, so a page that exactly fills k reads as
-truncated even when nothing more exists."
+its cite for use as evidence in conclude.  truncated is true when more
+evidence existed past k, as in recall."
    '((query :type string)
      (endpoints :type (list string) :optional t)
      (from :type string :optional t) (to :type string :optional t)
@@ -100,8 +99,12 @@ truncated even when nothing more exists."
             (seed (%seed scope query eps k))
             (bounds (rag:plan-bounds (rag:bundle-evidence seed)
                                      :window (%window from to)))
-            (bundle (rag:fuse sources query :k k :bounds bounds))
-            (evidence (rag:bundle-evidence bundle)))
+            ;; Fuse one past the cap and cut, so TRUNCATED means more
+            ;; existed -- RECALL's rule (spec SS5, #14 unit 2 final
+            ;; review); an exactly-full page is not truncated.
+            (bundle (rag:fuse sources query :k (1+ k) :bounds bounds))
+            (fused (rag:bundle-evidence bundle))
+            (evidence (subseq fused 0 (min k (length fused)))))
        (json:to-json
         (json:jobject
          "query" query
@@ -109,9 +112,7 @@ truncated even when nothing more exists."
          "bounds" (%bounds-json bounds)
          "evidence" (map 'vector (lambda (e) (%evidence-json scope e))
                          evidence)
-         ;; Cheaper than re-fusing at K+1 (controller ruling): an
-         ;; exactly-full page reads as truncated too.
-         "truncated" (%bool (>= (length evidence) k))))))))
+         "truncated" (%bool (> (length fused) k))))))))
 
 (defun %plan-bounds-tool (scope)
   (llm:make-tool

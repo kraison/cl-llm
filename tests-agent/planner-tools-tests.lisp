@@ -61,11 +61,20 @@
 (test retrieve-clamps-k-and-a-recognised-endpoint-with-nothing-is-searched-empty
   (with-stores (w p)
     (%seed-two-stores w p)
+    ;; TRUNCATED is RECALL's rule (spec SS5): fuse at k+1, cut to k, so
+    ;; it says more existed -- not merely that the page filled.
     (let* ((tools (agent:make-agent-tools (list w p) :producer +p+ :k 1))
            (r (%call tools "retrieve" "query" "q"
                      "endpoints" (vector "repo:cl-llm") "k" 50)))
       (is (= 1 (length (json:jget r "evidence"))))
-      (is (eq t (json:jget r "truncated"))))
+      (is (eq t (json:jget r "truncated"))
+          "a second and third claim existed past k"))
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+ :k 3))
+           (r (%call tools "retrieve" "query" "q"
+                     "endpoints" (vector "repo:cl-llm"))))
+      (is (= 3 (length (json:jget r "evidence"))))
+      (is (eq nil (json:jget r "truncated"))
+          "control: an exactly-full page is not truncated"))
     (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
            (r (%call tools "retrieve" "query" "q"
                      "endpoints" (vector "repo:nothing-here")))

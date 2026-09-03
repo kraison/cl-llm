@@ -150,3 +150,29 @@ is current."
         (gdb:with-transaction ((graph-db::transaction-manager g))
           (signals mem:belief-argument-error
             (mem:retract-belief c2)))))))
+
+(test only-a-belief-can-be-retracted
+  "Final review critical 1: RETRACT-BELIEF type-checked nothing but
+currency, so a decision's own trace claim could be closed through it.
+Control: a belief still retracts."
+  (with-memory-graph (g)
+    (let* ((d (mem:conclude g (list :belief +subj+ "releasable"
+                                    '(:verdict . "yes")
+                                    :standing :inferred)
+                            :producer +p+ :rule "r"))
+           (id (mem:decision-id d))
+           (concluded (lambda ()
+                        (find "concluded"
+                              (st:claims-touching g 'mem:trace :decision
+                                                  id :role :subject)
+                              :key #'st:claim-relation :test #'string=))))
+      (is-true (st:claim-current-p (funcall concluded)) "control")
+      (gdb:with-transaction ((graph-db::transaction-manager g))
+        (signals mem:belief-argument-error
+          (mem:retract-belief (funcall concluded))))
+      (is-true (st:claim-current-p (funcall concluded))
+               "the decision's own record still stands")
+      (gdb:with-transaction ((graph-db::transaction-manager g))
+        (mem:retract-belief (mem:decision-claim d)))
+      (is-false (st:claim-current-p (first (%touching g)))
+                "control: a belief still retracts"))))

@@ -9,6 +9,12 @@
     (signals agent:scope-error (agent:make-agent-tools (list w p)))
     (signals agent:scope-error
       (agent:make-agent-tools (list w) :write-store p :producer +p+))
+    ;; The caps are the operator's and must be usable: a non-positive
+    ;; one would clamp every request to nothing (#14 unit 2 review).
+    (signals agent:scope-error
+      (agent:make-agent-tools (list w p) :producer +p+ :k 0))
+    (signals agent:scope-error
+      (agent:make-agent-tools (list w p) :producer +p+ :max-rows 0))
     (is (= 8 (length (agent:make-agent-tools (list w p) :producer +p+))))))
 
 (test recall-spans-the-scope-and-names-the-store
@@ -133,7 +139,9 @@ each row's pre-sort position, which is scope order (spec SS6)."
            (r (%call tools "recall" "subject-namespace"
                      "totally-unknown-namespace-zzz"
                      "subject-key" "cl-llm")))
-      (is (= 0 (length (json:jget r "records")))))))
+      (is (= 0 (length (json:jget r "records"))))
+      (is (null (find-symbol "TOTALLY-UNKNOWN-NAMESPACE-ZZZ" :keyword))
+          "control: the read minted no keyword"))))
 
 (test recall-of-a-malformed-timestamp-signals
   (with-stores (w p)
@@ -401,3 +409,87 @@ store."
                               "evidence" (vector (mem:claim-cite theirs)))))
       (is (null (mem:recall w +subj+ :relation "x"))
           "nothing was written"))))
+
+(test retract-refuses-a-trace-cite-and-leaves-the-decision-standing
+  "Final review critical 1: CITE-STORE resolves every registered
+family, and a decision's trace vertices are visible through the query
+tool, so a trace cite must not reach RETRACT-BELIEF and close a
+decision's own record.  Control: a belief cite still retracts."
+  (with-stores (w p)
+    (let* ((own (%belief w "ci-status" '(:verdict . "green")))
+           (d (mem:conclude w (list :belief +subj+ "releasable"
+                                    '(:verdict . "yes")
+                                    :standing :inferred)
+                            :producer +p+ :rule "r"))
+           (id (mem:decision-id d))
+           (concluded (lambda ()
+                        (find "concluded"
+                              (st:claims-touching w 'mem:trace :decision
+                                                  id :role :subject)
+                              :key #'st:claim-relation :test #'string=)))
+           (tools (agent:make-agent-tools (list w p) :producer +p+)))
+      (is (string= (mem:claim-cite own)
+                   (json:jget (%call tools "retract" "cite"
+                                     (mem:claim-cite own))
+                              "cite"))
+          "control: a belief cite still retracts")
+      (handler-case
+          (progn (llm:call-tool
+                  (%tool tools "retract")
+                  (%args "cite" (mem:claim-cite (funcall concluded))))
+                 (fail "a trace cite must not be retractable"))
+        (llm:llm-tool-error (e)
+          (is (search "only beliefs are retractable"
+                      (princ-to-string (llm:llm-error-underlying e))))))
+      (is-true (st:claim-current-p (funcall concluded))
+               "the decision's own record still stands"))))
+
+(test decisions-citing-never-interns-a-namespace-from-a-cite
+  "Final review important 3: SPLIT-CITE read the subject namespace with
+INTERN, so any model string minted a keyword.  A fabricated cite is an
+argument error and mints nothing."
+  (with-stores (w p)
+    (let ((tools (agent:make-agent-tools (list w p) :producer +p+))
+          (cite (concatenate
+                 'string "cl-llm.memory::belief|claude-code/test"
+                 "|:zzzfabricated|k|:verdict|yes|r"
+                 "|((9680 28800 0) (9680 28800 0))")))
+      (signals llm:llm-tool-error
+        (llm:call-tool (%tool tools "decisions-citing")
+                       (%args "cite" cite)))
+      (is (null (find-symbol "ZZZFABRICATED" :keyword))
+          "control: the namespace was never interned"))))
+
+(test trace-names-the-store-the-decision-resolved-against
+  "Final review important 2: one belief recorded identically in both
+stores has one cite, so the cite -> store cache and the scope-order
+fallback can both answer with the wrong half.  TRACE resolves each
+evidence cite against the store the decision named, and the tool
+renders that store, not a cache's."
+  (with-stores (w p)
+    (let* ((in-w (%belief w "ci-status" '(:verdict . "green")))
+           (in-p (%belief p "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite in-p))
+           (d (mem:conclude w (list :belief +subj+ "releasable"
+                                    '(:verdict . "yes")
+                                    :standing :inferred)
+                            :producer +p+
+                            :evidence (list (cons cite "memory-private"))
+                            :rule "r"))
+           (tools (agent:make-agent-tools (list w p) :producer +p+)))
+      (is (string= cite (mem:claim-cite in-w))
+          "control: one cite names the copy in either store")
+      (is (string= "cl-llm-memory"
+                   (mem:store-name
+                    (agent:cite-store
+                     (agent:make-scope (list w p) :producer +p+) cite)))
+          "control: resolving the cite by scope order finds the working
+copy -- the answer TRACE must not use")
+      ;; RETRIEVE collapses the two copies and caches cite -> the first
+      ;; store, which is exactly the wrong half here.
+      (%call tools "retrieve" "query" "q"
+             "endpoints" (vector "repo:cl-llm"))
+      (let* ((r (%call tools "trace" "decision-id" (mem:decision-id d)))
+             (ev (first (coerce (json:jget r "evidence") 'list))))
+        (is (string= "memory-private" (json:jget ev "store")))
+        (is (string= "resolved" (json:jget ev "state")))))))

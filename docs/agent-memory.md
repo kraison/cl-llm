@@ -69,7 +69,9 @@ is a correction, and you must say so:
 **Correction** — the belief was never true. `retract-belief` closes its
 *transaction* extent and leaves validity alone, so what remains says
 exactly when it was believed. Retracted beliefs are hidden from recall
-unless asked for.
+unless asked for. Only a `belief` may be passed: a `trace` claim is a
+decision's own record, not an opinion to withdraw, and it is refused
+with a `belief-argument-error`.
 
 ```lisp
 (gdb:with-transaction (:graph g)
@@ -152,7 +154,13 @@ survives retraction and regeneration. `trace` reads a decision back
 then (`:resolved`), or reports `:reaped` (past the family's retention)
 or `:absent` (swept), and a resolved cite carries `changed-since` —
 `:retracted`, `:superseded`, `:updated` or NIL. The as-of version is what
-you get; the current one only sets the flag.
+you get; the current one only sets the flag. A `cite-record` from
+`trace` also carries `cite-record-store`, the name of the store the
+cite was actually resolved against (NIL when none was), so a cite two
+stores hold is not mistaken for the wrong copy. `split-cite` reads the
+subject namespace with `find-symbol`, never `intern`: a cite naming a
+namespace nothing was ever recorded under is a `belief-argument-error`,
+so no caller-supplied string can mint a keyword.
 
 ```lisp
 (mem:trace g (mem:decision-id d))

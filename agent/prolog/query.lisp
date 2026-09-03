@@ -16,7 +16,10 @@ parsed, so every NIL cell here is a JSON null, never false."
   "Read, guard and run TEXT against GRAPH; (values columns rows
 truncated-p).  :PACKAGE is GRAPH-DB, not the schema package: the
 runner re-interns heads there and CL-LLM.MEMORY does not use GRAPH-DB
-(kraison/vivace-graph#322); a store with edge types is refused below."
+(kraison/vivace-graph#322); a store with edge types is refused below.
+No effect policy is passed because RUN-QUERY-GOALS hard-codes
+:EFFECTS NIL and :SNAPSHOT T -- the test
+A-WRITE-EFFECT-GOAL-IS-REFUSED-BY-THE-RUNNER pins that (spec SS8, SS9)."
   (when (graph-db.gui::%schema-type-names graph :edge)
     (error "store ~a declares edge types; free-text queries over them ~
 wait on kraison/vivace-graph#322" (mem:store-name graph)))

@@ -56,14 +56,11 @@ believed then with what has changed since, and any refusals."
    (lambda (decision-id)
      (let ((g (%find-decision scope decision-id)))
        (unless g (error "no decision ~a in scope" decision-id))
+       ;; No NOTE-CITE here: each record already carries the store
+       ;; MEM:TRACE resolved it against, and seeding the cache from a
+       ;; trace would make a later CONCLUDE charge the evidence to
+       ;; whichever store the cache saw (#14 unit 2 final review).
        (let ((rec (mem:trace g decision-id :scope (scope-stores scope))))
-         ;; Only note a cite whose store CITE-STORE actually resolved --
-         ;; never fall back to G, the decision's own store, or an
-         ;; out-of-scope cite gets falsely cached as resolvable here and
-         ;; renders with a STORE alongside its true :ABSENT STATE.
-         (dolist (r (mem:decision-record-evidence rec))
-           (let ((s (cite-store scope (mem:cite-record-cite r))))
-             (when s (note-cite scope (mem:cite-record-cite r) s))))
          (json:to-json
           (json:jobject
            "id" decision-id
@@ -75,14 +72,8 @@ believed then with what has changed since, and any refusals."
            "confidence" (mem:decision-record-confidence rec)
            "outcome" (%standing (mem:decision-record-outcome rec))
            "conclusion" (let ((c (mem:decision-record-conclusion rec)))
-                          (and c (%cite-record-json (mem:store-name g) c)))
-           "evidence" (map 'vector
-                           (lambda (r)
-                             (%cite-record-json
-                              (let ((s (cite-store
-                                        scope (mem:cite-record-cite r))))
-                                (and s (mem:store-name s)))
-                              r))
+                          (and c (%cite-record-json c)))
+           "evidence" (map 'vector #'%cite-record-json
                            (mem:decision-record-evidence rec))
            "refusals" (map 'vector
                            (lambda (f) (json:jobject "family" (car f)
@@ -233,6 +224,12 @@ a read-only store is an error."
          (error "store ~a is not writable in this scope"
                 (mem:store-name g)))
        (multiple-value-bind (family ns key) (mem:split-cite cite)
+         ;; CITE-STORE resolves any registered family, and a decision's
+         ;; trace vertices are visible through the query tool -- refuse
+         ;; here as well as in RETRACT-BELIEF (#14 unit 2 final review).
+         (unless (eq family 'mem:belief)
+           (error "only beliefs are retractable; ~a names a ~(~a~)"
+                  cite family))
          ;; CLAIMS-TOUCHING returns retracted claims too, and a
          ;; claim's identity key -- hence its cite -- survives
          ;; retraction (claim-identity-key).  Prefer the still-current

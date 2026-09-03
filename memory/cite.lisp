@@ -53,7 +53,10 @@ engine's rendering, kept here until kraison/vivace-graph#321 lands."
 (defun split-cite (cite)
   "Four values: the family's parent symbol, the subject namespace
 keyword, the subject key, and the identity key.  A cite the engine did
-not render is a BELIEF-ARGUMENT-ERROR."
+not render is a BELIEF-ARGUMENT-ERROR -- including one whose namespace
+is interned nowhere, since no claim can exist under a namespace never
+recorded, and a model string must not mint one (#14 unit 2 final
+review)."
   (unless (cite-p cite) (%arg-error :cite cite "not a cite"))
   (let* ((bar (position #\| cite))
          (family (%parse-family (subseq cite 0 bar)))
@@ -64,16 +67,18 @@ not render is a BELIEF-ARGUMENT-ERROR."
     (let ((ns (second fields)))
       (unless (and (plusp (length ns)) (char= #\: (char ns 0)))
         (%arg-error :cite cite "subject namespace is not a keyword"))
-      (values family
-              (intern (string-upcase (subseq ns 1)) :keyword)
-              (third fields)
-              ikey))))
+      (let ((kw (find-symbol (string-upcase (subseq ns 1)) :keyword)))
+        (unless kw
+          (%arg-error :cite cite "names no recorded subject namespace"))
+        (values family kw (third fields) ikey)))))
 
 (defstruct cite-record
   "One cite resolved AS OF an instant (SS5).  STATE is :RESOLVED, :REAPED
 or :ABSENT; CLAIM is the version believed then when :RESOLVED.
-CHANGED-SINCE is :RETRACTED, :SUPERSEDED, :UPDATED or NIL."
-  cite family (state :absent) claim standing extent changed-since)
+CHANGED-SINCE is :RETRACTED, :SUPERSEDED, :UPDATED or NIL.  STORE names
+the store the cite was actually resolved against -- NIL when none was
+(SS4.3); RESOLVE-CITE leaves it to its caller, which knows the graph."
+  cite family (state :absent) claim standing extent changed-since store)
 
 (defun %stamp= (a b)
   "Version stamps by value: LOCAL-TIME:TIMESTAMP is a CLOS instance, so

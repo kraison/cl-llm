@@ -75,9 +75,12 @@ unrecoverable -- then interns it (SS6)."
      "current" (%bool (mem:belief-record-current-p record))
      "superseded-by" (and s (mem:claim-cite s)))))
 
-(defun %cite-record-json (store-name record)
+(defun %cite-record-json (record)
+  "One CITE-RECORD as the model reads it.  STORE is the record's own --
+the store MEM:TRACE resolved the cite against, not a cache's guess
+(#14 unit 2 final review)."
   (json:jobject
-   "store" store-name
+   "store" (mem:cite-record-store record)
    "cite" (mem:cite-record-cite record)
    "state" (%standing (mem:cite-record-state record))
    "changed-since" (%standing (mem:cite-record-changed-since record))

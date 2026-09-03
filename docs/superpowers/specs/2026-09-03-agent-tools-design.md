@@ -197,7 +197,9 @@ it. `sources` are `collect-evidence` sources the operator adds to the
 planner beside the scope's claim sources, such as a dense index over
 the same corpus. `k` and `max-rows` cap what a call may ask for; a
 larger request is clamped, never refused, and the result says
-`truncated`. The tools close over the scope: several scopes in one
+`truncated`, which for every tool here is true when more items existed
+past the cap — never merely that the page filled it. The tools close
+over the scope: several scopes in one
 image are several tool sets, and a test builds its own over its own
 on-disk stores.
 
@@ -208,7 +210,11 @@ endpoint list is the one place a `"namespace:key"` string appears,
 split at the first colon because namespaces are canonical `[a-z0-9-]`.
 Store names cross as the graph name's lowercase string (`"memory-
 private"`). Timestamps cross as RFC 3339 strings; standings as their
-keyword names without the colon.
+keyword names without the colon. A field whose value is null is
+omitted from every result object rather than rendered as JSON `null`,
+the two exceptions being `truncated` and `current`, always-present
+booleans; the `query` tool's row cells are the one place an actual
+JSON `null` appears, because a row is a fixed-width tuple.
 
 ## 6. The memory tools
 
@@ -225,8 +231,10 @@ Reads run over every store in scope, in scope order, and each record
 names its `store`. `recall` merges the stores' answers under unit 1's
 order rule, ties broken by scope order. `trace` finds the decision in
 whichever store holds it — ids are random and unique — and resolves
-its cites with the whole scope (§4.3). `decisions-citing` unions the
-stores.
+its cites with the whole scope (§4.3); each evidence item's `store` is
+the one it was *resolved against*, the store its own evidence claim
+named, so a belief held identically by two stores still reports the
+half this decision cited. `decisions-citing` unions the stores.
 
 `conclude` and `conclude-absence` write to `write-store` only, through
 unit 1's `conclude`; they inherit its own transaction, its
@@ -245,7 +253,10 @@ tools catch nothing themselves.
 `retract` resolves its cite across the scope; a claim found in a store
 other than `write-store` is an error result ("not writable in this
 scope"), since retraction is a write. A cite that resolves to nothing,
-or to an already-retracted claim, is an error result.
+or to an already-retracted claim, is an error result. So is a cite from
+any family but `belief`: a `trace` cite names a decision's own record,
+which the query tool makes visible, and neither the tool nor
+`retract-belief` will close one.
 
 Absence is not a value: an empty `records` array is "nothing recorded";
 an absence the agent once wrote is a record with a null `object` and an
@@ -274,7 +285,10 @@ derived window is one round trip away. The result:
  "truncated": bool}
 ```
 
-in bundle order, which is the contract. `plan-bounds` (`query`;
+in bundle order, which is the contract. `source` is omitted for an
+item from one of the scope's claim sources — `store` and `cite` say
+where that one came from — and is the operator source's class name
+otherwise. `plan-bounds` (`query`;
 optional `endpoints`, `k`) returns the `bounds` object alone, from a
 seed retrieval: the derivation as a callable, which `#13` unit 2 built
 as separate operations for exactly this.
@@ -316,8 +330,12 @@ function body becomes one call and the system's dependency drops to
   `max-rows`, the Prolog budgets, and the loop's `*max-tool-turns*`
   from core. A model argument above a cap is clamped and the result
   says so.
-- Every write is a decision into one store: no bare `record-belief`
-  tool exists, and `conclude` validates before it commits.
+- `conclude` and `conclude-absence` are the only writes that create
+  claims, each a decision into one store: no bare `record-belief` tool
+  exists, and `conclude` validates before it commits. `retract` closes
+  a belief's transaction period and only a belief's — a trace claim is
+  a decision's own record, refused by the tool and by
+  `retract-belief` itself.
 - Errors never cross as Lisp conditions: `call-tool` wraps every signal
   into an `is_error` tool result. The one thing that is data rather
   than an error is a refused decision.
@@ -354,8 +372,12 @@ test-op link (`docs/ci.md`). `tests-memory` gains the amendment tests.
   recall result's cites byte for byte.
 - **Refusal is data.** A conclude the validator refuses returns
   `outcome` refused with the family, and no belief is written.
-- **Caps.** A `k` or `limit` above the construction cap is clamped and
-  `truncated` is set when more existed.
+- **Caps.** A `k` or `limit` above the construction cap is clamped, and
+  `truncated` is true when more items existed past the cap — for every
+  tool, `recall`, `retrieve` and `query` alike. A page that exactly
+  fills the cap with nothing behind it is not truncated; a control
+  pins that. A non-positive `k` or `max-rows` at construction is a
+  `scope-error`.
 - **Errors reach the model.** A malformed timestamp and an unknown
   decision id arrive as `is_error` results in the next request body,
   not as escaped conditions.
@@ -395,8 +417,10 @@ inference over claims (kraison/vivace-graph#304).
 - kraison/vivace-graph#322 — export `run-guarded-prolog` returning rows
   and home it with the query DSL in a web-free subsystem. Non-blocking:
   `cl-llm/agent/prolog` depends on `graph-db/gui` until then.
-- Two things to mention on the engine side when this lands, not worth
+- Three things to mention on the engine side when this lands, not worth
   their own issues yet: `resolve-node-graph` is the only way from a
-  node to its store and is internal; and a second `def-claim-classes`
-  for another store re-emits the family's `save :before` method with a
-  redefinition warning.
+  node to its store and is internal; the `graph-db::graph` class is
+  unexported and `graph-p` with it, so "is this an open graph?" is
+  fenced in `%graph-p` (`agent/scope.lisp`) for `make-scope`'s check;
+  and a second `def-claim-classes` for another store re-emits the
+  family's `save :before` method with a redefinition warning.
