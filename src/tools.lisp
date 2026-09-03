@@ -20,18 +20,18 @@
    (function :initarg :function :reader tool-function)
    (parameter-names :initarg :parameter-names :reader tool-parameter-names
                      :initform nil
-                     :documentation "Parameter names, as downcased strings, in
-the declaration order recorded by DEFTOOL at macroexpansion time. CALL-TOOL
-uses this -- rather than re-deriving order from the schema's \"required\" list
-plus an alphabetical sort of whatever remains -- because a hash-table's
-iteration order is unspecified and an alphabetical sort does not match the
-Lisp function's actual (declaration-order) lambda list. Both would silently
-swap two optional parameters declared out of alphabetical order.")
+                     :documentation "Parameter names, as downcased strings,
+in the declaration order, computed by MAKE-TOOL when the tool is built.
+CALL-TOOL uses this -- rather than re-deriving order from the schema's
+\"required\" list plus an alphabetical sort of whatever remains -- because a
+hash-table's iteration order is unspecified and an alphabetical sort does not
+match the Lisp function's actual (declaration-order) lambda list. Both would
+silently swap two optional parameters declared out of alphabetical order.")
    (parameter-specs :initarg :parameter-specs :reader tool-parameter-specs
                      :initform nil
                      :documentation "PARAMETER-SPEC structs, one per declared
-parameter, in the same declaration order as PARAMETER-NAMES. Recorded by
-DEFTOOL at macroexpansion time so POSITIONAL-ARGUMENTS never has to
+parameter, in the same declaration order as PARAMETER-NAMES. Computed by
+MAKE-TOOL when the tool is built, so POSITIONAL-ARGUMENTS never has to
 re-derive requiredness or default values from the JSON schema -- which
 cannot represent \"no default\" and \"default is NIL\" distinguishably once
 the value has round-tripped through JSON."))
@@ -222,6 +222,20 @@ rejects &KEY and &REST elsewhere)."
         unless (eq spec '&optional)
           collect (string-downcase (string (parameter-lambda-variable spec)))))
 
+(defun make-tool (name description parameters function)
+  "A TOOL from a DEFTOOL lambda list and a FUNCTION of those parameters
+in declaration order.  Not registered: closure tools are built per
+graph or per scope, not per image (agent-tools design SS4)."
+  (check-type description string)
+  (make-instance 'tool
+                 :name (string-downcase (string name))
+                 :description description
+                 :schema (derive-schema parameters)
+                 :function function
+                 :parameter-names (parameter-names parameters)
+                 :parameter-specs (mapcar #'parameter-spec-of
+                                          (remove '&optional parameters))))
+
 (defmacro deftool (name parameters docstring &body body)
   "Define NAME as an ordinary function AND register it as a tool the model may
 call. The JSON schema is derived from PARAMETERS and DOCSTRING.
@@ -246,14 +260,7 @@ when to call this tool")
          ,docstring
          ,@body)
        (register-tool
-        (make-instance 'tool
-                       :name ,(string-downcase (string name))
-                       :description ,docstring
-                       :schema (derive-schema ',parameters)
-                       :function #',name
-                       :parameter-names ',(parameter-names parameters)
-                       :parameter-specs (mapcar #'parameter-spec-of
-                                                 (remove '&optional ',parameters))))
+        (make-tool ',name ,docstring ',parameters #',name))
        ',name)))
 
 ;;; Calling

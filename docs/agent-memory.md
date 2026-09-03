@@ -69,7 +69,9 @@ is a correction, and you must say so:
 **Correction** — the belief was never true. `retract-belief` closes its
 *transaction* extent and leaves validity alone, so what remains says
 exactly when it was believed. Retracted beliefs are hidden from recall
-unless asked for.
+unless asked for. Only a `belief` may be passed: a `trace` claim is a
+decision's own record, not an opinion to withdraw, and it is refused
+with a `belief-argument-error`.
 
 ```lisp
 (gdb:with-transaction (:graph g)
@@ -152,7 +154,18 @@ survives retraction and regeneration. `trace` reads a decision back
 then (`:resolved`), or reports `:reaped` (past the family's retention)
 or `:absent` (swept), and a resolved cite carries `changed-since` —
 `:retracted`, `:superseded`, `:updated` or NIL. The as-of version is what
-you get; the current one only sets the flag.
+you get; the current one only sets the flag. A `cite-record` from
+`trace` also carries `cite-record-store`, the name of the store the
+cite was actually resolved against (NIL when none was), so a cite two
+stores hold is not mistaken for the wrong copy. `split-cite` applies
+the write path's namespace rule: the subject namespace must be
+canonical (`[a-z0-9-]+`, `st:canonical-relation-p`) or the cite is a
+`belief-argument-error` — validated first, then interned, so a
+caller string can only ever mint a recoverable name. A cite over a
+canonical namespace nothing was recorded under parses fine and
+resolves `:absent`; it is not an error, because a fresh image must be
+able to trace a decision before it has read a claim under that
+namespace.
 
 ```lisp
 (mem:trace g (mem:decision-id d))
@@ -168,10 +181,26 @@ family order, `decisions-citing` by `recorded-at` descending then id.
 `trace-listing` renders decisions as rows for capture-and-diff
 (`tests-memory/golden/trace.sexp`).
 
+## Several stores
+
+`mem:define-memory-store` declares the `belief` and `trace` families
+and the `memory-note` source under a graph name of your choosing;
+`schema.lisp` is `(define-memory-store :cl-llm-memory)`, and a further
+store is one more call, e.g. `(define-memory-store :memory-private)`.
+The families' class names are shared across stores — that is the
+engine's model — so an evidence claim records **which store** the
+claim it cites was found in, in its `method` slot; `mem:trace` and
+`mem:decisions-citing` both take a `:scope` (a list of open graphs) to
+resolve those cross-store cites, defaulting to `(list graph)` when
+omitted. Building a tool surface a model calls over several stores —
+scope, caps, the writable one — is `docs/agent-tools.md`
+(kraison/cl-llm#14 unit 2).
+
 ## What this is not
 
-No tool surface, no bounded traversal, no LLM, no banner parsing
-(kraison/cl-llm#14 units 2 and 3) and no cross-namespace recall (#24).
+The tool surface is `docs/agent-tools.md` (kraison/cl-llm#14 unit 2);
+no LLM, no banner parsing (kraison/cl-llm#14 units 2 and 3) and no
+cross-namespace recall (#24).
 And no registration: this tenant is map-less by design and proves
 nothing about it.
 

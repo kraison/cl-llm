@@ -64,6 +64,10 @@ object key ascending."
                      (t (string< (%object-key-for-order a)
                                  (%object-key-for-order b)))))))))
 
+(defun claim-before-p (a b)
+  "T when claim A sorts before claim B under RECALL's order (SS6)."
+  (%before-p a b))
+
 (defun recall (graph subject &key relation producer at include-retracted)
   "BELIEF-RECORDs about SUBJECT, ordered newest validity first (SS6).
 RELATION and PRODUCER narrow the series; AT keeps only beliefs valid at

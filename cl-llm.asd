@@ -233,10 +233,64 @@
                (:file "recall-tests")
                (:file "capture-tests")
                (:file "cite-tests")
-               (:file "trace-tests"))
+               (:file "trace-tests")
+               (:file "store-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! :cl-llm-memory)
                (error "cl-llm/memory suite failed."))))
+
+(defsystem "cl-llm/agent"
+  :description "The agent tool surface over cl-llm/memory and the
+retrieval planner (#14 unit 2)."
+  :license "MIT"
+  ;; No web stack: the guarded query tool lives in cl-llm/agent/prolog.
+  :depends-on ("cl-llm" "cl-llm/memory" "cl-llm/rag/claims")
+  :serial t
+  :pathname "agent/"
+  :components ((:file "packages")
+               (:file "scope")
+               (:file "render")
+               (:file "memory-tools")
+               (:file "planner-tools")
+               (:file "agent"))
+  :in-order-to ((test-op (test-op "cl-llm/agent/tests"))))
+
+(defsystem "cl-llm/agent/tests"
+  :description "On-disk, two-store, scripted-model tests for cl-llm/agent."
+  :license "MIT"
+  :depends-on ("cl-llm/agent" "fiveam")
+  :serial t
+  :pathname "tests-agent/"
+  :components ((:file "packages")
+               (:file "harness")
+               (:file "memory-tools-tests")
+               (:file "planner-tools-tests")
+               (:file "loop-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run! :cl-llm-agent)
+               (error "cl-llm/agent suite failed."))))
+
+(defsystem "cl-llm/agent/prolog"
+  :description "A guarded free-text Prolog tool for the agent (#14 unit 2)."
+  :license "MIT"
+  ;; graph-db/gui carries the #279 guard and the web stack with it;
+  ;; kraison/vivace-graph#322 asks for a web-free home.
+  :depends-on ("cl-llm/agent" "graph-db/gui")
+  :serial t
+  :pathname "agent/prolog/"
+  :components ((:file "packages") (:file "query"))
+  :in-order-to ((test-op (test-op "cl-llm/agent/prolog/tests"))))
+
+(defsystem "cl-llm/agent/prolog/tests"
+  :description "Tests for the guarded query tool."
+  :license "MIT"
+  :depends-on ("cl-llm/agent/prolog" "cl-llm/agent/tests" "fiveam")
+  :serial t
+  :pathname "tests-agent-prolog/"
+  :components ((:file "packages") (:file "query-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run! :cl-llm-agent-prolog)
+               (error "cl-llm/agent/prolog suite failed."))))
 
 (defsystem "cl-llm/rag/vivace/tests"
   :description "Offline (in-memory-graph) tests for cl-llm/rag/vivace."

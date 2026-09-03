@@ -168,3 +168,32 @@ are not under test here, only %OPEN-P's NIL branch."
         (let ((c2 (gdb:copy c)))
           (setf (st:claim-extent-sexp c2) nil)
           (is (null (cl-llm.memory::%open-p c2))))))))
+
+(test a-cite-under-an-uninterned-namespace-resolves-absent
+  "Final review follow-up: SPLIT-CITE validates the namespace as
+canonical and then interns, rather than requiring it already be
+interned.  A fresh image's first read of a decision must resolve its
+evidence to :ABSENT, not signal, when nothing has yet been read under
+that namespace -- here a hand-built cite over one no test records."
+  (with-memory-graph (g)
+    (%one-belief g '(:verdict . "green"))
+    (let ((cite (concatenate
+                 'string "cl-llm.memory::belief|" +p+
+                 "|:zzznever|k|:verdict|yes|r"
+                 "|((9680 28800 0) (9680 28800 0))")))
+      ;; Never write the keyword literally: the READER would intern it
+      ;; and the test would pass against FIND-SYMBOL too.
+      (is (null (find-symbol "ZZZNEVER" :keyword))
+          "precondition: nothing has interned this namespace yet")
+      (multiple-value-bind (family ns) (mem:split-cite cite)
+        (is (eq 'mem:belief family))
+        (is (keywordp ns))
+        (is (string= "ZZZNEVER" (symbol-name ns))))
+      (let ((r (mem:resolve-cite g cite (local-time:now))))
+        (is (eq :absent (mem:cite-record-state r)))
+        (is (string= cite (mem:cite-record-cite r)))))
+    (signals mem:belief-argument-error
+      (mem:split-cite (concatenate
+                       'string "cl-llm.memory::belief|" +p+
+                       "|:Zzz Fab|k|:verdict|yes|r"
+                       "|((9680 28800 0) (9680 28800 0))")))))

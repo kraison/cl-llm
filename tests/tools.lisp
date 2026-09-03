@@ -299,3 +299,23 @@ tool arguments are untrusted input."
       (is (string= "Boston" (cl-llm::call-tool tool args)))
       (is (not (find-symbol junk-name :keyword))
           "an unrecognized argument key must never be interned into :KEYWORD"))))
+
+(test make-tool-builds-a-closure-tool-with-a-derived-schema
+  "A tool need not be a DEFUN: MAKE-TOOL takes a lambda list and a
+function and derives the same schema DEFTOOL would."
+  (let* ((seen nil)
+         (tool (llm:make-tool "greet" "Greet someone."
+                              '(name (times :type integer :default 1))
+                              (lambda (name times)
+                                (setf seen (list name times))
+                                (format nil "~a x~a" name times)))))
+    (is (string= "greet" (llm:tool-name tool)))
+    (is (string= "string"
+                 (json:jget (llm:tool-schema tool) "properties" "name" "type")))
+    (is (equalp #("name") (json:jget (llm:tool-schema tool) "required")))
+    (let ((args (make-hash-table :test 'equal)))
+      (setf (gethash "name" args) "ada")
+      (is (string= "ada x1" (llm:call-tool tool args)))
+      (is (equal '("ada" 1) seen)))
+    (is (null (gethash "greet" cl-llm::*tools-registry*))
+        "MAKE-TOOL does not register")))

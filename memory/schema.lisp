@@ -3,32 +3,39 @@
 
 (in-package #:cl-llm.memory)
 
-;; :TEMPORAL T: the validity start joins the identity tuple and live
-;; claims on one base tuple must be disjoint in validity, so a belief
-;; can hold, lapse and hold again (spec SS3; kraison/vivace-graph#296).
-(st:def-claim-classes belief :cl-llm-memory :temporal t)
+(defmacro define-memory-store (graph-name &environment env)
+  "Declare the belief and trace families and the memory-note source in
+GRAPH-NAME.  Returns GRAPH-NAME.
 
-;; The decision trace (spec 2026-09-02 SS3): not temporal, so identity
-;; is (producer subject object relation) and two cites of one claim
-;; collapse to one EVIDENCE claim.
-(st:def-claim-classes trace :cl-llm-memory)
+DEF-CLAIM-CLASSES interns derived class names into *PACKAGE*, so the
+inner forms are expanded under this package or a caller elsewhere
+mints duplicate classes (kraison/vivace-graph#323)."
+  (let ((*package* (symbol-package 'define-memory-store)))
+    `(progn
+       ,(macroexpand-1 `(st:def-claim-classes belief ,graph-name
+                          :temporal t)
+                        env)
+       ,(macroexpand-1 `(st:def-claim-classes trace ,graph-name) env)
+       (st:def-source memory-note ,graph-name
+           ((note-name        :type string)
+            (note-description :type string)
+            (note-type        :type string)
+            (note-modified    :type string)
+            (note-body        :type string))
+         :identity     (:namespace :memory-note :key-slot note-name)
+         :space        :none
+         :time         (:extent-fn memory-note-validity-extent)
+         :attribution  :none
+         :sensitivity  (:class :restricted)
+         :registration :none
+         :indexed-text (:text-fn note-body))
+       ',graph-name)))
 
-;; The dogfood source: one node per memory file.  Map-less, private,
-;; text-indexed so the corpus can later be a RAG chunk source (spec SS7).
-(st:def-source memory-note :cl-llm-memory
-    ((note-name        :type string)
-     (note-description :type string)
-     (note-type        :type string)
-     (note-modified    :type string)   ; RFC3339 UTC, as captured
-     (note-body        :type string))
-  :identity     (:namespace :memory-note :key-slot note-name)
-  :space        :none
-  :time         (:extent-fn memory-note-validity-extent)
-  :attribution  :none
-  ;; :NONE here would mean MOST restricted, not "n/a" (resolve.lisp).
-  :sensitivity  (:class :restricted)
-  :registration :none
-  :indexed-text (:text-fn note-body))
+(define-memory-store :cl-llm-memory)
+
+(defun store-name (graph)
+  "GRAPH's name as the string a model sees: downcased (SS5)."
+  (string-downcase (symbol-name (gdb:graph-name graph))))
 
 (defun memory-note-validity-extent (note)
   "The :TIME facet's extent-fn: valid from the note's MODIFIED stamp,

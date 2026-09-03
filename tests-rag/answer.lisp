@@ -66,3 +66,16 @@
     (setf (gethash "query" args) "TM-62 fuze")
     (is (typep tool 'llm:tool))
     (is (search "TM-62" (llm:call-tool tool args)))))
+
+(test make-retrieval-tool-description-has-no-embedded-newline
+  "The description is what the model reads to decide when to call the
+tool; it must be the exact sentence, with no newline smuggled in by
+how the source wraps it at 80 columns."
+  (let* ((index (index-with '("the TM-62 has a pressure fuze")))
+         (tool (rag:make-retrieval-tool index))
+         (description (llm:tool-description tool))
+         (expected (concatenate 'string
+                                "Retrieve relevant, cited passages "
+                                "from the knowledge base for a query.")))
+    (is (not (find #\Newline description)))
+    (is (string= expected description))))

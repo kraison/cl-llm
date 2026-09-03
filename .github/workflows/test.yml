@@ -53,9 +53,13 @@ jobs:
                             :ignore-inherited-configuration))' \
             --eval '(ql:quickload (list :cl-llm/tests :cl-llm/rag/tests
                                         :cl-llm/rag/claims/tests
-                                        :cl-llm/memory/tests)
+                                        :cl-llm/memory/tests
+                                        :cl-llm/agent/tests
+                                        :cl-llm/agent/prolog/tests)
                                   :silent t)' \
             --eval '(asdf:test-system :cl-llm)' \
             --eval '(asdf:test-system :cl-llm/rag)' \
             --eval '(asdf:test-system :cl-llm/rag/claims)' \
-            --eval '(asdf:test-system :cl-llm/memory)'
+            --eval '(asdf:test-system :cl-llm/memory)' \
+            --eval '(asdf:test-system :cl-llm/agent)' \
+            --eval '(asdf:test-system :cl-llm/agent/prolog)'

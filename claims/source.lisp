@@ -81,18 +81,22 @@ standing, and the validity extent when one is recorded."
 own standing and confidence ride along, and the validity extent lands
 both on the EVIDENCE (for BOUNDED-EVIDENCE) and in the chunk metadata
 as a sexp (the §9.5 facet contract, so a chunk-level consumer reads
-the same window)."
+the same window).  :CLAIM-KEY is the identity key, so a consumer can
+cite the claim (agent-tools design §7)."
   (let* ((extent (st:claim-extent claim))
          (text (funcall (claim-source-renderer source) claim)))
     (rag:make-evidence
      :chunk (rag:make-chunk
              text
              :document-id (%claim-doc-id claim)
-             :metadata (and extent
-                            (list :extent (temporal-extent:extent->sexp
-                                           extent))))
+             :metadata (append
+                        (and extent
+                             (list :extent (temporal-extent:extent->sexp
+                                            extent)))
+                        (list :claim-key (st:claim-identity-key claim))))
      :score score
      :method :claim
+     :source source
      :confidence (st:claim-confidence claim)
      :extent extent
      :standing (st:claim-standing claim))))
@@ -109,17 +113,22 @@ reached through two queried endpoints must carry one id."
                           (st:claim-object-key claim)))
           (st:claim-producer claim)))
 
-(defun %absence-evidence (namespace key)
+(defun %absence-evidence (source namespace key)
   "The looked-and-found-nothing item (§3): a recognised endpoint with
 no claims is a FACT the bundle carries, not an omission.  No extent
-and no box, so no bound can exclude it."
+and no box, so no bound can exclude it.  SOURCE rides EVIDENCE-SOURCE
+and names the store in the document id, so two stores' absences of
+the same endpoint fuse to two items, not one (agent-tools design §7)."
   (rag:make-evidence
    :chunk (rag:make-chunk
            (format nil "no claims touch ~a" (%endpoint namespace key))
-           :document-id (format nil "claim-absence:~a"
+           :document-id (format nil "claim-absence:~(~a~):~a"
+                                (graph-db:graph-name
+                                 (claim-source-graph source))
                                 (%endpoint namespace key)))
    :score 0d0
    :method :claim
+   :source source
    :standing :searched-empty))
 
 (defmethod rag:collect-evidence ((source claim-source) query
@@ -145,7 +154,7 @@ assert (§9.2)."
                 (unless (gethash id seen)
                   (setf (gethash id seen) t)
                   (push claim claims))))
-            (push (%absence-evidence (car pair) (cdr pair))
+            (push (%absence-evidence source (car pair) (cdr pair))
                   absences))))
     ;; Bound first, cap second: every touching claim is already in
     ;; hand, so filling K from in-bounds claims costs nothing extra.

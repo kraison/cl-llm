@@ -89,6 +89,20 @@ bundle carries, not an omission."
                        (rag:chunk-text
                         (rag:evidence-chunk (first evs))))))))
 
+(test an-absence-item-carries-its-source-and-names-its-store
+  "Controller ruling: an absence names where it looked -- EVIDENCE-
+SOURCE is the source that looked, and the store's own name rides the
+document id, so two stores' absences of the same endpoint never
+collapse to one in FUSE (agent-tools design §7)."
+  (with-claims-graph (g)
+    (let* ((source (claims:make-claim-source
+                    g 'probe-claim (%extract-devices "ghost")))
+           (ev (first (rag:collect-evidence source "ghost?"))))
+      (is (eq :searched-empty (rag:evidence-standing ev)))
+      (is (eq source (rag:evidence-source ev)))
+      (is-true (search "cl-llm-claims-test"
+                       (rag:chunk-document-id (rag:evidence-chunk ev)))))))
+
 (test an-extractor-recognising-nothing-contributes-nothing
   "No key, no consultation: NIL, which downstream reads as
 :INDETERMINATE territory -- never :SEARCHED-EMPTY, which would claim
@@ -155,6 +169,21 @@ a search that did not happen."
       (is (eq :searched-empty (rag:evidence-standing (first evs)))
           "an absence carries no extent, and a bound excludes only ~
            what it KNOWS to fall outside"))))
+
+(test claim-evidence-carries-the-identity-key
+  "Agent-tools SS7: a consumer renders a cite from evidence, so the
+identity key rides in the chunk metadata beside :EXTENT, and the
+source rides EVIDENCE-SOURCE so a later consumer can attribute it."
+  (with-claims-graph (g)
+    (%seed g)
+    (let* ((source (claims:make-claim-source
+                    g 'probe-claim (%extract-devices "d42")))
+           (ev (first (rag:collect-evidence source "anything"))))
+      (is (stringp (getf (rag:chunk-metadata (rag:evidence-chunk ev))
+                         :claim-key)))
+      (is (search "|" (getf (rag:chunk-metadata (rag:evidence-chunk ev))
+                            :claim-key)))
+      (is (eq source (rag:evidence-source ev))))))
 
 (test a-bounded-claim-query-fills-k-from-claims-the-cap-would-have-cut
   "cl-llm#19 for the claim source: the bound applies BEFORE the

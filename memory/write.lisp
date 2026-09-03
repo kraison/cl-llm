@@ -147,8 +147,12 @@ the search itself, an instant by default.  Returns the BELIEF-UNARY."
 
 (defun retract-belief (claim &key (at (local-time:now)))
   "CLAIM was wrong: close its transaction period at AT and leave its
-validity as recorded.  Signals BELIEF-ARGUMENT-ERROR on a claim already
-retracted, because RETRACT-CLAIM would silently do nothing."
+validity as recorded.  Only a BELIEF: a TRACE claim is a decision's own
+record, not an opinion to withdraw (#14 unit 2 final review).  Signals
+BELIEF-ARGUMENT-ERROR on a claim already retracted, because
+RETRACT-CLAIM would silently do nothing."
+  (unless (typep claim 'belief)
+    (%arg-error :claim claim "only a belief can be retracted"))
   (unless (st:claim-current-p claim)
     (%arg-error :claim claim "already retracted"))
   (st:retract-claim claim :at at))

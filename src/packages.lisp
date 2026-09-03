@@ -94,7 +94,7 @@
    #:encode-request #:decode-response #:parse-stream-event
    #:chat-request #:stream-request
    ;; tools
-   #:tool #:deftool #:find-tool #:register-tool #:unregister-tool
+   #:tool #:deftool #:make-tool #:find-tool #:register-tool #:unregister-tool
    #:tool-name #:tool-description #:tool-schema #:tool-function
    #:encode-tool #:call-tool
    ;; facade

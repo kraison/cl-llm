@@ -33,13 +33,12 @@ WITH the grounding instructions, never in place of them. Returns (values answer 
             hits)))
 
 (defun make-retrieval-tool (index &key (k 5))
-  "Build a cl-llm tool that retrieves cited context from INDEX, for the agentic
-path where the model decides whether to retrieve."
-  (let ((spec '((query :type string))))
-    (make-instance 'llm:tool
-                   :name "retrieve-context"
-                   :description "Retrieve relevant, cited passages from the knowledge base for a query."
-                   :schema (cl-llm::derive-schema spec)
-                   :parameter-names '("query")
-                   :parameter-specs (mapcar #'cl-llm::parameter-spec-of (remove '&optional spec))
-                   :function (lambda (query) (assemble-context (retrieve index query :k k))))))
+  "Build a cl-llm tool that retrieves cited context from INDEX, for the
+agentic path where the model decides whether to retrieve."
+  (llm:make-tool "retrieve-context"
+                 (concatenate 'string
+                              "Retrieve relevant, cited passages from "
+                              "the knowledge base for a query.")
+                 '((query :type string))
+                 (lambda (query)
+                   (assemble-context (retrieve index query :k k)))))
