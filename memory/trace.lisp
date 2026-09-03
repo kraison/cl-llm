@@ -100,11 +100,6 @@ resolves its own store, falling back to WRITE-STORE."
   (:documentation "Unwinds CONCLUDE's transaction without committing
 (SS4 step 2); never escapes CONCLUDE."))
 
-(defun %staged-writes ()
-  "The open transaction's delta, for VALIDATE-WRITES.  Internal reader;
-export asked on kraison/vivace-graph#320."
-  (graph-db::writes gdb:*transaction*))
-
 (defun %violation-families (report-or-condition)
   "(family . text) per violation, first per family, in family order."
   (let ((rows (if (typep report-or-condition 'gdb:validation-report)
@@ -151,7 +146,7 @@ Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
           (gdb:with-transaction (:graph graph)
             (setf claim (%stage graph proposal producer rule rule-version
                                 confidence))
-            (let ((report (gdb:validate-writes graph (%staged-writes))))
+            (let ((report (gdb:validate-transaction graph)))
               (when (gdb:validation-report-violations report)
                 (error '%refused :report report)))
             (setf outcome

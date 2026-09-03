@@ -426,7 +426,9 @@ sbcl --dynamic-space-size 4096 --non-interactive \
 ```
 
 `cl-llm/rag/claims` and `cl-llm/memory` need `graph-db/spacetime` (from
-vivace-graph `experiment`) and run each test on a real on-disk graph
+vivace-graph `experiment` at or after the 2026-09-03 merge of #325 and
+#326, which the memory tenant's cite, store and capture code rely on)
+and run each test on a real on-disk graph
 under `/tmp`; CI refreshes the engine to `experiment` HEAD on every run
 (`docs/ci.md`):
 

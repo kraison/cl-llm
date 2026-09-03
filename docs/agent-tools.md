@@ -41,11 +41,10 @@ claim families and the `memory-note` source under that graph's name:
 ```
 
 Two things worth knowing before you declare a second store. First,
-the macro expands its inner declarations under `cl-llm.memory`'s own
-package, not the caller's — `def-claim-classes` interns each family's
-derived class names into `*package*`, and expanding from elsewhere
-would mint duplicate classes (kraison/vivace-graph#323); you never
-see this, it just works. Second, declaring the same store name twice
+the macro is callable from any package: `def-claim-classes` derives
+each family's class names from the parent symbol's package
+(kraison/vivace-graph#323, fixed 2026-09-03), so `belief-binary` and
+friends always live in `cl-llm.memory`. Second, declaring the same store name twice
 — your test suite opening a store another suite already declared, for
 instance — is the engine's supported idempotent case
 (kraison/vivace-graph#196), at the cost of a `redefining GDB:SAVE
