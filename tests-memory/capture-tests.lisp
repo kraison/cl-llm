@@ -93,3 +93,17 @@ reordering or a changed digest is a diff, not a pass."
                  "regenerate the golden ONLY for an intended change: ~
                   (mem:capture-listing g dir) -> ~a" (%golden-path))))
       (uiop:delete-directory-tree (pathname dir) :validate t))))
+
+(test the-listing-renders-every-start-at-second-precision
+  "#36: one rendering for the tenant -- no six-digit fraction in the
+capture listing, the same shape BANNER-LISTING and the banner pass use."
+  (let ((dir (%copy-fixture-to-temp)))
+    (unwind-protect
+         (with-memory-graph (g)
+           (mem:capture-memory-dir g dir :producer +p+)
+           (dolist (row (mem:capture-listing g dir))
+             (let ((start (third row)))
+               (when start
+                 (is (= 20 (length start)) "~a" start)
+                 (is (char= #\Z (char start 19)))))))
+      (uiop:delete-directory-tree (pathname dir) :validate t))))
