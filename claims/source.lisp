@@ -26,16 +26,26 @@ CLAIMS-TOUCHING takes the parent, so one source covers both arities.")
 (NAMESPACE . KEY) conses -- the endpoints worth asking about.  This is
 where the tenant's vocabulary lives; an extractor that recognises
 nothing makes the source contribute nothing.")
+   (include-retracted :initarg :include-retracted :initform nil
+                      :reader claim-source-include-retracted
+                      :documentation "When true, retracted claims are
+collected too (#37).")
    (renderer :initarg :renderer :initform #'render-claim
              :reader claim-source-renderer
              :documentation "Function of a claim returning the text a
 model reads.  RENDER-CLAIM unless the tenant knows better."))
   (:documentation "Claim traversal as a COLLECT-EVIDENCE source."))
 
-(defun make-claim-source (graph claim-class key-extractor &key renderer)
+(defun make-claim-source (graph claim-class key-extractor
+                          &key renderer include-retracted)
+  "A source over GRAPH's CLAIM-CLASS family.  Current claims only unless
+INCLUDE-RETRACTED: a corrected belief leaves its retracted predecessor
+on the same identity tuple, and RENDER-CLAIM shows no transaction time,
+so the model could not tell the two apart (#37; RECALL's default)."
   (make-instance 'claim-source
                  :graph graph :claim-class claim-class
                  :key-extractor key-extractor
+                 :include-retracted include-retracted
                  :renderer (or renderer #'render-claim)))
 
 (defun %endpoint (namespace key)
@@ -147,7 +157,10 @@ assert (§9.2)."
       (let ((touching (st:claims-touching (claim-source-graph source)
                                           (claim-source-class source)
                                           (car pair) (cdr pair)
-                                          :role :either)))
+                                          :role :either
+                                          :current
+                                          (not (claim-source-include-retracted
+                                                source)))))
         (if touching
             (dolist (claim touching)
               (let ((id (%claim-doc-id claim)))

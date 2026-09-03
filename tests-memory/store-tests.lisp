@@ -131,3 +131,23 @@ never silently resolved in the wrong store."
                                              (%ts "2026-09-02T08:00:00Z"))))))
       (is-true (mem:claim-before-p new old))
       (is-false (mem:claim-before-p old new)))))
+
+(test trace-listing-resolves-cross-store-evidence-in-scope
+  "#34: the listing takes the same :SCOPE as TRACE; without it the
+other store's evidence is :ABSENT, with it :RESOLVED."
+  (with-two-stores (a b)
+    (let* ((e (%belief-in b "ci-status" '(:v . "1")))
+           (d (mem:conclude a (list :belief +ss+ "releasable"
+                                    '(:verdict . "yes") :standing :inferred)
+                            :producer +p+
+                            :evidence (list (cons (mem:claim-cite e)
+                                                  (mem:store-name b)))
+                            :rule "r"))
+           (id (mem:decision-id d)))
+      (is (eq :absent
+              (second (first (fourth (first (mem:trace-listing
+                                             a (list id))))))))
+      (is (eq :resolved
+              (second (first (fourth (first (mem:trace-listing
+                                             a (list id)
+                                             :scope (list a b)))))))))))

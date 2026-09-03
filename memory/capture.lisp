@@ -46,18 +46,6 @@ under `metadata:` -- and is not a YAML parser."
    (ironclad:digest-sequence
     :sha256 (babel:string-to-octets string :encoding :utf-8))))
 
-(defun %note-modified (fm path)
-  "The MODIFIED stamp, RFC3339 UTC; the file's write date when the note
-carries none -- and then the capture is only as reproducible as the
-filesystem."
-  (or (getf fm :modified)
-      (local-time:format-rfc3339-timestring
-       nil (local-time:universal-to-timestamp (file-write-date path))
-       :timezone local-time:+utc-zone+)))
-
-(defun %existing-note (graph name)
-  (first (gdb:index-lookup graph 'memory-note 'note-name name)))
-
 (defparameter +iso-date-format+
   '((:year 4) #\- (:month 2) #\- (:day 2) #\T (:hour 2) #\: (:min 2)
     #\: (:sec 2) :gmt-offset-or-z)
@@ -67,6 +55,17 @@ always emits microseconds, which a banner's midnight date has none of.")
 (defun %iso-date (ts)
   (local-time:format-timestring nil ts :format +iso-date-format+
                                 :timezone local-time:+utc-zone+))
+
+(defun %note-modified (fm path)
+  "The MODIFIED stamp, RFC3339 UTC; the file's write date when the note
+carries none -- and then the capture is only as reproducible as the
+filesystem."
+  (or (getf fm :modified)
+      (%iso-date (local-time:universal-to-timestamp
+                  (file-write-date path)))))
+
+(defun %existing-note (graph name)
+  (first (gdb:index-lookup graph 'memory-note 'note-name name)))
 
 (defun %banner-date-and-extent (banner modified)
   "Two values: the banner's own ISO date, or MODIFIED when undated;
@@ -244,8 +243,6 @@ START is NIL here rather than making the golden host-bound."
                      collect (list name
                                    (st:claim-object-key c)
                                    (and stamped
-                                        (local-time:format-rfc3339-timestring
-                                         nil (%start-instant c)
-                                         :timezone local-time:+utc-zone+))
+                                        (%iso-date (%start-instant c)))
                                    (belief-record-current-p r)
                                    (and s (st:claim-object-key s))))))

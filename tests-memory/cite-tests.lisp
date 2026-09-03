@@ -197,3 +197,33 @@ that namespace -- here a hand-built cite over one no test records."
                        'string "cl-llm.memory::belief|" +p+
                        "|:Zzz Fab|k|:verdict|yes|r"
                        "|((9680 28800 0) (9680 28800 0))")))))
+
+(test an-identical-re-assertion-after-retraction-is-refused
+  "#30's premise, pinned the other way round: the family's unique tuple
+canonicalises a temporal extent to its START, so it IS the identity
+key, and a retracted claim still holds it -- two nodes on one key
+cannot be written.  RESOLVE-CITE still prefers a current claim among
+equal keys (%CURRENT-AMONG) in case the engine ever admits them; if
+this test starts failing, that day has come and the anchoring must be
+re-examined."
+  (with-memory-graph (g)
+    (let* ((c1 (%one-belief g '(:v . "1")))
+           (key (st:claim-identity-key c1)))
+      (gdb:with-transaction (:graph g) (mem:retract-belief c1))
+      (signals gdb:unique-constraint-violation
+        (gdb:with-transaction (:graph g)
+          (mem:make-belief-binary
+           :graph g
+           :subject-namespace (car +cs+) :subject-key (cdr +cs+)
+           :relation "ci-status" :object-namespace :v :object-key "1"
+           :producer +p+ :standing :observed
+           :extent (te:make-interval
+                    (te:extent-start (st:claim-extent c1))
+                    (te:exact-bound (%ts "2026-12-01T00:00:00Z"))
+                    :semantics :validity :standing :asserted))))
+      (let ((all (st:claims-touching g 'mem:belief (car +cs+) (cdr +cs+)
+                                     :role :subject)))
+        (is (= 1 (count key all :key #'st:claim-identity-key
+                                :test #'string=)))
+        (is (equalp (gdb:id c1)
+                    (gdb:id (mem::%current-among key all))))))))

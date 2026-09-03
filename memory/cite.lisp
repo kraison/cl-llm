@@ -85,6 +85,16 @@ the axis has a NIL stamp; two NILs match, one NIL is a change."
          :updated)
         (t nil)))
 
+(defun %current-among (ikey claims)
+  "The claim in CLAIMS whose identity key is IKEY, preferring one still
+current.  The key survives retraction and re-assertion
+(kraison/vivace-graph#303), so retract-and-re-record of the identical
+fact leaves two nodes on one key; anchoring on whichever the index
+hands back first reported a held belief as :RETRACTED (#30)."
+  (let ((matches (remove ikey claims :key #'st:claim-identity-key
+                                     :test-not #'string=)))
+    (or (find-if #'st:claim-current-p matches) (first matches))))
+
 (defun resolve-cite (graph cite at)
   "CITE as of AT (SS5): find the claim by identity among the subject's
 claims, then ask the engine for the version believed at AT.  Never
@@ -93,9 +103,9 @@ CHANGED-SINCE.  A claim from a family with no validity extent can only
 report CHANGED-SINCE :RETRACTED, :UPDATED or NIL -- :SUPERSEDED needs
 %OPEN-P, which such a claim never satisfies."
   (multiple-value-bind (family ns key ikey) (split-cite cite)
-    (let* ((current (find ikey (st:claims-touching graph family ns key
-                                                   :role :subject)
-                          :key #'st:claim-identity-key :test #'string=))
+    (let* ((current (%current-among ikey
+                                    (st:claims-touching graph family ns key
+                                                        :role :subject)))
            (id (and current (gdb:id current)))
            (then (and id
                       (find-if (lambda (c)

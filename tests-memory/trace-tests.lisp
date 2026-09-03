@@ -221,6 +221,11 @@ overlap; the trace says so; RECALL shows no new belief."
       (is (null (mem:decision-claim d)))
       (is (typep (mem:decision-report d) 'gdb:validation-report))
       (is (equal '("subsystem") (%refused-families g (mem:decision-id d))))
+      ;; #35: the rule survives the refusal, on an ATTEMPTED claim.
+      (is (member "attempted" (%relations (%trace-claims g (mem:decision-id d)))
+                  :test #'string=))
+      (is (string= "r" (mem:decision-record-rule
+                        (mem:trace g (mem:decision-id d)))))
       (is (= 1 (length (mem:recall g +ts+ :relation "ci-status"
                                    :include-retracted t)))
           "the lapsed belief is the only one; nothing new was written"))))
@@ -251,8 +256,8 @@ overlap; the trace says so; RECALL shows no new belief."
                                     :extent (%open-from
                                              (%ts "2026-02-01T00:00:00Z")))
                             :producer +p+ :evidence (list e) :rule "r")))
-      (is (equal '("evidence" "refused")
-                 (%relations (%trace-claims g (mem:decision-id d)))))
+      (is (equal '("attempted" "evidence" "refused")
+               (%relations (%trace-claims g (mem:decision-id d)))))
       (is (typep (mem:decision-at d) 'local-time:timestamp)))))
 
 (test trace-reconstructs-a-decision

@@ -176,3 +176,18 @@ Control: a belief still retracts."
         (mem:retract-belief (mem:decision-claim d)))
       (is-false (st:claim-current-p (first (%touching g)))
                 "control: a belief still retracts"))))
+
+(test a-non-canonical-namespace-is-refused-on-write
+  "#32: the write path applies the rule SPLIT-CITE applies on the way
+back, so no belief exists whose own cite cannot resolve."
+  (with-memory-graph (g)
+    (gdb:with-transaction ((graph-db::transaction-manager g))
+      (signals mem:belief-argument-error
+        (mem:record-belief g '(:my_ns . "k") "ci-status" '(:v . "1")
+                           :producer +p+ :standing :observed))
+      (signals mem:belief-argument-error
+        (mem:record-belief g +subj+ "ci-status" '(:|Mixed Case| . "1")
+                           :producer +p+ :standing :observed))
+      (finishes
+        (mem:record-belief g +subj+ "ci-status" '(:verdict-2 . "1")
+                           :producer +p+ :standing :observed)))))

@@ -113,10 +113,15 @@ resolves its own store, falling back to WRITE-STORE."
     (sort (remove-duplicates rows :key #'car :test #'string= :from-end t)
           #'string< :key #'car)))
 
-(defun %write-refusal (graph id report pairs producer)
-  "A fresh transaction recording the refusal (SS4 step 2/3)."
+(defun %write-refusal (graph id report pairs producer rule rule-version)
+  "A fresh transaction recording the refusal (SS4 step 2/3): one REFUSED
+claim per violated family, and one ATTEMPTED claim naming the rule the
+agent was applying, with CONCLUDED's slots, so a refused decision still
+says under which rule (#35)."
   (let ((outcome nil))
     (gdb:with-transaction (:graph graph)
+      (%trace-claim graph id "attempted" :rule rule producer :observed
+                    :method rule :rule-version rule-version)
       (dolist (row (%violation-families report))
         (setf outcome
               (%trace-claim graph id "refused" :violation (car row)
@@ -158,10 +163,11 @@ Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
           (make-decision :id id :outcome :concluded :claim claim
                          :at (st:claim-recorded-at outcome)))
       (%refused (c)
-        (%write-refusal graph id (%refused-report c) pairs producer))
+        (%write-refusal graph id (%refused-report c) pairs producer
+                        rule rule-version))
       (gdb:constraint-violation (c)
         ;; The report is advisory (SS2); the commit is the enforcement.
-        (%write-refusal graph id c pairs producer)))))
+        (%write-refusal graph id c pairs producer rule rule-version)))))
 
 (defstruct decision-record
   "TRACE's answer (SS5).  CONCLUSION is a CITE-RECORD or NIL; EVIDENCE a
@@ -211,6 +217,12 @@ resolves in the store it names, when that store is in SCOPE (SS4.3)."
       (let* ((at (%recorded-instant outcome))
              (concluded (and (string= "concluded" (st:claim-relation outcome))
                              outcome))
+             ;; The rule on the refused path (#35); NIL for a decision
+             ;; recorded before ATTEMPTED claims existed.
+             (attempted (or concluded
+                            (find "attempted" claims
+                                  :key #'st:claim-relation
+                                  :test #'string=)))
              (evidence (sort (mapcar (lambda (c)
                                        (cons (st:claim-object-key c)
                                              (st:claim-method c)))
@@ -228,9 +240,8 @@ resolves in the store it names, when that store is in SCOPE (SS4.3)."
          :id decision-id
          :producer (st:claim-producer outcome)
          :at at
-         ;; NIL on the refused path: the rule is not recorded there.
-         :rule (and concluded (st:claim-method concluded))
-         :rule-version (and concluded (st:claim-rule-version concluded))
+         :rule (and attempted (st:claim-method attempted))
+         :rule-version (and attempted (st:claim-rule-version attempted))
          :confidence (and concluded (st:claim-confidence concluded))
          :outcome (if concluded :concluded :refused)
          ;; The conclusion is always the deciding store's own claim, so
@@ -244,11 +255,12 @@ resolves in the store it names, when that store is in SCOPE (SS4.3)."
                            evidence)
          :refusals refusals)))))
 
-(defun trace-listing (graph decision-ids)
+(defun trace-listing (graph decision-ids &key (scope (list graph)))
   "The deterministic shape capture-and-diff compares (SS7): one row per
-id, in the given order, with no id or timestamp in it."
+id, in the given order, with no id or timestamp in it.  SCOPE resolves
+cross-store evidence as TRACE does (#34)."
   (loop for id in decision-ids
-        for rec = (trace graph id)
+        for rec = (trace graph id :scope scope)
         collect (list (decision-record-outcome rec)
                       (decision-record-rule rec)
                       (let ((c (decision-record-conclusion rec)))
