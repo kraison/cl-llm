@@ -239,6 +239,37 @@
              (unless (symbol-call :fiveam :run! :cl-llm-memory)
                (error "cl-llm/memory suite failed."))))
 
+(defsystem "cl-llm/agent"
+  :description "The agent tool surface over cl-llm/memory and the
+retrieval planner (#14 unit 2)."
+  :license "MIT"
+  ;; No web stack: the guarded query tool lives in cl-llm/agent/prolog.
+  :depends-on ("cl-llm" "cl-llm/memory" "cl-llm/rag/claims")
+  :serial t
+  :pathname "agent/"
+  :components ((:file "packages")
+               (:file "scope")
+               (:file "render")
+               (:file "memory-tools")
+               (:file "planner-tools")
+               (:file "agent"))
+  :in-order-to ((test-op (test-op "cl-llm/agent/tests"))))
+
+(defsystem "cl-llm/agent/tests"
+  :description "On-disk, two-store, scripted-model tests for cl-llm/agent."
+  :license "MIT"
+  :depends-on ("cl-llm/agent" "fiveam")
+  :serial t
+  :pathname "tests-agent/"
+  :components ((:file "packages")
+               (:file "harness")
+               (:file "memory-tools-tests")
+               (:file "planner-tools-tests")
+               (:file "loop-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run! :cl-llm-agent)
+               (error "cl-llm/agent suite failed."))))
+
 (defsystem "cl-llm/rag/vivace/tests"
   :description "Offline (in-memory-graph) tests for cl-llm/rag/vivace."
   :license "MIT"
