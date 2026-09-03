@@ -156,6 +156,21 @@ a search that did not happen."
           "an absence carries no extent, and a bound excludes only ~
            what it KNOWS to fall outside"))))
 
+(test claim-evidence-carries-the-identity-key
+  "Agent-tools SS7: a consumer renders a cite from evidence, so the
+identity key rides in the chunk metadata beside :EXTENT, and the
+source rides EVIDENCE-SOURCE so a later consumer can attribute it."
+  (with-claims-graph (g)
+    (%seed g)
+    (let* ((source (claims:make-claim-source
+                    g 'probe-claim (%extract-devices "d42")))
+           (ev (first (rag:collect-evidence source "anything"))))
+      (is (stringp (getf (rag:chunk-metadata (rag:evidence-chunk ev))
+                         :claim-key)))
+      (is (search "|" (getf (rag:chunk-metadata (rag:evidence-chunk ev))
+                            :claim-key)))
+      (is (eq source (rag:evidence-source ev))))))
+
 (test a-bounded-claim-query-fills-k-from-claims-the-cap-would-have-cut
   "cl-llm#19 for the claim source: the bound applies BEFORE the
 candidate cap.  CLAIMS-TOUCHING's order is not fixed, so instead of a
