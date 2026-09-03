@@ -428,10 +428,11 @@ concludes what it overturns.
 first is the writable one); `dir` is a memory directory, the same
 shape `capture-memory-dir` reads; `model-name` rides the system
 prompt only, for the record. One `ask` per note in `dir` that carries
-a `SUPERSEDED`-, `UPDATE`-, `CORRECTION`- or `STALE`-shaped banner
-targeting prose (`UPDATE`, `CORRECTION` or `STALE` — a plain
-`SUPERSEDED` banner has already said everything a supersession claim
-can say and is not asked about again).
+an `UPDATE`, `CORRECTION` or `STALE` banner. A `SUPERSEDED` banner is
+not read here at all: capture already turns it into deterministic
+claims on its own — an `annotates` belief always, `superseded-by` too
+when it links (`docs/agent-memory.md`) — and there is nothing left in
+it for a model to conclude.
 
 The model gets exactly three tools (`annotation-tools`, a fixed
 subset of `make-agent-tools`' eight): `recall`, `retrieve`,

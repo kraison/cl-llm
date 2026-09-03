@@ -113,9 +113,11 @@ text-indexed) and one belief — subject `(:memory-note . name)`, relation
 Capture again after editing a note in place and the old content claim
 is **superseded, not overwritten** — the "suite is 486 pass / 1 fail"
 that had been false for days stays readable as what was believed, and
-until when. Nothing here parses prose or calls a model; turning the
-hand-written supersession banners *inside* the notes into claims is the
-capstone's job (kraison/cl-llm#14).
+until when. Capture also reads each note's hand-written banners by
+their line shape and records them as claims (no prose parsing, no
+model — see "Banners" below); reading a banner's prose and concluding
+what it overturns is `annotate-banners`, in `cl-llm/agent`
+(`docs/agent-tools.md`).
 
 `capture-listing` renders a directory's recall as rows of
 `(name digest start current-p superseded-by-digest)`; the test suite
@@ -247,13 +249,22 @@ one such banner only the **last by position** writes it
 `annotates` claim.
 
 Capture reflects the file as truth (`%assert-from-file`,
-`memory/write.lisp`): a later banner date, or a different link with a
-later start, is an ordinary supersession; a same-key banner that
-comes back re-dated, re-kinded, or with a link whose start is not
-later — cases `record-belief`'s own idempotent path or its
-successor-ordering check would otherwise silently miss or refuse — is
-a **correction**: retract the current claim, then record the file's
-current state fresh, inside the same transaction.
+`memory/write.lisp`), and the two beliefs above split differently
+between supersession and correction because their objects don't move
+the same way. `annotates`' object is always the banner's own note —
+the same banner key always names the same note — so it can never be a
+supersession; a re-dated or re-kinded banner under the same key is
+always a **correction**: `record-belief`'s own idempotent path would
+otherwise keep the old date or kind unchanged, so `%assert-from-file`
+retracts the current claim and records the file's state fresh instead
+(`a-re-dated-banner-corrects-not-supersedes`, which bumps a banner's
+date later and still gets a correction, not a supersession).
+`superseded-by`'s object is the *link*, which can genuinely change
+from one capture to the next: a different link with a later validity
+start is an ordinary **supersession** of the note's series, the same
+as any other belief; a different link with a non-later start, or the
+same link re-dated, is a **correction**. Either way only the last
+replacing banner by position ever writes it.
 
 `capture-memory-dir` takes a `:banners` keyword (default `T`); passing
 `:banners nil` restores unit 1's behaviour exactly — content beliefs
