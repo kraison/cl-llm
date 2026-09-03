@@ -14,6 +14,8 @@
    ;; scope
    #:scope #:make-scope #:scope-stores #:scope-write-store
    #:scope-producer #:scope-sources #:scope-k #:scope-max-rows
-   #:find-store #:note-cite #:cite-store #:scope-error
+   #:find-store #:note-cite #:cite-store #:scope-error #:clamp
+   ;; render
+   #:json-bool
    ;; tools
    #:make-agent-tools #:make-memory-tools #:make-planner-tools))

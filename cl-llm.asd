@@ -270,6 +270,28 @@ retrieval planner (#14 unit 2)."
              (unless (symbol-call :fiveam :run! :cl-llm-agent)
                (error "cl-llm/agent suite failed."))))
 
+(defsystem "cl-llm/agent/prolog"
+  :description "A guarded free-text Prolog tool for the agent (#14 unit 2)."
+  :license "MIT"
+  ;; graph-db/gui carries the #279 guard and the web stack with it;
+  ;; kraison/vivace-graph#322 asks for a web-free home.
+  :depends-on ("cl-llm/agent" "graph-db/gui")
+  :serial t
+  :pathname "agent/prolog/"
+  :components ((:file "packages") (:file "query"))
+  :in-order-to ((test-op (test-op "cl-llm/agent/prolog/tests"))))
+
+(defsystem "cl-llm/agent/prolog/tests"
+  :description "Tests for the guarded query tool."
+  :license "MIT"
+  :depends-on ("cl-llm/agent/prolog" "cl-llm/agent/tests" "fiveam")
+  :serial t
+  :pathname "tests-agent-prolog/"
+  :components ((:file "packages") (:file "query-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run! :cl-llm-agent-prolog)
+               (error "cl-llm/agent/prolog suite failed."))))
+
 (defsystem "cl-llm/rag/vivace/tests"
   :description "Offline (in-memory-graph) tests for cl-llm/rag/vivace."
   :license "MIT"

@@ -50,6 +50,10 @@ unrecoverable -- then interns it (SS6)."
 
 (defun %bool (x) (if x :true :false))
 
+;; External spelling of %BOOL: cl-llm/agent/prolog renders its own
+;; booleans and must not reach across the package with :: (#14 unit 2).
+(defun json-bool (x) (%bool x))
+
 (defun %endpoint-json (ns key)
   (json:jobject "namespace" (%standing ns) "key" key))
 
