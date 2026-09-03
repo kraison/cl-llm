@@ -90,6 +90,10 @@ successor's start strictly."
     (gdb:save c)
     c))
 
+(defun %same-object-p (object pred)
+  (and (string= (cdr object) (st:claim-object-key pred))
+       (eq (car object) (st:claim-object-namespace pred))))
+
 (defun record-belief (graph subject relation object
                       &key producer standing (extent (%default-extent))
                            confidence method rule-version)
@@ -109,8 +113,7 @@ Must run inside the caller's WITH-TRANSACTION."
   (let ((start (te:bound-earliest (te:extent-start extent)))
         (pred (%current-predecessor graph producer subject relation)))
     (when pred
-      (cond ((and (string= (cdr object) (st:claim-object-key pred))
-                  (eq (car object) (st:claim-object-namespace pred)))
+      (cond ((%same-object-p object pred)
              (return-from record-belief pred))
             ((not (local-time:timestamp< (%start-instant pred) start))
              (error 'belief-successor-before-predecessor
@@ -123,6 +126,42 @@ Must run inside the caller's WITH-TRANSACTION."
      :object-namespace (car object) :object-key (cdr object)
      :producer producer :standing standing :extent extent
      :confidence confidence :method method :rule-version rule-version)))
+
+(defun %assert-from-file (graph subject relation object
+                          &key producer method (extent (%default-extent)))
+  "RECORD-BELIEF, but a file capture is truth (banners spec SS4): a
+change RECORD-BELIEF can express as a supersession -- a different
+OBJECT with a later validity start -- gets one, as always.  Anything
+else that actually changed (the same OBJECT with a moved start or a
+different METHOD; or a different OBJECT with a non-later start, which
+RECORD-BELIEF would otherwise refuse) is a CORRECTION: the current
+belief is wrong about when or what, so RETRACT-BELIEF it, then make
+the file's current state fresh -- not via RECORD-BELIEF, whose own
+predecessor lookup would still see PRED as current, the retraction
+being invisible to a fresh query within this same transaction until
+it commits.  Must run inside the caller's WITH-TRANSACTION."
+  (let* ((start (te:bound-earliest (te:extent-start extent)))
+         (pred (%current-predecessor graph producer subject relation)))
+    (if (and pred
+             (if (%same-object-p object pred)
+                 (or (not (local-time:timestamp=
+                           (%start-instant pred) start))
+                     (string/= (or method "")
+                              (or (st:claim-method pred) "")))
+                 (not (local-time:timestamp< (%start-instant pred)
+                                             start))))
+        (progn
+          (retract-belief pred)
+          (make-belief-binary
+           :graph graph
+           :subject-namespace (car subject) :subject-key (cdr subject)
+           :relation relation
+           :object-namespace (car object) :object-key (cdr object)
+           :producer producer :standing :asserted :extent extent
+           :method method))
+        (record-belief graph subject relation object
+                       :producer producer :standing :asserted
+                       :method method :extent extent))))
 
 (defun record-absence (graph subject relation
                        &key producer standing

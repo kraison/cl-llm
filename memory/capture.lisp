@@ -68,47 +68,73 @@ always emits microseconds, which a banner's midnight date has none of.")
   (local-time:format-timestring nil ts :format +iso-date-format+
                                 :timezone local-time:+utc-zone+))
 
+(defun %banner-date-and-extent (banner modified)
+  "Two values: the banner's own ISO date, or MODIFIED when undated;
+and the [date, unknown) validity extent from it (banners spec SS4)."
+  (let* ((dated (banner-date banner))
+         (date (if dated (%iso-date dated) modified)))
+    (values date
+            (te:make-interval
+             (te:exact-bound (local-time:parse-timestring date))
+             (te:unknown-bound)
+             :semantics :validity :standing :asserted))))
+
 (defun %capture-banner (graph name banner modified producer)
-  "One banner as a node and its beliefs (banners spec SS4)."
+  "One banner as a node and its ANNOTATES belief (banners spec SS4).
+A capture reflects the file as truth: a re-dated or re-kinded banner
+under the same key is a CORRECTION, via %ASSERT-FROM-FILE, not a
+supersession RECORD-BELIEF's idempotent path would miss."
   (let* ((key (format nil "~a#~a" name (banner-position banner)))
-         (dated (banner-date banner))
-         (date (if dated (%iso-date dated) modified))
          (kind (string-downcase (symbol-name (banner-kind banner))))
          (old (first (gdb:index-lookup graph 'memory-banner
                                        'bn-key key))))
-    (if old
-        (let ((c (gdb:copy old)))
-          (setf (bn-note c) name
-                (bn-position c) (banner-position banner)
-                (bn-kind c) kind
-                (bn-date c) date
-                (bn-dated-p c) (and dated t)
-                (bn-link c) (or (banner-link banner) "")
-                (bn-text c) (banner-text banner))
-          (gdb:save c))
-        (make-memory-banner :graph graph
-                            :bn-key key
-                            :bn-note name
-                            :bn-position (banner-position banner)
-                            :bn-kind kind
-                            :bn-date date
-                            :bn-dated-p (and dated t)
-                            :bn-link (or (banner-link banner) "")
-                            :bn-text (banner-text banner)))
-    (let ((extent (te:make-interval
-                   (te:exact-bound (local-time:parse-timestring date))
-                   (te:unknown-bound)
-                   :semantics :validity :standing :asserted)))
-      (record-belief graph (cons :banner key) "annotates"
-                     (cons :memory-note name)
-                     :producer producer :standing :asserted
-                     :method kind :extent extent)
-      (when (and (banner-link banner)
-                 (member (banner-kind banner) '(:superseded :stale)))
-        (record-belief graph (cons :memory-note name) "superseded-by"
+    (multiple-value-bind (date extent)
+        (%banner-date-and-extent banner modified)
+      (if old
+          (let ((c (gdb:copy old)))
+            (setf (bn-note c) name
+                  (bn-position c) (banner-position banner)
+                  (bn-kind c) kind
+                  (bn-date c) date
+                  (bn-dated-p c) (and (banner-date banner) t)
+                  (bn-link c) (or (banner-link banner) "")
+                  (bn-text c) (banner-text banner))
+            (gdb:save c))
+          (make-memory-banner :graph graph
+                              :bn-key key
+                              :bn-note name
+                              :bn-position (banner-position banner)
+                              :bn-kind kind
+                              :bn-date date
+                              :bn-dated-p (and (banner-date banner) t)
+                              :bn-link (or (banner-link banner) "")
+                              :bn-text (banner-text banner)))
+      (%assert-from-file graph (cons :banner key) "annotates"
+                         (cons :memory-note name)
+                         :producer producer :method kind :extent extent))))
+
+(defun %last-replacing-banner (banners)
+  "The SUPERSEDED/STALE banner with a link, highest position, or NIL:
+two such banners on one note keep the note as SUPERSEDED-BY's subject
+(a belief series is single-valued per subject and relation), so only
+the last by position writes it (banners spec SS4)."
+  (car (last (remove-if-not
+              (lambda (b) (and (banner-link b)
+                               (member (banner-kind b) '(:superseded
+                                                          :stale))))
+              banners))))
+
+(defun %capture-superseded-by (graph name banner modified producer)
+  "NAME's SUPERSEDED-BY belief, from its last replacing BANNER only.
+Two such banners with equal or non-increasing dates would abort the
+whole capture under plain RECORD-BELIEF; going through
+%ASSERT-FROM-FILE makes a non-later date a correction instead."
+  (multiple-value-bind (date extent)
+      (%banner-date-and-extent banner modified)
+    (declare (ignore date))
+    (%assert-from-file graph (cons :memory-note name) "superseded-by"
                        (cons :memory-note (banner-link banner))
-                       :producer producer :standing :asserted
-                       :extent extent)))))
+                       :producer producer :extent extent)))
 
 (defun %capture-note (graph path producer banners)
   (multiple-value-bind (fm body) (read-frontmatter path)
@@ -137,8 +163,13 @@ always emits microseconds, which a banner's midnight date has none of.")
                               (te:exact-bound start) (te:unknown-bound)
                               :semantics :validity :standing :asserted))
       (when banners
-        (dolist (b (scan-banners body))
-          (%capture-banner graph name b modified producer))))))
+        (let ((bs (scan-banners body)))
+          (dolist (b bs)
+            (%capture-banner graph name b modified producer))
+          (let ((last (%last-replacing-banner bs)))
+            (when last
+              (%capture-superseded-by graph name last
+                                      modified producer))))))))
 
 (defun %note-files (dir)
   (sort (remove "MEMORY" (uiop:directory-files dir "*.md")

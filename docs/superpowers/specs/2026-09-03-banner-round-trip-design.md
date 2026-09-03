@@ -124,14 +124,24 @@ it does not replace the note, so it never writes `superseded-by` even
 when it links. `recall` on a superseded note shows a current
 `superseded-by` belief — the reader-facing outcome. The note's own
 `content` series is untouched: a superseded note still has the content
-it has.
+it has. A note can carry more than one `superseded`/`stale` banner; only
+the last by position writes `superseded-by`, since the note is that
+belief's single subject.
 
-Idempotency is unit 1's: the same banner captured twice is the same
-identity tuple on both node and beliefs, a no-op; a banner edited in
-place updates the node's text under the same identity and the beliefs
-stand; a banner whose date changes writes a new belief, because the
-validity start is part of the identity, and unit 1's rule closes the
-earlier one — a supersession, which is what happened to the banner.
+A capture reflects the file as truth. A change `record-belief` can
+express as a supersession — a different object with a later validity
+start — gets one, as unit 1 does. Anything else that actually changed
+is a **correction**, not a supersession: `record-belief`'s idempotent
+path returns the same claim unchanged when the object is the same
+regardless of a moved date, so a re-dated (or re-kinded) banner under
+the same key would otherwise be silently missed; `%assert-from-file`
+retracts the current belief and records the file's state fresh
+instead. The same helper backs `superseded-by`: two `superseded`/
+`stale` banners on one note keep the note as its subject (a belief
+series is single-valued per subject and relation), so a second such
+banner with an equal or earlier date is a correction too — via
+`%assert-from-file`, not the `belief-successor-before-predecessor`
+error plain `record-belief` would raise.
 
 **Capture.** `capture-memory-dir` gains the banner pass: after the
 note's content belief, scan the body and record each banner in the same
