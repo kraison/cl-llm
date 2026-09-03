@@ -89,6 +89,20 @@ bundle carries, not an omission."
                        (rag:chunk-text
                         (rag:evidence-chunk (first evs))))))))
 
+(test an-absence-item-carries-its-source-and-names-its-store
+  "Controller ruling: an absence names where it looked -- EVIDENCE-
+SOURCE is the source that looked, and the store's own name rides the
+document id, so two stores' absences of the same endpoint never
+collapse to one in FUSE (agent-tools design §7)."
+  (with-claims-graph (g)
+    (let* ((source (claims:make-claim-source
+                    g 'probe-claim (%extract-devices "ghost")))
+           (ev (first (rag:collect-evidence source "ghost?"))))
+      (is (eq :searched-empty (rag:evidence-standing ev)))
+      (is (eq source (rag:evidence-source ev)))
+      (is-true (search "cl-llm-claims-test"
+                       (rag:chunk-document-id (rag:evidence-chunk ev)))))))
+
 (test an-extractor-recognising-nothing-contributes-nothing
   "No key, no consultation: NIL, which downstream reads as
 :INDETERMINATE territory -- never :SEARCHED-EMPTY, which would claim

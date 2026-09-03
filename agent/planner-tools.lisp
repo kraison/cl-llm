@@ -27,9 +27,16 @@ collected by, else NIL for the operator's sources."
          (find (claims:claim-source-graph src) (scope-stores scope)))))
 
 (defun %evidence-cite (evidence)
-  (let ((key (getf (rag:chunk-metadata (rag:evidence-chunk evidence))
-                    :claim-key)))
-    (and key (format nil "cl-llm.memory::belief|~a" key))))
+  "The cite for EVIDENCE, or NIL: only a claim source over MEM:BELIEF
+carries a citeable claim key -- an operator source over another
+family must not borrow the belief cite prefix."
+  (let ((src (rag:evidence-source evidence)))
+    (and (typep src 'claims:claim-source)
+         (eq (claims:claim-source-class src) 'mem:belief)
+         (let ((key (getf (rag:chunk-metadata
+                           (rag:evidence-chunk evidence))
+                          :claim-key)))
+           (and key (format nil "cl-llm.memory::belief|~a" key))))))
 
 (defun %evidence-json (scope e)
   (let* ((store (%source-store scope e))
@@ -39,7 +46,7 @@ collected by, else NIL for the operator's sources."
      "method" (%standing (rag:evidence-method e))
      "source" (let ((s (rag:evidence-source e)))
                 (and s (not (typep s 'claims:claim-source))
-                     (princ-to-string s)))
+                     (string-downcase (symbol-name (type-of s)))))
      "store" (and store (mem:store-name store))
      "text" (rag:chunk-text (rag:evidence-chunk e))
      "cite" cite
@@ -89,10 +96,10 @@ truncated even when nothing more exists."
      (let* ((k (clamp k (scope-k scope)))
             (eps (%endpoints endpoints))
             (sources (append (%claim-sources scope eps)
-                              (scope-sources scope)))
+                             (scope-sources scope)))
             (seed (%seed scope query eps k))
             (bounds (rag:plan-bounds (rag:bundle-evidence seed)
-                                      :window (%window from to)))
+                                     :window (%window from to)))
             (bundle (rag:fuse sources query :k k :bounds bounds))
             (evidence (rag:bundle-evidence bundle)))
        (json:to-json

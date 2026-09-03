@@ -33,16 +33,29 @@
     (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
            (r (%call tools "retrieve" "query" "q"
                      "endpoints" (vector "repo:cl-llm")
-                     "from" "2026-09-02T00:00:00Z" "to" "2026-09-03T00:00:00Z"))
+                     "from" "2026-09-02T08:00:00Z"
+                     "to" "2026-09-03T00:00:00Z"))
            (keys (mapcar (lambda (e) (json:jget e "cite"))
                          (coerce (json:jget r "evidence") 'list))))
       (is (string= "asserted" (json:jget r "bounds" "window" "standing")))
       ;; Supersession closes green 1ns before red's 09-02T08:00 start
-      ;; (memory/write.lisp %CLOSE-VALIDITY), so green's own extent
-      ;; still overlaps the window's first eight hours -- ALLEN-RELATION
-      ;; answers neither :BEFORE nor :AFTER, so BOUNDED-EVIDENCE keeps
-      ;; it too (rag/bundle.lisp's "excludes only what is known to lie
-      ;; wholly outside").  All three survive.
+      ;; (memory/write.lisp %CLOSE-VALIDITY); the window starts exactly
+      ;; there, so ALLEN-RELATION reads green as definitely :BEFORE it
+      ;; and BOUNDED-EVIDENCE drops it (rag/bundle.lisp).  Red and the
+      ;; open owner belief survive.
+      (is (= 2 (length keys)))))
+  (with-stores (w p)
+    (%seed-two-stores w p)
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (r (%call tools "retrieve" "query" "q"
+                     "endpoints" (vector "repo:cl-llm")
+                     "from" "2026-09-02T00:00:00Z"
+                     "to" "2026-09-03T00:00:00Z"))
+           (keys (mapcar (lambda (e) (json:jget e "cite"))
+                         (coerce (json:jget r "evidence") 'list))))
+      ;; A window starting at midnight overlaps green's last eight
+      ;; hours: ALLEN-RELATION answers neither :BEFORE nor :AFTER, so
+      ;; uncertainty is never exclusion -- all three survive.
       (is (= 3 (length keys))))))
 
 (test retrieve-clamps-k-and-a-recognised-endpoint-with-nothing-is-searched-empty
@@ -57,10 +70,18 @@
            (r (%call tools "retrieve" "query" "q"
                      "endpoints" (vector "repo:nothing-here")))
            (ev (coerce (json:jget r "evidence") 'list)))
+      ;; Two stores in scope, two distinct absence items -- a store's
+      ;; own name in each one's document id keeps FUSE from collapsing
+      ;; them to one (claims/source.lisp %ABSENCE-EVIDENCE).
+      (is (= 2 (length ev)))
       (is (every (lambda (e)
                    (string= "searched-empty" (json:jget e "standing")))
                  ev))
-      (is (every (lambda (e) (null (json:jget e "cite"))) ev)))))
+      (is (every (lambda (e) (null (json:jget e "cite"))) ev))
+      (is (equal '("cl-llm-memory" "memory-private")
+                 (sort (mapcar (lambda (e) (json:jget e "store")) ev)
+                       #'string<))
+          "each absence names the store that looked"))))
 
 (test plan-bounds-derives-a-window-from-the-seed
   (with-stores (w p)
