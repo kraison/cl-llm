@@ -120,7 +120,8 @@ what it overturns is `annotate-banners`, in `cl-llm/agent`
 (`docs/agent-tools.md`).
 
 `capture-listing` renders a directory's recall as rows of
-`(name digest start current-p superseded-by-digest)`; the test suite
+`(name digest start current-p superseded-by-digest)`, starts at second
+precision like every listing in this tenant (#36); the test suite
 diffs it against `tests-memory/golden/capture.sexp`.
 
 ## Decisions and their trace
@@ -145,9 +146,11 @@ do not `:use` the package.
 
 `conclude` **owns its transaction** (call it outside `with-transaction`):
 it stages the write, validates the transaction's delta with the engine's
-`validate-writes`, and commits — or unwinds and records the refusal
-structurally, one `refused` claim per constraint family. A refused
-decision writes no belief and still records what it was looking at.
+`validate-transaction`, and commits — or unwinds and records the refusal
+structurally: one `refused` claim per constraint family, and one
+`attempted` claim naming the rule it was applying, so `trace` reports
+the rule on the refused path too (#35). A refused decision writes no
+belief and still records what it was looking at.
 
 Evidence is cited **by claim identity**
 (`"cl-llm.memory::belief|<identity-key>"`, `claim-cite`), so a cite
@@ -181,7 +184,8 @@ namespace.
 **Order is the contract:** evidence in cite-string order, refusals in
 family order, `decisions-citing` by `recorded-at` descending then id.
 `trace-listing` renders decisions as rows for capture-and-diff
-(`tests-memory/golden/trace.sexp`).
+(`tests-memory/golden/trace.sexp`); it takes the same `:scope` as
+`trace` for cross-store evidence (#34).
 
 ## Several stores
 
