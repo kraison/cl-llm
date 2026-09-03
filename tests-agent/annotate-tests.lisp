@@ -52,11 +52,16 @@ says done."
               (lambda (c)
                 (let ((msgs (llm:conversation-messages c)))
                   (case (length msgs)
-                    (1 (setf name
-                             (%note-name-from-prompt
-                              (llm:part-text
-                               (first (llm:message-content
-                                       (car (last msgs)))))))
+                    (1 (let ((text (llm:part-text
+                                    (first (llm:message-content
+                                            (car (last msgs)))))))
+                         (setf name (%note-name-from-prompt text))
+                         ;; Pins the controller fix: the banner's own
+                         ;; text rides the user prompt, not a tool
+                         ;; result (Task 3 review, ruling 1).
+                         (when (string= name "correction")
+                           (is (search "OVERTURNED for on-device" text)
+                               "the prompt carries the banner's text")))
                        (%tool-use "t1" "retrieve" "query" name
                                   "endpoints"
                                   (vector (format nil "memory-note:~a"

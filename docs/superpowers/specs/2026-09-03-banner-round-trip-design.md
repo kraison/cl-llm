@@ -164,23 +164,25 @@ in `cl-llm/agent`, file `agent/annotate.lisp` — the first consumer of
 the tool surface. It scans `dir` with the same scanner, keeps notes
 with an `update`, `correction` or `stale` banner, and for each runs one
 `llm:ask` with a scope over `stores` (the first is the write store) and
-a tool set of **three**: `recall`, `retrieve`, `conclude`. The system
-prompt states the job in the tools' vocabulary:
+a tool set of **three**: `recall`, `retrieve`, `conclude`. The user
+turn itself carries the note's name and every prose banner's own text,
+verbatim (kind, date, position, then the banner's body) — because
+`retrieve`'s claim renderer emits a one-line claim summary, not the
+banner's prose, so the tool surface alone cannot supply it; the pass
+puts the text in the prompt instead. The system prompt states the job
+in the tools' vocabulary:
 
-> You are annotating one note of an agent's memory. Call `retrieve`
-> with query the note's name and endpoints `["memory-note:<name>"]`;
-> the item whose cite contains `|annotates|` is the banner, and its
-> cite is your evidence. Read the banner text in that item. Then call
-> `conclude` once: subject-namespace `memory-note`, subject-key
-> `<name>`, relation `overturns`, object-namespace `proposition`,
-> object-key one sentence stating what the banner overturns, standing
-> `inferred`, rule `read-banner`, rule-version `<model>`, evidence
-> [that cite]. Then reply `done`. If the banner overturns nothing you
-> can state, reply `no`.
-
-(`retrieve`'s JSON evidence items carry no `relation` field, only
-`cite`; a claim's rendered `text` is a one-line summary, not the
-banner's prose — the model reads that summary, not the note body.)
+> You are annotating one note of an agent's memory. The banner's own
+> text is below, in this prompt, under the note line — read it there,
+> not through a tool. Call `retrieve` with query the note's name and
+> endpoints `["memory-note:<name>"]` only to get its evidence cite: the
+> item whose cite contains `|annotates|` is the banner's belief, and
+> its cite is what you cite. Then call `conclude` once: subject-namespace
+> `memory-note`, subject-key `<name>`, relation `overturns`,
+> object-namespace `proposition`, object-key one sentence stating what
+> the banner overturns, standing `inferred`, rule `read-banner`,
+> rule-version `<model>`, evidence [that cite]. Then reply `done`. If
+> the banner overturns nothing you can state, reply `no`.
 
 `producer` is the agent's, required, distinct from the capture
 producer. The function returns a list of `(note . decision-or-nil)`:
