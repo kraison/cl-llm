@@ -287,6 +287,59 @@ rows — per note in name order, per banner in position order,
 `(note position kind date link text-digest dated-p)` — diffed against
 `tests-memory/golden/banners.sexp` in the test suite.
 
+## Running a memory image
+
+A graph-db store is single-process — an mmap'd heap and a `.dirty`
+marker — so the Lisp image behind each session cannot open the same
+store. `scripts/run-memory.sh` starts **one** long-lived SBCL that
+loads `cl-llm/agent`, opens the store (or makes it when absent) and
+serves SWANK on loopback; a session reaches it through cl-mcp-server's
+`remote-*` tools and runs Lisp and Prolog against it directly. There
+is no JSON front end: that is the multi-agent service, designed
+separately (kraison/cl-llm#39).
+
+```sh
+scripts/run-memory.sh   # logs to stdout; SIGTERM or Ctrl-C closes the store
+```
+
+| variable | default |
+|---|---|
+| `CL_LLM_MEMORY_STORE` | `~/.cl-llm-memory/working/` |
+| `CL_LLM_MEMORY_SYSTEM` | `~/.cl-llm-memory/system/` |
+| `CL_LLM_MEMORY_GRAPH` | `cl-llm-memory` |
+| `CL_LLM_MEMORY_SWANK_PORT` | `4008` (loopback only) |
+| `CL_LLM_MEMORY_PRODUCER` | `claude-code/<hostname>` |
+| `CL_LLM_MEMORY_BUFFER_POOL` | `2000` |
+
+The image refuses a store left dirty (`store-not-closed-cleanly-error`,
+exit 1) rather than open a torn one; the exit hook closes the graph on
+SIGTERM, so a clean stop leaves no marker. Its package,
+`cl-llm.memory-image`, holds `*graph*` (also bound as `gdb:*graph*`)
+and `*producer*`, with local nicknames `mem`, `gdb`, `st` and `agent`.
+
+From a session, with `remote-connect name=memory port=4008` (read
+mode), reads run unarmed in that package:
+
+```lisp
+(mem:recall *graph* '(:memory-note . "android-ecl-port")
+            :relation "superseded-by")
+```
+
+Prolog runs with `package=GRAPH-DB`. Name a type as a keyword or a
+qualified symbol — `run-query-goals` interns bare heads in `*package*`
+(kraison/vivace-graph#322), so `belief-binary` alone matches nothing:
+
+```lisp
+(select (:limit 5) (?c ?r)
+  (is-a ?c :belief-binary) (node-slot-value ?c relation ?r))
+```
+
+Writes need the target armed: add `"memory"` to the armable targets
+in `~/.config/cl-mcp-server/config.sexp`, `remote-arm memory`, then
+`(mem:conclude *graph* … :producer *producer* …)` as in "Decisions and
+their trace", and `remote-disarm` when done. Every form, refusals
+included, is in `remote-ledger`.
+
 ## What this is not
 
 The tool surface is `docs/agent-tools.md` (kraison/cl-llm#14 unit 2);
