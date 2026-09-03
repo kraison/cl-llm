@@ -11,6 +11,7 @@
   (:shadow #:trace)
   (:export
    ;; schema
+   #:define-memory-store #:store-name
    #:belief #:belief-unary #:belief-binary
    #:make-belief-unary #:make-belief-binary
    #:trace #:trace-unary #:trace-binary
@@ -24,7 +25,7 @@
    #:recall #:belief-record #:belief-record-claim
    #:belief-record-current-p #:belief-record-superseded-by
    #:belief-record-retracted-at #:belief-record-standing
-   #:belief-record-extent
+   #:belief-record-extent #:claim-before-p
    ;; capture
    #:capture-memory-dir #:capture-listing #:read-frontmatter
    #:body-digest

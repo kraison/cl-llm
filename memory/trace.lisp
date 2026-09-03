@@ -67,9 +67,30 @@ rather than later, when TRACE would signal on the whole decision
    :producer producer :standing standing :extent (%instant-now)
    :method method :rule-version rule-version :confidence confidence))
 
-(defun %write-evidence (graph id cites producer)
-  (dolist (cite (remove-duplicates cites :test #'string=))
-    (%trace-claim graph id "evidence" :claim cite producer :observed)))
+(defun %claim-store (claim)
+  "The name of the store holding CLAIM, or NIL.  RESOLVE-NODE-GRAPH is
+the engine's only route from a node to its store and is internal
+(noted on kraison/vivace-graph#322)."
+  (let ((g (graph-db::resolve-node-graph (gdb:id claim))))
+    (and g (store-name g))))
+
+(defun %evidence-of (x write-store)
+  "(cite . store-name) for one EVIDENCE item (SS4.2): a cite string
+means WRITE-STORE; a (cite . store) pair passes through; a claim
+resolves its own store, falling back to WRITE-STORE."
+  (cond ((cite-p x) (cons (progn (split-cite x) x) write-store))
+        ((and (consp x) (cite-p (car x)) (stringp (cdr x)))
+         (split-cite (car x))
+         x)
+        ((ignore-errors (%family-parent-of x))
+         (cons (claim-cite x) (or (%claim-store x) write-store)))
+        (t (%arg-error :evidence x
+                       "a claim, a cite string, or (cite . store)"))))
+
+(defun %write-evidence (graph id pairs producer)
+  (dolist (pair (remove-duplicates pairs :key #'car :test #'string=))
+    (%trace-claim graph id "evidence" :claim (car pair) producer :observed
+                  :method (cdr pair))))
 
 (define-condition %refused (error)
   ((report :initarg :report :reader %refused-report))
@@ -94,7 +115,7 @@ export asked on kraison/vivace-graph#320."
     (sort (remove-duplicates rows :key #'car :test #'string= :from-end t)
           #'string< :key #'car)))
 
-(defun %write-refusal (graph id report cites producer)
+(defun %write-refusal (graph id report pairs producer)
   "A fresh transaction recording the refusal (SS4 step 2/3)."
   (let ((outcome nil))
     (gdb:with-transaction (:graph graph)
@@ -102,7 +123,7 @@ export asked on kraison/vivace-graph#320."
         (setf outcome
               (%trace-claim graph id "refused" :violation (car row)
                             producer :observed :method (cdr row))))
-      (%write-evidence graph id cites producer))
+      (%write-evidence graph id pairs producer))
     (make-decision :id id :outcome :refused :report report
                    :at (st:claim-recorded-at outcome))))
 
@@ -119,7 +140,8 @@ Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
   (unless (stringp rule) (%arg-error :rule rule "a string naming the rule"))
   (%check-proposal proposal)
   (let ((id (%mint-id))
-        (cites (mapcar #'%cite-of evidence))
+        (pairs (mapcar (lambda (e) (%evidence-of e (store-name graph)))
+                       evidence))
         (claim nil) (outcome nil))
     (handler-case
         (progn
@@ -134,14 +156,14 @@ Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
                                 (claim-cite claim) producer :inferred
                                 :method rule :rule-version rule-version
                                 :confidence confidence))
-            (%write-evidence graph id cites producer))
+            (%write-evidence graph id pairs producer))
           (make-decision :id id :outcome :concluded :claim claim
                          :at (st:claim-recorded-at outcome)))
       (%refused (c)
-        (%write-refusal graph id (%refused-report c) cites producer))
+        (%write-refusal graph id (%refused-report c) pairs producer))
       (gdb:constraint-violation (c)
         ;; The report is advisory (SS2); the commit is the enforcement.
-        (%write-refusal graph id c cites producer)))))
+        (%write-refusal graph id c pairs producer)))))
 
 (defstruct decision-record
   "TRACE's answer (SS5).  CONCLUSION is a CITE-RECORD or NIL; EVIDENCE a
@@ -160,9 +182,22 @@ order."
       (%arg-error :claim claim "a trace claim with no recorded-at"))
     at))
 
-(defun trace (graph decision-id)
+(defun %store-in-scope (name scope)
+  (find name scope :key #'store-name :test #'string=))
+
+(defun %resolve-in (cite store-name graph scope at)
+  "CITE resolved in the store its evidence claim named, when that store
+is in SCOPE; unit-1 evidence (no store) resolves in GRAPH; a store out
+of scope is :ABSENT (SS4.3)."
+  (let ((g (if store-name (%store-in-scope store-name scope) graph)))
+    (if g
+        (resolve-cite g cite at)
+        (make-cite-record :cite cite :state :absent))))
+
+(defun trace (graph decision-id &key (scope (list graph)))
   "The decision DECISION-ID reconstructed as of its own instant (SS5),
-or NIL when no such decision was recorded."
+or NIL when no such decision was recorded.  Each evidence cite
+resolves in the store it names, when that store is in SCOPE (SS4.3)."
   (let* ((claims (%decision-claims graph decision-id))
          (outcome (find-if (lambda (c)
                              (member (st:claim-relation c)
@@ -173,11 +208,13 @@ or NIL when no such decision was recorded."
       (let* ((at (%recorded-instant outcome))
              (concluded (and (string= "concluded" (st:claim-relation outcome))
                              outcome))
-             (evidence (sort (mapcar #'st:claim-object-key
+             (evidence (sort (mapcar (lambda (c)
+                                       (cons (st:claim-object-key c)
+                                             (st:claim-method c)))
                                      (remove "evidence" claims
                                              :key #'st:claim-relation
                                              :test-not #'string=))
-                             #'string<))
+                             #'string< :key #'car))
              (refusals (sort (loop for c in claims
                                    when (string= "refused"
                                                  (st:claim-relation c))
@@ -196,7 +233,9 @@ or NIL when no such decision was recorded."
          :conclusion (and concluded
                           (resolve-cite graph (st:claim-object-key concluded)
                                         at))
-         :evidence (mapcar (lambda (cite) (resolve-cite graph cite at))
+         :evidence (mapcar (lambda (pair)
+                             (%resolve-in (car pair) (cdr pair)
+                                          graph scope at))
                            evidence)
          :refusals refusals)))))
 
@@ -215,12 +254,15 @@ id, in the given order, with no id or timestamp in it."
                               (decision-record-evidence rec))
                       (mapcar #'car (decision-record-refusals rec)))))
 
-(defun decisions-citing (graph claim-or-cite)
+(defun decisions-citing (graph claim-or-cite &key (scope (list graph)))
   "Ids of the decisions whose EVIDENCE cites CLAIM-OR-CITE, RECORDED-AT
-descending then id (SS5).  NIL means no decisions cite it."
+descending then id (SS5), unioned over every store in SCOPE (SS4.3).
+NIL means no decisions cite it."
   (let* ((cite (%cite-of claim-or-cite))
-         (claims (st:claims-touching graph 'trace :claim cite
-                                     :role :object :relation "evidence")))
+         (claims (loop for g in scope
+                       append (st:claims-touching g 'trace :claim cite
+                                                  :role :object
+                                                  :relation "evidence"))))
     (mapcar #'cdr
             (sort (mapcar (lambda (c) (cons (%recorded-instant c)
                                             (st:claim-subject-key c)))
