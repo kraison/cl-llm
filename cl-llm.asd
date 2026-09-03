@@ -214,6 +214,7 @@
                (:file "write")
                (:file "recall")
                (:file "capture")
+               (:file "banners")
                (:file "cite")
                (:file "trace"))
   ;; The test-op link: without it TEST-SYSTEM is a silent no-op
@@ -234,7 +235,8 @@
                (:file "capture-tests")
                (:file "cite-tests")
                (:file "trace-tests")
-               (:file "store-tests"))
+               (:file "store-tests")
+               (:file "banner-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! :cl-llm-memory)
                (error "cl-llm/memory suite failed."))))

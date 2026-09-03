@@ -29,6 +29,9 @@
    ;; capture
    #:capture-memory-dir #:capture-listing #:read-frontmatter
    #:body-digest
+   ;; banners
+   #:banner #:scan-banners #:banner-kind #:banner-position
+   #:banner-date #:banner-link #:banner-text #:banner-line
    ;; cite
    #:claim-cite #:cite-p #:split-cite #:resolve-cite
    #:cite-record #:cite-record-cite #:cite-record-family
