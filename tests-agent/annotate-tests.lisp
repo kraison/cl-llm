@@ -141,6 +141,62 @@ arbitrary one."
         (is (eq :resolved (mem:cite-record-state
                            (first (mem:decision-record-evidence rec)))))))))
 
+(defun %copy-banner-dir-to-temp ()
+  "A private copy of the banner fixtures, so a test can rewrite a file
+in place -- adapted from tests-memory/capture-tests.lisp
+%COPY-FIXTURE-TO-TEMP (#14 unit 3 residual)."
+  (let ((dir (format nil "/tmp/cl-llm-agent-banners-~a-~a/"
+                     (get-internal-real-time) (random 1000000))))
+    (ensure-directories-exist dir)
+    (dolist (f (uiop:directory-files (%banner-dir) "*.md"))
+      (uiop:copy-file f (merge-pathnames (file-namestring f) dir)))
+    dir))
+
+(test banner-annotates-cite-prefers-the-current-claim-at-a-corrected-key
+  "Final review finding: correcting a banner in place leaves a
+retracted ANNOTATES claim at the same subject key as the new current
+one; %BANNER-ANNOTATES-CITE must pick the current claim, not whichever
+the index hands back first (#14 unit 3 residual)."
+  (let ((dir (%copy-banner-dir-to-temp)))
+    (unwind-protect
+         (with-stores (w p)
+           (declare (ignore p))
+           (mem:capture-memory-dir w dir :producer "capture/test")
+           (let ((path (merge-pathnames "correction.md" dir)))
+             ;; Bumps the frontmatter MODIFIED too -- unrelated to what
+             ;; this test is about, but the note's own content belief
+             ;; needs a later start than its prior one, same as
+             ;; tests-memory/banner-tests.lisp's re-dated-banner test.
+             (memt:%replace-all-in-file path "2026-06-28T10:00:00Z"
+                                        "2026-07-03T10:00:00Z")
+             (memt:%replace-all-in-file path "2026-07-01" "2026-07-02"))
+           (mem:capture-memory-dir w dir :producer "capture/test")
+           (let ((anns (remove-if-not
+                        (lambda (c)
+                          (and (string= "annotates" (st:claim-relation c))
+                               (string= "correction#1"
+                                        (st:claim-subject-key c))))
+                        (st:claims-touching w 'mem:belief
+                                            :memory-note "correction"
+                                            :role :object))))
+             ;; Precondition: the correction really did leave two claims
+             ;; at correction#1, one retracted -- else this test would
+             ;; pass vacuously.
+             (is (= 2 (length anns))
+                 "control: a corrected banner leaves two claims at its key")
+             (is (= 1 (count-if #'st:claim-current-p anns))
+                 "control: exactly one of the two is current")
+             (let* ((current (find-if #'st:claim-current-p anns))
+                    (want (mem:claim-cite current))
+                    ;; :: reach into cl-llm.agent's unexported
+                    ;; %BANNER-ANNOTATES-CITE -- deliberate, to pin the
+                    ;; one trap this fix addresses (#14 unit 3 residual).
+                    (got (cl-llm.agent::%banner-annotates-cite
+                          w "correction" 1)))
+               (is (string= want got)
+                   "the current claim's cite, not the retracted one's"))))
+      (uiop:delete-directory-tree (pathname dir) :validate t))))
+
 (test annotate-banners-reports-a-declined-note-as-nil
   (with-stores (w p)
     (mem:capture-memory-dir w (%banner-dir) :producer "capture/test")

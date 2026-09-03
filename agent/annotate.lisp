@@ -96,13 +96,14 @@ final review)."
 (defun %banner-annotates-cite (graph name position)
   "The cite of the ANNOTATES belief whose subject is the banner
 \"<name>#<position>\" (banners spec SS4), or NIL when capture wrote no
-such banner (finding 1, #14 unit 3 final review)."
+such banner (finding 1, #14 unit 3 final review).  Current only -- a
+corrected banner leaves a retracted claim at the same key."
   (let* ((key (format nil "~a#~a" name position))
          (ann (find-if
                (lambda (c) (and (string= "annotates" (st:claim-relation c))
                                 (string= key (st:claim-subject-key c))))
                (st:claims-touching graph 'mem:belief :memory-note name
-                                   :role :object))))
+                                   :role :object :current t))))
     (and ann (mem:claim-cite ann))))
 
 (defun annotate-banners (stores dir &key provider producer

@@ -261,7 +261,9 @@ retrieval planner (#14 unit 2)."
 (defsystem "cl-llm/agent/tests"
   :description "On-disk, two-store, scripted-model tests for cl-llm/agent."
   :license "MIT"
-  :depends-on ("cl-llm/agent" "fiveam")
+  ;; cl-llm/memory/tests for %REPLACE-ALL-IN-FILE, shared rather than
+  ;; duplicated (#14 unit 3 residual).
+  :depends-on ("cl-llm/agent" "cl-llm/memory/tests" "fiveam")
   :serial t
   :pathname "tests-agent/"
   :components ((:file "packages")
