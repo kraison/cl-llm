@@ -49,10 +49,14 @@
   (te:bound-earliest (te:extent-start (st:claim-extent claim))))
 
 (defun %open-p (claim)
-  "Validity end unknown or unbounded -- the belief is still held."
-  (let ((end (te:extent-end (st:claim-extent claim))))
-    (or (te:bound-unknown-p end)
-        (eq :unbounded (te:bound-latest end)))))
+  "Validity end unknown or unbounded -- the belief is still held.  A
+claim with no validity extent at all is not \"still held\" in the
+supersession sense: NIL (final review #14 unit 1 finding 2)."
+  (let ((extent (st:claim-extent claim)))
+    (and extent
+         (let ((end (te:extent-end extent)))
+           (or (te:bound-unknown-p end)
+               (eq :unbounded (te:bound-latest end)))))))
 
 (defun %series (graph producer subject relation)
   "Every claim -- both arities, retracted included -- one PRODUCER holds

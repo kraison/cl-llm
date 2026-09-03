@@ -5,10 +5,16 @@
   (:local-nicknames (#:st #:graph-db.spacetime)
                     (#:gdb #:graph-db)
                     (#:te #:temporal-extent))
+  ;; TRACE names the second claim family (spec SS3); CL:TRACE is a
+  ;; macro, and DEF-CLAIM-CLASSES defclass'es it -- shadow or the
+  ;; locked CL package refuses the definition.
+  (:shadow #:trace)
   (:export
    ;; schema
    #:belief #:belief-unary #:belief-binary
    #:make-belief-unary #:make-belief-binary
+   #:trace #:trace-unary #:trace-binary
+   #:make-trace-unary #:make-trace-binary
    #:memory-note #:note-name #:note-description #:note-type
    #:note-modified #:note-body
    ;; write
@@ -21,4 +27,18 @@
    #:belief-record-extent
    ;; capture
    #:capture-memory-dir #:capture-listing #:read-frontmatter
-   #:body-digest))
+   #:body-digest
+   ;; cite
+   #:claim-cite #:cite-p #:split-cite #:resolve-cite
+   #:cite-record #:cite-record-cite #:cite-record-family
+   #:cite-record-state #:cite-record-claim #:cite-record-standing
+   #:cite-record-extent #:cite-record-changed-since
+   ;; trace
+   #:conclude #:decision #:decision-id #:decision-outcome
+   #:decision-claim #:decision-report #:decision-at
+   #:trace #:trace-listing #:decisions-citing
+   #:decision-record #:decision-record-id #:decision-record-producer
+   #:decision-record-at #:decision-record-rule
+   #:decision-record-rule-version #:decision-record-confidence
+   #:decision-record-outcome #:decision-record-conclusion
+   #:decision-record-evidence #:decision-record-refusals))

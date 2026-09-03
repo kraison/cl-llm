@@ -77,7 +77,7 @@ a relation nobody wrote: NIL, which is not :UNCOVERED and not
   (with-memory-graph (g)
     (%seed-series g)
     (let* ((current (first (mem:recall g +subj+ :relation "ci-status")))
-           (when-wrong (%ts "2026-09-04T00:00:00Z")))
+           (when-wrong (%tomorrow)))
       (gdb:with-transaction ((graph-db::transaction-manager g))
         (mem:retract-belief (mem:belief-record-claim current)
                             :at when-wrong))

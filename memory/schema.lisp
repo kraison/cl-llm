@@ -8,6 +8,11 @@
 ;; can hold, lapse and hold again (spec SS3; kraison/vivace-graph#296).
 (st:def-claim-classes belief :cl-llm-memory :temporal t)
 
+;; The decision trace (spec 2026-09-02 SS3): not temporal, so identity
+;; is (producer subject object relation) and two cites of one claim
+;; collapse to one EVIDENCE claim.
+(st:def-claim-classes trace :cl-llm-memory)
+
 ;; The dogfood source: one node per memory file.  Map-less, private,
 ;; text-indexed so the corpus can later be a RAG chunk source (spec SS7).
 (st:def-source memory-note :cl-llm-memory

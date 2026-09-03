@@ -30,3 +30,23 @@ without it the write path's defaults would be doing the engine's job."
          :relation "ci-status"
          :object-namespace :verdict :object-key "green"
          :producer +p+ :standing :observed)))))
+
+(test the-trace-family-is-declared-beside-belief
+  "Spec 2026-09-02 SS3: a second, non-temporal family in the same graph."
+  (with-memory-graph (g)
+    (let ((now (%ts "2026-09-02T12:00:00Z")))
+      (gdb:with-transaction (:graph g)
+        (mem:make-trace-binary
+         :graph g
+         :subject-namespace :decision :subject-key "d1"
+         :relation "evidence"
+         :object-namespace :claim :object-key "x|y|z"
+         :producer +p+ :standing :observed
+         :extent (te:make-instant (te:exact-bound now)
+                                  :semantics :validity
+                                  :standing :asserted)))
+      (let ((cs (st:claims-touching g 'mem:trace :decision "d1"
+                                    :role :subject)))
+        (is (= 1 (length cs)))
+        (is (typep (first cs) 'mem:trace-binary))
+        (is (string= "x|y|z" (st:claim-object-key (first cs))))))))
