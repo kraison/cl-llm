@@ -22,3 +22,16 @@ A green run is only evidence for the suites whose summary lines
 system with no `:in-order-to` test-op is a silent no-op, and the
 claims step was exactly that from 2026-08-31 to 2026-09-01 (#26).
 Read the log once when a step is added, not just the verdict.
+
+## The live suites are not run here
+
+`cl-llm/live`, `cl-llm/rag/live` and `cl-llm/agent/live` hit real
+endpoints and need a provider key, so none of them is in CI's suite
+list; every live test skips cleanly (FiveAM's `skip`) under
+`CL_LLM_LIVE` unset, which is the environment CI runs in, so the
+`asdf:test-system` calls above are the whole story here. Run one by
+hand, from a checkout with a key exported:
+
+```bash
+CL_LLM_LIVE=1 sbcl --eval '(asdf:test-system :cl-llm/agent/live)'
+```

@@ -296,6 +296,18 @@ retrieval planner (#14 unit 2)."
              (unless (symbol-call :fiveam :run! :cl-llm-agent-prolog)
                (error "cl-llm/agent/prolog suite failed."))))
 
+(defsystem "cl-llm/agent/live"
+  :description "Live: annotate-banners against a real provider.
+Requires CL_LLM_LIVE=1."
+  :license "MIT"
+  :depends-on ("cl-llm/agent" "cl-llm/agent/tests" "fiveam")
+  :serial t
+  :pathname "live-agent/"
+  :components ((:file "packages") (:file "live"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run! :cl-llm-agent-live)
+               (error "cl-llm/agent/live suite failed."))))
+
 (defsystem "cl-llm/rag/vivace/tests"
   :description "Offline (in-memory-graph) tests for cl-llm/rag/vivace."
   :license "MIT"

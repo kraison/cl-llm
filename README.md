@@ -242,8 +242,10 @@ was wrong; `retrieve` and `plan-bounds` over the retrieval planner.
 The scope and every bound are the operator's at construction; the
 model names subjects, never stores. `cl-llm/agent/prolog` adds
 `query`, guarded free-text Prolog with effects off and budgets (it
-loads `graph-db/gui` until kraison/vivace-graph#322). Guide:
-[`docs/agent-tools.md`](docs/agent-tools.md).
+loads `graph-db/gui` until kraison/vivace-graph#322). `annotate-banners`
+is the first consumer — a model reads a note's hand-written banner and
+concludes what it overturns, live-tested under `cl-llm/agent/live`
+(`CL_LLM_LIVE=1`). Guide: [`docs/agent-tools.md`](docs/agent-tools.md).
 
 ### Graph-backed stores (`cl-llm/rag/vivace`)
 

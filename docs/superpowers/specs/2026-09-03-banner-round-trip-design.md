@@ -173,7 +173,7 @@ puts the text in the prompt instead. The system prompt states the job
 in the tools' vocabulary:
 
 > You are annotating one note of an agent's memory. The banner's own
-> text is below, in this prompt, under the note line — read it there,
+> text is below, in this prompt, under the note line -- read it there,
 > not through a tool. Call `retrieve` with query the note's name and
 > endpoints `["memory-note:<name>"]` only to get its evidence cite: the
 > item whose cite contains `|annotates|` is the banner's belief, and

@@ -196,11 +196,81 @@ omitted. Building a tool surface a model calls over several stores —
 scope, caps, the writable one — is `docs/agent-tools.md`
 (kraison/cl-llm#14 unit 2).
 
+## Banners
+
+The proving corpus's notes carry hand-written supersession banners in
+prose — a fact stopped being true, and someone said so in the body
+rather than editing it out. `scan-banners` (`memory/banners.lisp`,
+spec `2026-09-03-banner-round-trip` §3) finds four line shapes, each a
+`**WORD ...**` (or `> **WORD ...**`, or `⚠ **WORD ...**`) heading a
+paragraph or a blockquote:
+
+- `SUPERSEDED` — the note's premise no longer holds; usually links to
+  its replacement.
+- `UPDATE` — new information layered on, nothing retracted.
+- `CORRECTION` — the note was wrong, possibly about a specific claim
+  elsewhere; may link to what it corrects.
+- `STALE` — the note describes a past state (a host, a branch) that
+  has since moved on; usually links to the current state.
+
+A banner's **date** is the first `YYYY-MM-DD` on its heading line, or
+NIL when undated; its **link** is the first `[[name]]` anywhere in its
+text, or NIL; word matching is on a boundary, so `UPDATE` never
+matches `UPDATED`.
+
+Capture (`%capture-banner`, `memory/capture.lisp`, spec §4) turns each
+scanned banner into a `memory-banner` source node — `bn-key`
+(`"<note>#<position>"`), `bn-note`, `bn-position`, `bn-kind`,
+`bn-date` (RFC 3339, the banner's own date or the note's `modified`
+stamp when undated), `bn-dated-p`, `bn-link`, `bn-text` — and one
+`annotates` belief:
+
+```
+(:banner . "<note>#<n>") --annotates--> (:memory-note . name)
+```
+
+with `method` the banner's kind. **The banner is the subject**, not
+the note: a belief series is single-valued per `(producer, subject,
+relation)`, and a note can carry several banners, so the note cannot
+be the subject of `annotates` without one banner's claim silently
+superseding another's. A reader reaches a note's banners the other
+way round, through the claims touching it as *object* — `recall
+(:memory-note . name)` for the note's own beliefs, or
+`claims-touching :role :either` to include what points at it.
+
+A `SUPERSEDED` or `STALE` banner that carries a link additionally
+writes `(:memory-note . name) --superseded-by--> (:memory-note .
+link)`, straight on the note this time — that relation is
+single-valued per note by design, so when a note carries more than
+one such banner only the **last by position** writes it
+(`%last-replacing-banner`); the others still get their own
+`annotates` claim.
+
+Capture reflects the file as truth (`%assert-from-file`,
+`memory/write.lisp`): a later banner date, or a different link with a
+later start, is an ordinary supersession; a same-key banner that
+comes back re-dated, re-kinded, or with a link whose start is not
+later — cases `record-belief`'s own idempotent path or its
+successor-ordering check would otherwise silently miss or refuse — is
+a **correction**: retract the current claim, then record the file's
+current state fresh, inside the same transaction.
+
+`capture-memory-dir` takes a `:banners` keyword (default `T`); passing
+`:banners nil` restores unit 1's behaviour exactly — content beliefs
+only, no banner nodes or claims.
+
+`banner-listing` renders a directory's banners as capture-and-diff
+rows — per note in name order, per banner in position order,
+`(note position kind date link text-digest dated-p)` — diffed against
+`tests-memory/golden/banners.sexp` in the test suite.
+
 ## What this is not
 
 The tool surface is `docs/agent-tools.md` (kraison/cl-llm#14 unit 2);
-no LLM, no banner parsing (kraison/cl-llm#14 units 2 and 3) and no
-cross-namespace recall (#24).
+no cross-namespace recall (#24). Banner *parsing* is this module's
+(`memory/banners.lisp`, `memory/capture.lisp`); reading a banner and
+concluding what it overturns is a model's job, over the tool surface
+— `cl-llm/agent`'s `annotate-banners` (`docs/agent-tools.md`).
 And no registration: this tenant is map-less by design and proves
 nothing about it.
 

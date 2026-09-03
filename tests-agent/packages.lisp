@@ -12,4 +12,5 @@
                     (#:rag #:cl-llm.rag))
   ;; Shared with cl-llm/agent/prolog/tests (#14 unit 2); controller
   ;; ruling: kept under their existing %-names, no rename.
-  (:export #:with-stores #:%belief #:%tool #:%args #:%call #:+p+ #:+subj+))
+  (:export #:with-stores #:%belief #:%tool #:%args #:%call #:+p+ #:+subj+
+           #:%banner-dir))
