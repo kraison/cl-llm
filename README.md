@@ -232,6 +232,18 @@ reads it back as of its own instant, each cite resolved to the version
 believed then and flagged if it has moved since (kraison/cl-llm#14 unit
 1; `docs/agent-memory.md`).
 
+### Agent tools (`cl-llm/agent`)
+
+`make-agent-tools` builds the tools a model uses to read and write the
+agent memory: `recall`, `trace` and `decisions-citing` across a scope
+of stores; `conclude`, `conclude-absence` and `retract` into one
+writable store — every write a validated decision; `retrieve` and
+`plan-bounds` over the retrieval planner. The scope and every bound are
+the operator's at construction; the model names subjects, never
+stores. `cl-llm/agent/prolog` adds `query`, guarded free-text Prolog
+with effects off and budgets (it loads `graph-db/gui` until
+kraison/vivace-graph#322). Guide: [`docs/agent-tools.md`](docs/agent-tools.md).
+
 ### Graph-backed stores (`cl-llm/rag/vivace`)
 
 `cl-llm/rag/vivace` lets a persistent [vivace-graph](https://github.com/kraison/vivace-graph)

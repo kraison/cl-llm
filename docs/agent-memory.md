@@ -168,10 +168,26 @@ family order, `decisions-citing` by `recorded-at` descending then id.
 `trace-listing` renders decisions as rows for capture-and-diff
 (`tests-memory/golden/trace.sexp`).
 
+## Several stores
+
+`mem:define-memory-store` declares the `belief` and `trace` families
+and the `memory-note` source under a graph name of your choosing;
+`schema.lisp` is `(define-memory-store :cl-llm-memory)`, and a further
+store is one more call, e.g. `(define-memory-store :memory-private)`.
+The families' class names are shared across stores — that is the
+engine's model — so an evidence claim records **which store** the
+claim it cites was found in, in its `method` slot; `mem:trace` and
+`mem:decisions-citing` both take a `:scope` (a list of open graphs) to
+resolve those cross-store cites, defaulting to `(list graph)` when
+omitted. Building a tool surface a model calls over several stores —
+scope, caps, the writable one — is `docs/agent-tools.md`
+(kraison/cl-llm#14 unit 2).
+
 ## What this is not
 
-No tool surface, no bounded traversal, no LLM, no banner parsing
-(kraison/cl-llm#14 units 2 and 3) and no cross-namespace recall (#24).
+The tool surface is `docs/agent-tools.md` (kraison/cl-llm#14 unit 2);
+no LLM, no banner parsing (kraison/cl-llm#14 units 2 and 3) and no
+cross-namespace recall (#24).
 And no registration: this tenant is map-less by design and proves
 nothing about it.
 

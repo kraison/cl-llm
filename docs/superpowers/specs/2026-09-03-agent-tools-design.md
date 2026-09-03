@@ -299,7 +299,9 @@ deciding `truncated`, the GUI's own rule. Every refusal reaches the
 model as an error result carrying the guard's reason text — those
 reasons were written to be client-facing — and so do a resource bound
 and a permission refusal. A `store` outside the scope is an error
-result. Because the whitelist enumerates the store's schema types, the
+result. A store that declares edge types is refused up front, pending
+kraison/vivace-graph#322. Because the whitelist enumerates the store's
+schema types, the
 model can walk `belief` and `trace` vertices with the generic
 predicates and no tenant code.
 
