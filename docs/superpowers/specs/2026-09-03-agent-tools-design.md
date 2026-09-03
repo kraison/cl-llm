@@ -152,7 +152,11 @@ scope model:
    `(define-memory-store :cl-llm-memory)`; an operator declares
    `(define-memory-store :memory-private)` for each further store. The
    families' class names are shared, which is the engine's model
-   (§2).
+   (§2). Because DEF-CLAIM-CLASSES interns each family's derived
+   class names into `*PACKAGE*`, the macro expands those declarations
+   under `cl-llm.memory`'s own package rather than the caller's --
+   else a further store declared from another package mints
+   duplicate classes (kraison/vivace-graph#323).
 2. **Evidence records its store.** An `evidence` trace claim's `method`
    slot — unused by unit 1 — carries the **name of the store the cited
    claim was found in**, as a string. `conclude`'s `evidence` accepts a

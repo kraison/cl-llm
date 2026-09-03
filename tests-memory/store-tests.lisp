@@ -55,7 +55,9 @@ and the validators live there; the first store sees nothing of it."
                            :producer +p+ :rule "dup")))
       ;; same object, same start: RECORD-BELIEF's idempotent path
       (is (eq :concluded (mem:decision-outcome d))))
-    (is (string= "memory-private" (mem:store-name b)))))
+    (is (string= "memory-private" (mem:store-name b)))
+    (is (null (find-symbol "TRACE-BINARY" '#:cl-llm.memory/tests))
+        "no duplicate class minted in the caller's package (vg#323)")))
 
 (test evidence-records-the-store-it-was-found-in
   "SS4.2: a decision in store A resting on a claim from store B says so

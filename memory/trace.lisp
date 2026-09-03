@@ -88,7 +88,10 @@ resolves its own store, falling back to WRITE-STORE."
                        "a claim, a cite string, or (cite . store)"))))
 
 (defun %write-evidence (graph id pairs producer)
-  (dolist (pair (remove-duplicates pairs :key #'car :test #'string=))
+  ;; :FROM-END T: the first store recorded for a repeated cite wins,
+  ;; matching %VIOLATION-FAMILIES' first-per-family rule.
+  (dolist (pair (remove-duplicates pairs :key #'car :test #'string=
+                                   :from-end t))
     (%trace-claim graph id "evidence" :claim (car pair) producer :observed
                   :method (cdr pair))))
 
