@@ -222,6 +222,20 @@ rejects &KEY and &REST elsewhere)."
         unless (eq spec '&optional)
           collect (string-downcase (string (parameter-lambda-variable spec)))))
 
+(defun make-tool (name description parameters function)
+  "A TOOL from a DEFTOOL lambda list and a FUNCTION of those parameters
+in declaration order.  Not registered: closure tools are built per
+graph or per scope, not per image (agent-tools design SS4)."
+  (check-type description string)
+  (make-instance 'tool
+                 :name (string-downcase (string name))
+                 :description description
+                 :schema (derive-schema parameters)
+                 :function function
+                 :parameter-names (parameter-names parameters)
+                 :parameter-specs (mapcar #'parameter-spec-of
+                                          (remove '&optional parameters))))
+
 (defmacro deftool (name parameters docstring &body body)
   "Define NAME as an ordinary function AND register it as a tool the model may
 call. The JSON schema is derived from PARAMETERS and DOCSTRING.
@@ -246,14 +260,7 @@ when to call this tool")
          ,docstring
          ,@body)
        (register-tool
-        (make-instance 'tool
-                       :name ,(string-downcase (string name))
-                       :description ,docstring
-                       :schema (derive-schema ',parameters)
-                       :function #',name
-                       :parameter-names ',(parameter-names parameters)
-                       :parameter-specs (mapcar #'parameter-spec-of
-                                                 (remove '&optional ',parameters))))
+        (make-tool ',name ,docstring ',parameters #',name))
        ',name)))
 
 ;;; Calling
