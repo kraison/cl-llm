@@ -25,7 +25,27 @@ the tool loop shows the model the message."
 (defun %standing (keyword)
   (and keyword (string-downcase (symbol-name keyword))))
 
+(defun %find-keyword (string)
+  "STRING as the KEYWORD already interned under that name, or NIL --
+never mints one, so a namespace nothing was ever recorded under reads
+as an empty result, not an error.  For reads (SS6)."
+  (find-symbol (string-upcase string) :keyword))
+
+(defun %canonical-name-p (string)
+  "Non-empty and [a-z0-9-] only -- ST:CANONICAL-RELATION-P's rule
+(GH #160), mirrored here since that predicate is graph-db-internal."
+  (and (stringp string) (plusp (length string))
+       (every (lambda (ch)
+                (or (char<= #\a ch #\z) (char<= #\0 ch #\9)
+                    (char= ch #\-)))
+              string)))
+
 (defun %keyword (string)
+  "STRING as a KEYWORD, for writes: signals unless STRING is a
+canonical namespace name -- minting an uncanonical one would be
+unrecoverable -- then interns it (SS6)."
+  (unless (%canonical-name-p string)
+    (error "not a canonical namespace: ~s" string))
   (intern (string-upcase string) :keyword))
 
 (defun %bool (x) (if x :true :false))

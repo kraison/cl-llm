@@ -6,9 +6,9 @@
 
 (test make-agent-tools-needs-a-producer-and-a-write-store-in-scope
   (with-stores (w p)
-    (signals error (agent:make-agent-tools (list w p)))
-    (signals error (agent:make-agent-tools (list w) :write-store p
-                                                    :producer +p+))
+    (signals agent:scope-error (agent:make-agent-tools (list w p)))
+    (signals agent:scope-error
+      (agent:make-agent-tools (list w) :write-store p :producer +p+))
     (is (= 8 (length (agent:make-agent-tools (list w p) :producer +p+))))))
 
 (test recall-spans-the-scope-and-names-the-store
@@ -75,6 +75,40 @@ came from; the private store is invisible when out of scope."
                      "at" "2026-09-01T12:00:00Z")))
       (is (= 1 (length (json:jget r "records")))))))
 
+(test recall-interleaves-cross-store-newest-first
+  "Cross-store merge follows unit 1's newest-validity-first order --
+one store's newer record sorts ahead of another's older one regardless
+of scope order (spec SS6)."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "old") :start "2026-09-01T08:00:00Z")
+    (%belief p "ci-status" '(:verdict . "new") :start "2026-09-02T08:00:00Z")
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (r (%call tools "recall" "subject-namespace" "repo"
+                     "subject-key" "cl-llm" "relation" "ci-status")))
+      (is (equal '("new" "old")
+                 (map 'list (lambda (x) (json:jget x "object" "key"))
+                      (json:jget r "records")))))))
+
+(test recall-breaks-a-genuine-cross-store-tie-by-scope-order
+  "Equal validity start AND equal recorded-at: STABLE-SORT then keeps
+each row's pre-sort position, which is scope order (spec SS6)."
+  (with-stores (w p)
+    (let ((at (local-time:now)))
+      (%belief-at w "1" at)
+      (%belief-at p "1" at))
+    (let* ((wp (agent:make-agent-tools (list w p) :producer +p+))
+           (pw (agent:make-agent-tools (list p w) :producer +p+))
+           (r-wp (%call wp "recall" "subject-namespace" "repo"
+                        "subject-key" "cl-llm"))
+           (r-pw (%call pw "recall" "subject-namespace" "repo"
+                        "subject-key" "cl-llm")))
+      (is (equal '("cl-llm-memory" "memory-private")
+                 (map 'list (lambda (x) (json:jget x "store"))
+                      (json:jget r-wp "records"))))
+      (is (equal '("memory-private" "cl-llm-memory")
+                 (map 'list (lambda (x) (json:jget x "store"))
+                      (json:jget r-pw "records")))))))
+
 (test recall-of-nothing-is-an-empty-array-not-an-absence
   (with-stores (w p)
     (gdb:with-transaction (:graph w)
@@ -89,6 +123,26 @@ came from; the private store is invisible when out of scope."
       (let ((none (%call tools "recall" "subject-namespace" "repo"
                          "subject-key" "nothing-here")))
         (is (= 0 (length (json:jget none "records"))))))))
+
+(test recall-of-an-unknown-namespace-is-an-empty-array
+  "A namespace no belief was ever recorded under is never interned by
+%FIND-KEYWORD, so it reads as nothing recorded, not an error (SS6)."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (r (%call tools "recall" "subject-namespace"
+                     "totally-unknown-namespace-zzz"
+                     "subject-key" "cl-llm")))
+      (is (= 0 (length (json:jget r "records")))))))
+
+(test recall-of-a-malformed-timestamp-signals
+  (with-stores (w p)
+    (let ((tools (agent:make-agent-tools (list w p) :producer +p+)))
+      (signals llm:llm-tool-error
+        (llm:call-tool (%tool tools "recall")
+                       (%args "subject-namespace" "repo"
+                              "subject-key" "cl-llm"
+                              "at" "not-a-time"))))))
 
 (test trace-and-decisions-citing-across-the-scope
   (with-stores (w p)
@@ -112,6 +166,42 @@ came from; the private store is invisible when out of scope."
                      (json:jget (first (coerce (json:jget c "decisions")
                                                'list))
                                 "id")))))))
+
+(test trace-omits-store-for-an-out-of-scope-evidence-cite
+  "An evidence cite naming a store outside this tool set's scope
+resolves :ABSENT; it must not be rendered with a STORE anyway -- that
+would falsely suggest it was found (spec SS6)."
+  (with-stores (w p)
+    (let* ((private (%belief p "owner" '(:person . "kevin")))
+           (d (mem:conclude w (list :belief +subj+ "releasable"
+                                    '(:v . "yes") :standing :inferred)
+                            :producer +p+ :evidence (list private)
+                            :rule "r"))
+           (tools (agent:make-agent-tools (list w) :producer +p+))
+           (r (%call tools "trace" "decision-id" (mem:decision-id d)))
+           (ev (first (coerce (json:jget r "evidence") 'list))))
+      (is (string= "absent" (json:jget ev "state")))
+      (is (not (nth-value 1 (gethash "store" ev)))))))
+
+(test decisions-citing-orders-newest-first-across-stores
+  "The newer decision -- written into the second store -- sorts first,
+regardless of which store either lives in (spec SS5/SS6)."
+  (with-stores (w p)
+    (let* ((private (%belief p "owner" '(:person . "kevin")))
+           (d1 (mem:conclude w (list :belief +subj+ "releasable"
+                                     '(:v . "yes") :standing :inferred)
+                             :producer +p+ :evidence (list private)
+                             :rule "r1"))
+           (d2 (mem:conclude p (list :belief +subj+ "deployable"
+                                     '(:v . "yes") :standing :inferred)
+                             :producer +p+ :evidence (list private)
+                             :rule "r2"))
+           (tools (agent:make-agent-tools (list w p) :producer +p+))
+           (c (%call tools "decisions-citing"
+                     "cite" (mem:claim-cite private)))
+           (ids (map 'list (lambda (x) (json:jget x "id"))
+                     (json:jget c "decisions"))))
+      (is (equal (list (mem:decision-id d2) (mem:decision-id d1)) ids)))))
 
 (test trace-of-an-unknown-id-signals
   (with-stores (w p)

@@ -50,6 +50,21 @@
                        :producer +p+ :standing :observed
                        :extent (%open-from start))))
 
+(defun %belief-at (g object-key at)
+  "A CI-STATUS belief on +SUBJ+ in G, its validity start AND its
+RECORDED-AT both pinned to AT -- a genuine cross-store tie for a
+scope-order-tiebreak test.  %ST-NOW is strictly monotonic per image
+(GH #308) and RECORD-BELIEF never exposes :RECORDED-AT, so this goes
+straight to the raw constructor, which does."
+  (gdb:with-transaction (:graph g)
+    (mem:make-belief-binary
+     :graph g :subject-namespace (car +subj+) :subject-key (cdr +subj+)
+     :relation "ci-status" :object-namespace :verdict
+     :object-key object-key
+     :producer +p+ :standing :observed
+     :extent (%open-from "2026-09-01T08:00:00Z")
+     :recorded-at at)))
+
 (defun %tool (tools name)
   (or (find name tools :key #'llm:tool-name :test #'string=)
       (error "no tool ~a" name)))
