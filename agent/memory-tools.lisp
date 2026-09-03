@@ -110,28 +110,140 @@ conclusions rest on this belief."
                               (mem:store-name (%find-decision scope id))))
               ids)))))))
 
-;;; Stubs for Tasks 5-6.
+;;; Write tools: conclude, conclude-absence, retract.  Spec SS6.
+
+(defparameter +presence-standings+ '("inferred" "observed" "asserted"))
+(defparameter +absence-standings+
+  '("searched-empty" "indeterminate" "uncovered"))
+
+(defun %check-standing (string allowed)
+  (unless (member string allowed :test #'string=)
+    (error "standing must be one of ~{~a~^, ~}" allowed))
+  (%keyword string))
+
+(defun %evidence-pairs (scope evidence)
+  "(cite . store-name) per cite the model passed.  A cite CITE-STORE
+cannot resolve in scope is an error -- ruling: never silently charged
+to the write store (SS6)."
+  (loop for cite across (or evidence #())
+        for g = (or (cite-store scope cite)
+                    (error "cite ~a is not in scope" cite))
+        collect (cons cite (mem:store-name g))))
+
+(defun %decision-json (scope d)
+  (json:to-json
+   (json:jobject
+    "id" (mem:decision-id d)
+    "store" (mem:store-name (scope-write-store scope))
+    "outcome" (%standing (mem:decision-outcome d))
+    "claim-cite" (let ((c (mem:decision-claim d)))
+                   (and c (progn (note-cite scope (mem:claim-cite c)
+                                            (scope-write-store scope))
+                                 (mem:claim-cite c))))
+    "refusals" (map 'vector
+                    (lambda (f) (json:jobject "family" (car f)
+                                              "text" (cdr f)))
+                    (mem:decision-record-refusals
+                     (mem:trace (scope-write-store scope)
+                                (mem:decision-id d)))))))
 
 (defun %conclude-tool (scope)
-  (declare (ignore scope))
   (llm:make-tool
    "conclude"
-   "Not yet implemented."
-   '()
-   (lambda () (error "not implemented"))))
+   "Record a belief as a decision: subject relation object, under a
+named rule, citing the evidence (cites from earlier results).  The
+write is validated before it commits; a refusal comes back as outcome
+\"refused\" with the constraint families, and writes nothing.
+standing: inferred (default), observed or asserted.  valid-from: when
+the belief starts to hold (RFC 3339; default now)."
+   '((subject-namespace :type string) (subject-key :type string)
+     (relation :type string)
+     (object-namespace :type string) (object-key :type string)
+     (rule :type string)
+     (evidence :type (list string) :optional t)
+     (standing :type string :default "inferred")
+     (confidence :type number :optional t)
+     (rule-version :type string :optional t)
+     (valid-from :type string :optional t))
+   (lambda (subject-namespace subject-key relation object-namespace
+            object-key rule evidence standing confidence rule-version
+            valid-from)
+     (let* ((st (%check-standing standing +presence-standings+))
+            (extent (and valid-from
+                         (te:make-interval
+                          (te:exact-bound (%parse-iso valid-from))
+                          (te:unknown-bound)
+                          :semantics :validity :standing :asserted)))
+            (d (mem:conclude
+                (scope-write-store scope)
+                (append (list :belief
+                              (cons (%keyword subject-namespace)
+                                    subject-key)
+                              relation
+                              (cons (%keyword object-namespace)
+                                    object-key)
+                              :standing st)
+                        (and extent (list :extent extent)))
+                :producer (scope-producer scope)
+                :evidence (%evidence-pairs scope evidence)
+                :rule rule :rule-version rule-version
+                :confidence confidence)))
+       (%decision-json scope d)))))
 
 (defun %conclude-absence-tool (scope)
-  (declare (ignore scope))
   (llm:make-tool
    "conclude-absence"
-   "Not yet implemented."
-   '()
-   (lambda () (error "not implemented"))))
+   "Record that you looked and found nothing, as a decision: standing
+searched-empty (looked in a nameable place, nothing there),
+indeterminate (could not find out) or uncovered (nothing has looked).
+Validated and traced like conclude."
+   '((subject-namespace :type string) (subject-key :type string)
+     (relation :type string) (rule :type string)
+     (standing :type string)
+     (evidence :type (list string) :optional t)
+     (rule-version :type string :optional t))
+   (lambda (subject-namespace subject-key relation rule standing
+            evidence rule-version)
+     (let ((d (mem:conclude
+               (scope-write-store scope)
+               (list :absence
+                     (cons (%keyword subject-namespace) subject-key)
+                     relation
+                     :standing (%check-standing standing
+                                                 +absence-standings+))
+               :producer (scope-producer scope)
+               :evidence (%evidence-pairs scope evidence)
+               :rule rule :rule-version rule-version)))
+       (%decision-json scope d)))))
 
 (defun %retract-tool (scope)
-  (declare (ignore scope))
   (llm:make-tool
    "retract"
-   "Not yet implemented."
-   '()
-   (lambda () (error "not implemented"))))
+   "Say a belief was wrong: close its transaction period, leaving its
+validity as recorded.  Only beliefs in the writable store; a cite from
+a read-only store is an error."
+   '((cite :type string))
+   (lambda (cite)
+     (let ((g (cite-store scope cite)))
+       (unless g (error "no claim for cite ~a in scope" cite))
+       (unless (eq g (scope-write-store scope))
+         (error "store ~a is not writable in this scope"
+                (mem:store-name g)))
+       (multiple-value-bind (family ns key) (mem:split-cite cite)
+         (let ((claim (find cite
+                            (st:claims-touching g family ns key
+                                                :role :subject)
+                            :key #'mem:claim-cite :test #'string=)))
+           (unless claim (error "no claim for cite ~a" cite))
+           (let ((retracted
+                   (gdb:with-transaction (:graph g)
+                     (mem:retract-belief claim))))
+             (json:to-json
+              (json:jobject
+               "cite" cite
+               "store" (mem:store-name g)
+               "retracted-at"
+               (%iso (te:bound-latest
+                      (te:extent-end
+                       (st:claim-transaction-extent
+                        retracted)))))))))))))

@@ -209,3 +209,142 @@ regardless of which store either lives in (spec SS5/SS6)."
       (signals llm:llm-tool-error
         (llm:call-tool (%tool tools "trace")
                        (%args "decision-id" "nope"))))))
+
+(test conclude-writes-a-decision-into-the-write-store-citing-what-it-read
+  (with-stores (w p)
+    (%belief p "owner" '(:person . "kevin"))
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (r (%call tools "recall" "subject-namespace" "repo"
+                     "subject-key" "cl-llm"))
+           (cite (json:jget (first (coerce (json:jget r "records") 'list))
+                            "cite"))
+           (c (%call tools "conclude"
+                     "subject-namespace" "repo" "subject-key" "cl-llm"
+                     "relation" "releasable"
+                     "object-namespace" "verdict" "object-key" "yes"
+                     "rule" "owner-says" "rule-version" "1"
+                     "evidence" (vector cite) "confidence" 0.8)))
+      (is (string= "concluded" (json:jget c "outcome")))
+      (is (string= "cl-llm-memory" (json:jget c "store")))
+      (is (mem:cite-p (json:jget c "claim-cite")))
+      (is (= 0 (length (json:jget c "refusals"))))
+      (let ((t2 (%call tools "trace" "decision-id" (json:jget c "id"))))
+        (is (string= "owner-says" (json:jget t2 "rule")))
+        (is (string= cite (json:jget (first (coerce (json:jget t2 "evidence")
+                                                   'list))
+                                     "cite")))
+        (is (string= "memory-private"
+                     (json:jget (first (coerce (json:jget t2 "evidence")
+                                               'list))
+                                "store"))))
+      (is (= 1 (length (mem:recall w +subj+ :relation "releasable"))))
+      (is (null (mem:recall p +subj+ :relation "releasable"))
+          "control: the private store gained nothing"))))
+
+(test conclude-standing-defaults-to-inferred-and-is-checked
+  (with-stores (w p)
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (c (%call tools "conclude"
+                     "subject-namespace" "repo" "subject-key" "cl-llm"
+                     "relation" "x" "object-namespace" "v" "object-key" "1"
+                     "rule" "r")))
+      (is (string= "concluded" (json:jget c "outcome")))
+      (is (eq :inferred (st:claim-standing
+                         (mem:belief-record-claim
+                          (first (mem:recall w +subj+ :relation "x"))))))
+      (signals llm:llm-tool-error
+        (llm:call-tool (%tool tools "conclude")
+                       (%args "subject-namespace" "repo" "subject-key" "cl-llm"
+                              "relation" "y" "object-namespace" "v"
+                              "object-key" "1" "rule" "r"
+                              "standing" "searched-empty"))))))
+
+(test a-refused-conclude-is-a-result-the-model-can-read
+  "SS6: refusal is data.  A lapsed belief re-asserted inside its own
+window trips the validator; no belief is written."
+  (with-stores (w p)
+    (gdb:with-transaction (:graph w)
+      (mem:record-belief w +subj+ "ci-status" '(:verdict . "green")
+                         :producer +p+ :standing :observed
+                         :extent (te:make-interval
+                                  (te:exact-bound (%ts "2026-01-01T00:00:00Z"))
+                                  (te:exact-bound (%ts "2026-03-01T00:00:00Z"))
+                                  :semantics :validity :standing :asserted)))
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (c (%call tools "conclude"
+                     "subject-namespace" "repo" "subject-key" "cl-llm"
+                     "relation" "ci-status" "object-namespace" "verdict"
+                     "object-key" "green" "rule" "r" "standing" "observed"
+                     "valid-from" "2026-02-01T00:00:00Z")))
+      (is (string= "refused" (json:jget c "outcome")))
+      (is (null (json:jget c "claim-cite")))
+      (is (string= "subsystem"
+                   (json:jget (first (coerce (json:jget c "refusals") 'list))
+                              "family")))
+      (is (= 1 (length (mem:recall w +subj+ :relation "ci-status"
+                                   :include-retracted t)))
+          "nothing new was written"))))
+
+(test conclude-absence-writes-a-unary-decision
+  (with-stores (w p)
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (c (%call tools "conclude-absence"
+                     "subject-namespace" "repo" "subject-key" "cl-llm"
+                     "relation" "release-date" "rule" "looked"
+                     "standing" "searched-empty")))
+      (is (string= "concluded" (json:jget c "outcome")))
+      (let ((r (first (mem:recall w +subj+ :relation "release-date"))))
+        (is (typep (mem:belief-record-claim r) 'mem:belief-unary))
+        (is (eq :searched-empty (mem:belief-record-standing r)))))))
+
+(test retract-acts-on-the-write-store-only
+  (with-stores (w p)
+    (let* ((own (%belief w "ci-status" '(:verdict . "green")))
+           (theirs (%belief p "owner" '(:person . "kevin")))
+           (tools (agent:make-agent-tools (list w p) :producer +p+))
+           (r (%call tools "retract" "cite" (mem:claim-cite own))))
+      (is (string= (mem:claim-cite own) (json:jget r "cite")))
+      (is (stringp (json:jget r "retracted-at")))
+      (is (null (mem:recall w +subj+ :relation "ci-status")))
+      (signals llm:llm-tool-error
+        (llm:call-tool (%tool tools "retract")
+                       (%args "cite" (mem:claim-cite theirs))))
+      (is (= 1 (length (mem:recall p +subj+ :relation "owner")))
+          "control: the private belief stands")
+      (signals llm:llm-tool-error
+        (llm:call-tool (%tool tools "retract")
+                       (%args "cite" (mem:claim-cite own)))
+        "already retracted"))))
+
+(test conclude-rejects-a-noncanonical-namespace-and-writes-nothing
+  "Controller ruling 2: every namespace the model supplies to a write
+tool goes through the validating %KEYWORD, so a namespace that is not
+[a-z0-9-]+ is a tool error, never a silent intern."
+  (with-stores (w p)
+    (let ((tools (agent:make-agent-tools (list w p) :producer +p+)))
+      (signals llm:llm-tool-error
+        (llm:call-tool (%tool tools "conclude")
+                       (%args "subject-namespace" "Repo Name"
+                              "subject-key" "cl-llm"
+                              "relation" "x" "object-namespace" "v"
+                              "object-key" "1" "rule" "r")))
+      (is (null (mem:recall w +subj+ :relation "x")))
+      (is (null (mem:recall p +subj+ :relation "x"))
+          "control: nothing was written anywhere"))))
+
+(test conclude-signals-on-an-evidence-cite-out-of-scope
+  "Controller ruling 3: a cite the model passed that CITE-STORE cannot
+resolve in scope is an error, never silently charged to the write
+store."
+  (with-stores (w p)
+    (let* ((theirs (%belief p "owner" '(:person . "kevin")))
+           (tools (agent:make-agent-tools (list w) :producer +p+)))
+      (signals llm:llm-tool-error
+        (llm:call-tool (%tool tools "conclude")
+                       (%args "subject-namespace" "repo"
+                              "subject-key" "cl-llm"
+                              "relation" "x" "object-namespace" "v"
+                              "object-key" "1" "rule" "r"
+                              "evidence" (vector (mem:claim-cite theirs)))))
+      (is (null (mem:recall w +subj+ :relation "x"))
+          "nothing was written"))))
