@@ -3,28 +3,23 @@
 
 (in-package #:cl-llm.agent.prolog)
 
+(defun %json-cell (value)
+  "VALUE as a jzon-writable JSON cell: NIL becomes the symbol NULL, so
+CL-LLM.JSON:TO-JSON emits \"null\" rather than \"false\" (src/json.lisp's
+header; jzon's WRITE-VALUE treats (EQL NIL) and (EQL NULL) as distinct
+atoms).  An unbound query variable or an empty slot parses to NIL from
+the engine's own JSON, and the two cases are indistinguishable once
+parsed, so every NIL cell here is a JSON null, never false."
+  (or value 'null))
+
 (defun %guarded-rows (graph text limit max-inferences timeout)
   "Read, guard and run TEXT against GRAPH; (values columns rows
-truncated-p).  Every symbol below is the GUI's #279 pipeline and the
-DSL runner, all internal: kraison/vivace-graph#322 asks for an
-exported RUN-GUARDED-PROLOG in a web-free subsystem, at which point
-this body becomes one call.
-
-:PACKAGE is GRAPH-DB itself, not (%SCHEMA-PACKAGE GRAPH): RUN-QUERY-
-GOALS binds it around EVAL, and COMPILE-CALL's MAKE-FUNCTOR-SYMBOL
-re-interns each goal head's bare name into whatever *PACKAGE* is at
-that point, discarding the head's own home package -- so a global
-functor (IS-A/2, NODE-SLOT-VALUE/3) only resolves back to its
-registry entry when the interning package already has that exact
-symbol, i.e. is GRAPH-DB or :USEs it.  CL-LLM.MEMORY does neither
-(deliberately -- it :SHADOWs TRACE against CL:TRACE and stays plain
-:USE CL rather than pull in GRAPH-DB's namespace too), so
-%SCHEMA-PACKAGE here resolves to CL-LLM.MEMORY and every free-text
-global-functor goal head 404s as \"unknown Prolog functor\".  GRAPH-DB
-is correct for every schema this tool serves: DEF-CLAIM-CLASSES
-(memory/schema.lisp) declares vertex types only, never a DEF-EDGE, so
-there is no schema-owned edge functor whose resolution needs the
-schema's own package."
+truncated-p).  :PACKAGE is GRAPH-DB, not the schema package: the
+runner re-interns heads there and CL-LLM.MEMORY does not use GRAPH-DB
+(kraison/vivace-graph#322); a store with edge types is refused below."
+  (when (graph-db.gui::%schema-type-names graph :edge)
+    (error "store ~a declares edge types; free-text queries over them ~
+wait on kraison/vivace-graph#322" (mem:store-name graph)))
   (let ((scratch (graph-db.gui::%make-scratch-package)))
     (unwind-protect
          (multiple-value-bind (vars goals)
@@ -50,28 +45,33 @@ schema's own package."
                      truncated)))
       (delete-package scratch))))
 
+(defun %find-store (stores store)
+  "The graph named STORE in STORES, or the first when STORE is NIL."
+  (if store
+      (or (find store stores :key #'mem:store-name :test #'string=)
+          (error "store ~s is not in this scope" store))
+      (first stores)))
+
 (defun make-query-tool (stores &key (max-rows 50) (max-inferences 100000)
                                     (timeout 5))
   "The QUERY tool over STORES (names a model may pass as store; the
 first is the default).  Effects off, one snapshot, MAX-INFERENCES and
-TIMEOUT (seconds) and MAX-ROWS are the operator's (SS8)."
+TIMEOUT (seconds) are the operator's; MAX-ROWS too, further clamped by
+the engine's own GRAPH-DB:*QUERY-DEFAULT-LIMIT* (1000, SS8)."
   (llm:make-tool
    "query"
    "Run a read-only Prolog query against one memory store and get rows
 back.  Goals are parenthesised forms over the store's own vertex
 types and slots, e.g. (is-a ?c belief-binary) (node-slot-value ?c
-relation ?r); ?variables become columns.  No side effects; bounded in
-inferences, time and rows.  store names which store (default the
-first); limit caps rows."
+relation ?r); ?variables become columns, camelCased by the engine
+(?valid-from -> validFrom).  No side effects; bounded in inferences,
+time and rows.  store names which store (default the first); limit
+caps rows."
    '((text :type string)
      (store :type string :optional t)
      (limit :type integer :optional t))
    (lambda (text store limit)
-     (let ((graph (if store
-                       (or (find store stores :key #'mem:store-name
-                                 :test #'string=)
-                           (error "store ~s is not in this scope" store))
-                       (first stores))))
+     (let ((graph (%find-store stores store)))
        (multiple-value-bind (columns rows truncated)
            (%guarded-rows graph text (agent:clamp limit max-rows)
                           max-inferences timeout)
@@ -81,6 +81,8 @@ first); limit caps rows."
            "columns" (coerce columns 'vector)
            "rows" (map 'vector
                        (lambda (row)
-                         (map 'vector (lambda (c) (gethash c row)) columns))
+                         (map 'vector
+                              (lambda (c) (%json-cell (gethash c row)))
+                              columns))
                        rows)
            "truncated" (agent:json-bool truncated))))))))
