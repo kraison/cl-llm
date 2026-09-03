@@ -236,13 +236,14 @@ believed then and flagged if it has moved since (kraison/cl-llm#14 unit
 
 `make-agent-tools` builds the tools a model uses to read and write the
 agent memory: `recall`, `trace` and `decisions-citing` across a scope
-of stores; `conclude`, `conclude-absence` and `retract` into one
-writable store — every write a validated decision; `retrieve` and
-`plan-bounds` over the retrieval planner. The scope and every bound are
-the operator's at construction; the model names subjects, never
-stores. `cl-llm/agent/prolog` adds `query`, guarded free-text Prolog
-with effects off and budgets (it loads `graph-db/gui` until
-kraison/vivace-graph#322). Guide: [`docs/agent-tools.md`](docs/agent-tools.md).
+of stores; `conclude` and `conclude-absence` into one writable store,
+each a validated decision with a trace, and `retract` to say a belief
+was wrong; `retrieve` and `plan-bounds` over the retrieval planner.
+The scope and every bound are the operator's at construction; the
+model names subjects, never stores. `cl-llm/agent/prolog` adds
+`query`, guarded free-text Prolog with effects off and budgets (it
+loads `graph-db/gui` until kraison/vivace-graph#322). Guide:
+[`docs/agent-tools.md`](docs/agent-tools.md).
 
 ### Graph-backed stores (`cl-llm/rag/vivace`)
 

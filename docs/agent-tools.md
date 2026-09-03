@@ -87,14 +87,14 @@ close over their own scope, so several scopes in one image are simply
 several tool sets — a test builds its own over its own on-disk
 stores, and nothing here is process-global.
 
-One further thing the tools do on the model's behalf: a namespace
-string the model sends on a write — `subject-namespace`,
-`object-namespace`, an endpoint's namespace half — is validated
-canonical (`[a-z0-9-]+`) and then interned as a keyword. The alphabet
-is bounded but the count is not: any canonical string the model
-invents becomes a namespace, there and then, with no registry to
-consult first. A read never mints one — an unrecognised namespace
-just reads back as nothing recorded, never an error.
+One further thing the tools do on the model's behalf: every
+namespace the model sends, on a write or in an endpoint, is
+validated as canonical (`[a-z0-9-]+`) and then interned as a
+keyword. The alphabet is bounded but the count is not: any canonical
+string the model invents becomes a namespace, there and then, with
+no registry to consult first. A read never mints one — an
+unrecognised namespace just reads back as nothing recorded, never an
+error.
 
 ## The tools
 
@@ -148,6 +148,7 @@ Parameters: `decision-id`.
   "at": "2026-09-03T10:00:00.000000Z",
   "rule": "owner-says",
   "rule-version": "1",
+  "confidence": 0.8,
   "outcome": "concluded",
   "conclusion": {
     "store": "cl-llm-memory",
@@ -170,14 +171,16 @@ Parameters: `decision-id`.
 ```
 
 Found in whichever store of the scope holds it — decision ids are
-random and unique. Each evidence cite resolves in the store its
-evidence claim names, when that store is in scope; a cite naming a
-store the tool set was not built with reports `state: "absent"` and
-carries **no `store` key at all** — never falling back to the
-decision's own store, which would falsely suggest it was found. A
-refused decision has no `conclusion` and no `rule`/`rule-version`
-(omitted); `refusals` is `[{"family": ..., "text": ...}]`, one per
-constraint family that objected.
+random and unique. `confidence` is present when the decision that
+made the claim gave one (omitted otherwise). Each evidence cite
+resolves in the store its evidence claim names, when that store is
+in scope; a cite naming a store the tool set was not built with
+reports `state: "absent"` and carries **no `store` key at all** —
+never falling back to the decision's own store, which would falsely
+suggest it was found. A refused decision has no `conclusion` and no
+`rule`/`rule-version`/`confidence` (omitted); `refusals` is
+`[{"family": ..., "text": ...}]`, one per constraint family that
+objected.
 
 ### `decisions-citing`
 

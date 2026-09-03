@@ -294,16 +294,14 @@ the construction values. Rows return as
 {"store": ..., "columns": [...], "rows": [[...] ...], "truncated": bool}
 ```
 
-with `limit` clamped to `max-rows` and one probe row past the cap
-deciding `truncated`, the GUI's own rule. Every refusal reaches the
-model as an error result carrying the guard's reason text — those
-reasons were written to be client-facing — and so do a resource bound
-and a permission refusal. A `store` outside the scope is an error
-result. A store that declares edge types is refused up front, pending
-kraison/vivace-graph#322. Because the whitelist enumerates the store's
-schema types, the
-model can walk `belief` and `trace` vertices with the generic
-predicates and no tenant code.
+with `limit` clamped to `max-rows` and one probe row past the cap deciding
+`truncated`, the GUI's own rule. Every refusal reaches the model as an error
+result carrying the guard's reason text — those reasons were written to be
+client-facing — and so do a resource bound and a permission refusal. A
+`store` outside the scope is an error result. A store that declares edge
+types is refused up front, pending kraison/vivace-graph#322. Because the
+whitelist enumerates the store's schema types, the model can walk `belief`
+and `trace` vertices with the generic predicates and no tenant code.
 
 All of it lives in `%guarded-rows`, the one function allowed to name
 `graph-db.gui::` and `graph-db::` symbols, and its docstring cites
