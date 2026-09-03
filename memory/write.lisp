@@ -135,11 +135,11 @@ OBJECT with a later validity start -- gets one, as always.  Anything
 else that actually changed (the same OBJECT with a moved start or a
 different METHOD; or a different OBJECT with a non-later start, which
 RECORD-BELIEF would otherwise refuse) is a CORRECTION: the current
-belief is wrong about when or what, so RETRACT-BELIEF it, then make
-the file's current state fresh -- not via RECORD-BELIEF, whose own
-predecessor lookup would still see PRED as current, the retraction
-being invisible to a fresh query within this same transaction until
-it commits.  Must run inside the caller's WITH-TRANSACTION."
+belief is wrong about when or what, so RETRACT-BELIEF it, then record
+the file's current state fresh through RECORD-BELIEF, whose
+predecessor lookup sees the retraction within this same transaction
+(kraison/vivace-graph#324).  Must run inside the caller's
+WITH-TRANSACTION."
   (let* ((start (te:bound-earliest (te:extent-start extent)))
          (pred (%current-predecessor graph producer subject relation)))
     (if (and pred
@@ -152,13 +152,9 @@ it commits.  Must run inside the caller's WITH-TRANSACTION."
                                              start))))
         (progn
           (retract-belief pred)
-          (make-belief-binary
-           :graph graph
-           :subject-namespace (car subject) :subject-key (cdr subject)
-           :relation relation
-           :object-namespace (car object) :object-key (cdr object)
-           :producer producer :standing :asserted :extent extent
-           :method method))
+          (record-belief graph subject relation object
+                         :producer producer :standing :asserted
+                         :method method :extent extent))
         (record-belief graph subject relation object
                        :producer producer :standing :asserted
                        :method method :extent extent))))

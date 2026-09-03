@@ -26,19 +26,6 @@ kraison/vivace-graph#321)."
 (defun cite-p (x)
   (and (stringp x) (search "::" x) (position #\| x) t))
 
-(defun %split-escaped (string)
-  "STRING's |-separated fields, honouring \\ escapes -- the inverse of the
-engine's rendering, kept here until kraison/vivace-graph#321 lands."
-  (let ((fields '()) (buf (make-string-output-stream)) (esc nil))
-    (loop for ch across string
-          do (cond (esc (write-char ch buf) (setf esc nil))
-                   ((char= ch #\\) (setf esc t))
-                   ((char= ch #\|)
-                    (push (get-output-stream-string buf) fields))
-                   (t (write-char ch buf))))
-    (push (get-output-stream-string buf) fields)
-    (nreverse fields)))
-
 (defun %parse-family (string)
   (let ((sep (search "::" string)))
     (unless sep (%arg-error :cite string "no package-qualified family"))
@@ -53,28 +40,22 @@ engine's rendering, kept here until kraison/vivace-graph#321 lands."
 (defun split-cite (cite)
   "Four values: the family's parent symbol, the subject namespace
 keyword, the subject key, and the identity key.  A cite the engine did
-not render is a BELIEF-ARGUMENT-ERROR -- including one whose namespace
-is not canonical, so no caller string can mint an unrecoverable
-keyword (#14 unit 2 final review)."
+not render is a BELIEF-ARGUMENT-ERROR.  The identity key's split, its
+escape rule and the namespace rule -- canonical, THEN interned, so no
+caller string can mint an unrecoverable keyword (#14 unit 2 final
+review) -- are the engine's SPLIT-CLAIM-IDENTITY-KEY
+(kraison/vivace-graph#321)."
   (unless (cite-p cite) (%arg-error :cite cite "not a cite"))
   (let* ((bar (position #\| cite))
          (family (%parse-family (subseq cite 0 bar)))
-         (ikey (subseq cite (1+ bar)))
-         (fields (%split-escaped ikey)))
-    (unless (>= (length fields) 4)
-      (%arg-error :cite cite "identity key has fewer than four fields"))
-    (let ((ns (second fields)))
-      (unless (and (plusp (length ns)) (char= #\: (char ns 0)))
-        (%arg-error :cite cite "subject namespace is not a keyword"))
-      ;; The write path's rule (%KEYWORD, agent/render.lisp): validate,
-      ;; then intern -- growth is bounded to canonical names.  FIND-SYMBOL
-      ;; alone was wrong: a fresh image's first TRACE would fail on a
-      ;; namespace nothing had been read under yet (#14 unit 2 review).
-      (let ((name (subseq ns 1)))
-        (unless (st:canonical-relation-p name)
-          (%arg-error :cite cite "subject namespace is not canonical"))
-        (values family (intern (string-upcase name) :keyword)
-                (third fields) ikey)))))
+         (ikey (subseq cite (1+ bar))))
+    (multiple-value-bind (producer namespace key)
+        (handler-case (st:split-claim-identity-key ikey)
+          (st:malformed-claim-identity-key ()
+            (%arg-error :cite cite
+                        "identity key is not one the engine rendered")))
+      (declare (ignore producer))
+      (values family namespace key ikey))))
 
 (defstruct cite-record
   "One cite resolved AS OF an instant (SS5).  STATE is :RESOLVED, :REAPED
