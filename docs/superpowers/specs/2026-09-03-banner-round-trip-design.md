@@ -124,9 +124,9 @@ it has.
 Idempotency is unit 1's: the same banner captured twice is the same
 identity tuple on both node and beliefs, a no-op; a banner edited in
 place updates the node's text under the same identity and the beliefs
-stand; a banner that gains a date moves nothing — the belief's validity
-start is part of its identity, so a changed date is a new belief and
-the old one supersedes, which is exactly what happened to the note.
+stand; a banner whose date changes writes a new belief, because the
+validity start is part of the identity, and unit 1's rule closes the
+earlier one — a supersession, which is what happened to the banner.
 
 **Capture.** `capture-memory-dir` gains the banner pass: after the
 note's content belief, scan the body and record each banner in the same
