@@ -85,24 +85,24 @@ Inside `define-memory-store`, a third source beside `memory-note`:
 
 ```lisp
 (st:def-source memory-banner ,graph-name
-    ((banner-key      :type string)     ; "<note>#<n>", the identity
-     (banner-note     :type string)     ; the note's name
-     (banner-position :type integer)
-     (banner-kind     :type string)     ; "superseded" "update" ...
-     (banner-date     :type string)     ; RFC 3339, or the note's MODIFIED
-     (banner-dated-p  :type boolean)    ; NIL when DATE fell back
-     (banner-link     :type string)     ; "" when none
-     (banner-text     :type string))
-  :identity     (:namespace :banner :key-slot banner-key)   ; "<note>#<n>"
+    ((bn-key      :type string)     ; "<note>#<n>", the identity
+     (bn-note     :type string)     ; the note's name
+     (bn-position :type integer)
+     (bn-kind     :type string)     ; "superseded" "update" ...
+     (bn-date     :type string)     ; RFC 3339, or the note's MODIFIED
+     (bn-dated-p  :type boolean)    ; NIL when DATE fell back
+     (bn-link     :type string)     ; "" when none
+     (bn-text     :type string))
+  :identity     (:namespace :banner :key-slot bn-key)   ; "<note>#<n>"
   :space        :none
   :time         (:extent-fn memory-banner-validity-extent) ; [date, unknown)
   :attribution  :none
   :sensitivity  (:class :restricted)
   :registration :none
-  :indexed-text (:text-fn banner-text))
+  :indexed-text (:text-fn bn-text))
 ```
 
-`banner-key` is `"<note>#<position>"`, so `(:banner . "android-ecl-port#1")`
+`bn-key` is `"<note>#<position>"`, so `(:banner . "android-ecl-port#1")`
 names the banner from any claim. The text on the node is the
 **without-loss** half: `retrieve` finds it and a reader can quote it.
 
@@ -111,8 +111,13 @@ validity `[date, unknown)`:
 
 | relation | object | when |
 |---|---|---|
-| `carries` | `(:banner . "<note>#<n>")`, `method` = kind | every banner |
+| `annotates` | subject `(:banner . "<note>#<n>")`, object `(:memory-note . name)`, `method` = kind | every banner |
 | `superseded-by` | `(:memory-note . <link>)` | `superseded` and `stale` banners with a link |
+
+The banner is the subject because a note may carry several banners and
+a belief series is single-valued per subject and relation (unit 1 §4);
+a reader reaches a note's banners through claims touching the note as
+object, which `retrieve` and `claims-touching :role :either` do.
 
 An `update` or `correction` is an addendum: it corrects part of a note,
 it does not replace the note, so it never writes `superseded-by` even
@@ -152,9 +157,9 @@ with an `update`, `correction` or `stale` banner, and for each runs one
 a tool set of **three**: `recall`, `retrieve`, `conclude`. The system
 prompt states the job in the tools' vocabulary:
 
-> You are annotating one note of an agent's memory. Call `recall` on
-> subject-namespace `memory-note`, subject-key `<name>`, to read its
-> claims; the record with relation `carries` is the banner. Read the
+> You are annotating one note of an agent's memory. Call `retrieve`
+> with endpoint `memory-note:<name>`; the item whose relation is
+> `annotates` is the banner, and its `cite` is your evidence. Read the
 > banner text (retrieve with endpoint `banner:<name>#<n>` if you need
 > it). Then call `conclude` once: subject-namespace `memory-note`,
 > subject-key `<name>`, relation `overturns`, object-namespace

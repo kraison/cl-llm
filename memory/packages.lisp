@@ -18,6 +18,8 @@
    #:make-trace-unary #:make-trace-binary
    #:memory-note #:note-name #:note-description #:note-type
    #:note-modified #:note-body
+   #:memory-banner #:make-memory-banner #:bn-key #:bn-note
+   #:bn-position #:bn-kind #:bn-date #:bn-dated-p #:bn-link #:bn-text
    ;; write
    #:record-belief #:record-absence #:retract-belief
    #:belief-argument-error #:belief-successor-before-predecessor
@@ -32,6 +34,7 @@
    ;; banners
    #:banner #:scan-banners #:banner-kind #:banner-position
    #:banner-date #:banner-link #:banner-text #:banner-line
+   #:banner-listing
    ;; cite
    #:claim-cite #:cite-p #:split-cite #:resolve-cite
    #:cite-record #:cite-record-cite #:cite-record-family

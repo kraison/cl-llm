@@ -58,7 +58,59 @@ filesystem."
 (defun %existing-note (graph name)
   (first (gdb:index-lookup graph 'memory-note 'note-name name)))
 
-(defun %capture-note (graph path producer)
+(defparameter +iso-date-format+
+  '((:year 4) #\- (:month 2) #\- (:day 2) #\T (:hour 2) #\: (:min 2)
+    #\: (:sec 2) :gmt-offset-or-z)
+  "RFC3339 without fractional seconds -- FORMAT-RFC3339-TIMESTRING
+always emits microseconds, which a banner's midnight date has none of.")
+
+(defun %iso-date (ts)
+  (local-time:format-timestring nil ts :format +iso-date-format+
+                                :timezone local-time:+utc-zone+))
+
+(defun %capture-banner (graph name banner modified producer)
+  "One banner as a node and its beliefs (banners spec SS4)."
+  (let* ((key (format nil "~a#~a" name (banner-position banner)))
+         (dated (banner-date banner))
+         (date (if dated (%iso-date dated) modified))
+         (kind (string-downcase (symbol-name (banner-kind banner))))
+         (old (first (gdb:index-lookup graph 'memory-banner
+                                       'bn-key key))))
+    (if old
+        (let ((c (gdb:copy old)))
+          (setf (bn-note c) name
+                (bn-position c) (banner-position banner)
+                (bn-kind c) kind
+                (bn-date c) date
+                (bn-dated-p c) (and dated t)
+                (bn-link c) (or (banner-link banner) "")
+                (bn-text c) (banner-text banner))
+          (gdb:save c))
+        (make-memory-banner :graph graph
+                            :bn-key key
+                            :bn-note name
+                            :bn-position (banner-position banner)
+                            :bn-kind kind
+                            :bn-date date
+                            :bn-dated-p (and dated t)
+                            :bn-link (or (banner-link banner) "")
+                            :bn-text (banner-text banner)))
+    (let ((extent (te:make-interval
+                   (te:exact-bound (local-time:parse-timestring date))
+                   (te:unknown-bound)
+                   :semantics :validity :standing :asserted)))
+      (record-belief graph (cons :banner key) "annotates"
+                     (cons :memory-note name)
+                     :producer producer :standing :asserted
+                     :method kind :extent extent)
+      (when (and (banner-link banner)
+                 (member (banner-kind banner) '(:superseded :stale)))
+        (record-belief graph (cons :memory-note name) "superseded-by"
+                       (cons :memory-note (banner-link banner))
+                       :producer producer :standing :asserted
+                       :extent extent)))))
+
+(defun %capture-note (graph path producer banners)
   (multiple-value-bind (fm body) (read-frontmatter path)
     (let* ((name (or (getf fm :name) (pathname-name path)))
            (modified (%note-modified fm path))
@@ -83,24 +135,29 @@ filesystem."
                      :producer producer :standing :asserted
                      :extent (te:make-interval
                               (te:exact-bound start) (te:unknown-bound)
-                              :semantics :validity :standing :asserted)))))
+                              :semantics :validity :standing :asserted))
+      (when banners
+        (dolist (b (scan-banners body))
+          (%capture-banner graph name b modified producer))))))
 
 (defun %note-files (dir)
   (sort (remove "MEMORY" (uiop:directory-files dir "*.md")
                 :key #'pathname-name :test #'string=)
         #'string< :key #'pathname-name))
 
-(defun capture-memory-dir (graph dir &key producer)
+(defun capture-memory-dir (graph dir &key producer (banners t))
   "One MEMORY-NOTE per *.md in DIR (MEMORY.md, the index, excluded) and
 one content belief per note under PRODUCER.  A note whose body changed
 since the last capture gets a new content claim that SUPERSEDES the old
-one; an unchanged note is idempotent.  One transaction per note.
-Returns the number of notes captured."
+one; an unchanged note is idempotent.  When BANNERS (default T), also
+captures each note's banners as MEMORY-BANNER nodes and their
+ANNOTATES/SUPERSEDED-BY beliefs (banners spec SS4).  One transaction
+per note.  Returns the number of notes captured."
   (%check-producer producer)
   (let ((n 0))
     (dolist (path (%note-files dir) n)
       (gdb:with-transaction (:graph graph)
-        (%capture-note graph path producer))
+        (%capture-note graph path producer banners))
       (incf n))))
 
 (defun capture-listing (graph dir)

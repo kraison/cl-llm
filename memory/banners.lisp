@@ -19,6 +19,13 @@ the first [[name]] in TEXT, or NIL; TEXT the banner's lines verbatim."
       (subseq line (length prefix))
       nil))
 
+(defun %word-boundary-p (s word)
+  "S starts with WORD followed by end-of-string or a non-letter -- so
+\"UPDATE\" does not match \"UPDATED\" (Task 1 review)."
+  (and (%strip-prefix s word)
+       (or (= (length s) (length word))
+           (not (alpha-char-p (char s (length word)))))))
+
 (defun %heading-kind (line)
   "The banner kind LINE opens, or NIL.  After an optional \"> \" and an
 optional warning sign, the line must start with ** and a banner word."
@@ -26,7 +33,7 @@ optional warning sign, the line must start with ** and a banner word."
          (s (or (%strip-prefix s (format nil "~a " (code-char #x26a0))) s))
          (s (%strip-prefix s "**")))
     (and s
-         (cdr (assoc-if (lambda (word) (%strip-prefix s word))
+         (cdr (assoc-if (lambda (word) (%word-boundary-p s word))
                          +banner-words+)))))
 
 (defun %blockquote-p (line)
@@ -90,3 +97,28 @@ next blank line."
                                            :line (1+ start))
                              banners))))))
     (nreverse banners)))
+
+(defun banner-listing (graph dir)
+  "The deterministic shape capture-and-diff compares (SS4): per note in
+name order, per banner in position order, (NOTE POSITION KIND DATE
+LINK TEXT-DIGEST DATED-P); DATE is NIL when the banner took the note's
+stamp, as CAPTURE-LISTING does for an unstamped note."
+  (loop for path in (%note-files dir)
+        for fm = (read-frontmatter path)
+        for name = (or (getf fm :name) (pathname-name path))
+        append (loop for b in (scan-banners
+                               (nth-value 1 (read-frontmatter path)))
+                     for key = (format nil "~a#~a" name
+                                       (banner-position b))
+                     for node = (first (gdb:index-lookup
+                                        graph 'memory-banner
+                                        'bn-key key))
+                     collect (list name (banner-position b)
+                                   (and node (bn-kind node))
+                                   (and node (bn-dated-p node)
+                                        (bn-date node))
+                                   (and node
+                                        (plusp (length (bn-link node)))
+                                        (bn-link node))
+                                   (and node (body-digest (bn-text node)))
+                                   (and node (bn-dated-p node))))))
