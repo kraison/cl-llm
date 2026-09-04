@@ -279,9 +279,9 @@ retrieval planner (#14 unit 2)."
 (defsystem "cl-llm/agent/prolog"
   :description "A guarded free-text Prolog tool for the agent (#14 unit 2)."
   :license "MIT"
-  ;; graph-db/gui carries the #279 guard and the web stack with it;
-  ;; kraison/vivace-graph#322 asks for a web-free home.
-  :depends-on ("cl-llm/agent" "graph-db/gui")
+  ;; graph-db/query is the web-free home of the #279 guard
+  ;; (kraison/vivace-graph#322, since #329).
+  :depends-on ("cl-llm/agent" "graph-db/query")
   :serial t
   :pathname "agent/prolog/"
   :components ((:file "packages") (:file "query"))

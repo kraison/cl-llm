@@ -113,3 +113,31 @@
                             "limit" 100)))))
       (is (= 2 (length (json:jget r "rows"))))
       (is (eq t (json:jget r "truncated"))))))
+
+;; An edge type on the memory store: the case kraison/vivace-graph#322's
+;; second finding existed for.  Declared here, so the store's schema
+;; carries it and the guard's whitelist homes its functor in this
+;; package, which does not use GRAPH-DB.
+(gdb:def-edge qt-cites () () :cl-llm-memory)
+
+(test an-edge-functor-and-a-global-functor-resolve-in-one-query
+  "vivace-graph#329: the store declares an edge type, and one guarded
+query joins the engine's is-a with that edge's own functor."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (%belief w "last-push" '(:sha . "abc"))
+    (let ((a (mem:belief-record-claim
+              (first (mem:recall w +subj+ :relation "ci-status"))))
+          (b (mem:belief-record-claim
+              (first (mem:recall w +subj+ :relation "last-push")))))
+      (gdb:with-transaction (:graph w)
+        (make-qt-cites :graph w :from a :to b))
+      (let* ((tool (prolog:make-query-tool (list w p)))
+             (r (json:parse
+                 (llm:call-tool
+                  tool (%args "text"
+                              "(is-a ?a belief-binary) (qt-cites ?a ?b)")))))
+        (is (equalp #("a" "b") (json:jget r "columns")))
+        (is (= 1 (length (json:jget r "rows"))))
+        (is (string= (gdb:string-id a)
+                     (aref (aref (json:jget r "rows") 0) 0)))))))

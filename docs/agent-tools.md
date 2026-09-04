@@ -10,8 +10,8 @@ vocabulary below (belief, standing, cite, decision) is unfamiliar.
 
 `cl-llm/agent` depends on `cl-llm`, `cl-llm/memory` and
 `cl-llm/rag/claims` only — no web stack. `cl-llm/agent/prolog` adds
-one more tool, `query`, and with it a dependency on `graph-db/gui`
-(§"What this is not").
+one more tool, `query`, and with it `graph-db/query`, the engine's
+web-free guarded query subsystem (kraison/vivace-graph#322).
 
 ## One memory, partitioned by trust
 
@@ -340,15 +340,18 @@ Parameters: `text`; optional `store` (default the first in scope),
 }
 ```
 
-Runs vivace-graph's guarded free-text Prolog pipeline verbatim
+Runs vivace-graph's guarded free-text Prolog runner
+(`graph-db.query:run-guarded-prolog`, `docs/guarded-query.md` there)
 against one named store: the character screen, a reader with
 `*read-eval*` off in a throwaway package, a whitelist walk against
 that store's own schema, then the query with effects **off**, one
-snapshot, and the operator's `max-inferences`/`timeout`. `?`-variables
-become columns, **camelCased by the engine** (`?valid-from` becomes
-`validFrom` in `columns`, not `valid-from`). `limit` is clamped to
-`max-rows`, itself further clamped by the engine's own default row
-cap (1000); one probe row past the cap decides `truncated`. **Row
+snapshot, and the operator's `max-inferences`/`timeout`. Type names
+are **bare** (`belief-binary`, never `:belief-binary` — the screen
+refuses every colon). `?`-variables become columns, **camelCased by
+the engine** (`?valid-from` becomes `validFrom` in `columns`, not
+`valid-from`). `limit` is clamped to `max-rows`, itself further
+clamped by the engine's own default row cap (1000); one probe row past
+the cap decides `truncated`. **Row
 cells use an actual JSON `null`** for an unbound variable or an
 empty slot — the one place in this tool set that null appears rather
 than an omitted key, because a row is a fixed-width tuple, not an
@@ -361,9 +364,9 @@ tenant-specific code. Note what `?c` holds above: a **node id**, a
 32-hex string, not a cite. `query` is for walking the graph, not for
 producing evidence — the cites `conclude` and `retract` take come
 from `recall` and `retrieve`, never from a query row. A store outside
-the scope is an error result. A
-store that declares **edge** types is refused up front, pending
-kraison/vivace-graph#322 (§"What this is not"). Every refusal the
+the scope is an error result. A store's **edge** types are queryable
+by their own functors alongside the engine's (`(is-a ?a belief-binary)
+(cites ?a ?b)`), since vivace-graph#329. Every refusal the
 guard or the engine produces — disallowed reader syntax, an
 excluded control word, a write-effect goal, the inference or time
 budget tripping — reaches the model as the **exact reason text** the
@@ -493,8 +496,7 @@ It depends on `cl-llm/agent/tests` for the two-store on-disk harness
 - **No cross-store consistent instant.** Reads run per store and
   merge; one epoch spanning several stores at once is S6b's job
   (`#24`), not this one's.
-- **The `query` tool loads the web stack.** The guard pipeline lives
-  in `graph-db/gui`, which depends on ningle, clack and cl-json;
-  `cl-llm/agent/prolog` therefore pulls that in, until
-  kraison/vivace-graph#322 exports a guarded runner in a web-free
-  subsystem. `cl-llm/agent` itself has no such dependency.
+- **No web stack anywhere.** `cl-llm/agent/prolog` depends on
+  `graph-db/query`, the guard's web-free home since
+  kraison/vivace-graph#322; nothing here loads ningle, clack or
+  hunchentoot.

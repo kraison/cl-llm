@@ -241,8 +241,8 @@ each a validated decision with a trace, and `retract` to say a belief
 was wrong; `retrieve` and `plan-bounds` over the retrieval planner.
 The scope and every bound are the operator's at construction; the
 model names subjects, never stores. `cl-llm/agent/prolog` adds
-`query`, guarded free-text Prolog with effects off and budgets (it
-loads `graph-db/gui` until kraison/vivace-graph#322). `annotate-banners`
+`query`, guarded free-text Prolog with effects off and budgets over
+the engine's web-free `graph-db/query`. `annotate-banners`
 is the first consumer — a model reads a note's hand-written banner and
 concludes what it overturns, live-tested under `cl-llm/agent/live`
 (`CL_LLM_LIVE=1`). Guide: [`docs/agent-tools.md`](docs/agent-tools.md).
@@ -426,8 +426,9 @@ sbcl --dynamic-space-size 4096 --non-interactive \
 ```
 
 `cl-llm/rag/claims` and `cl-llm/memory` need `graph-db/spacetime` (from
-vivace-graph `experiment` at or after the 2026-09-03 merge of #325 and
-#326, which the memory tenant's cite, store and capture code rely on)
+vivace-graph `experiment` at or after the 2026-09-04 merge of #329,
+which the memory tenant's cite, store and capture code and the query
+tool rely on)
 and run each test on a real on-disk graph
 under `/tmp`; CI refreshes the engine to `experiment` HEAD on every run
 (`docs/ci.md`):

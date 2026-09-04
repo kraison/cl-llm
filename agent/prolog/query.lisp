@@ -1,5 +1,6 @@
 ;;;; agent/prolog/query.lisp -- free-text Prolog through the engine's
-;;;; guard, effects off, the operator's budgets.  Spec SS8.
+;;;; guarded runner (graph-db/query), effects off, the operator's
+;;;; budgets.  Spec SS8; kraison/vivace-graph#322.
 
 (in-package #:cl-llm.agent.prolog)
 
@@ -7,46 +8,24 @@
   "VALUE as a jzon-writable JSON cell: NIL becomes the symbol NULL, so
 CL-LLM.JSON:TO-JSON emits \"null\" rather than \"false\" (src/json.lisp's
 header; jzon's WRITE-VALUE treats (EQL NIL) and (EQL NULL) as distinct
-atoms).  An unbound query variable or an empty slot parses to NIL from
-the engine's own JSON, and the two cases are indistinguishable once
-parsed, so every NIL cell here is a JSON null, never false."
+atoms).  The runner's :DATA cells give NIL for an unbound variable and
+for an empty slot alike, so every NIL cell here is a JSON null, never
+false."
   (or value 'null))
 
 (defun %guarded-rows (graph text limit max-inferences timeout)
-  "Read, guard and run TEXT against GRAPH; (values columns rows
-truncated-p).  :PACKAGE is GRAPH-DB, not the schema package: the
-runner re-interns heads there and CL-LLM.MEMORY does not use GRAPH-DB
-(kraison/vivace-graph#322); a store with edge types is refused below.
-No effect policy is passed because RUN-QUERY-GOALS hard-codes
-:EFFECTS NIL and :SNAPSHOT T -- the test
+  "TEXT through the engine's guarded runner against GRAPH; (values
+columns rows truncated-p), rows as lists of JSON-shaped cells
+(kraison/vivace-graph#322).  The runner owns the screen, the scratch
+package, the whitelist, the clamp and the probe; edge functors resolve
+in their own package since vivace-graph#329.  No effect policy is
+passed because the runner hard-codes :EFFECTS NIL and :SNAPSHOT T --
 A-WRITE-EFFECT-GOAL-IS-REFUSED-BY-THE-RUNNER pins that (spec SS8, SS9)."
-  (when (graph-db.gui::%schema-type-names graph :edge)
-    (error "store ~a declares edge types; free-text queries over them ~
-wait on kraison/vivace-graph#322" (mem:store-name graph)))
-  (let ((scratch (graph-db.gui::%make-scratch-package)))
-    (unwind-protect
-         (multiple-value-bind (vars goals)
-             (graph-db.gui::%read-guarded-forms
-              text scratch (graph-db.gui::%guard-context graph scratch))
-           (let* ((cap (min limit graph-db::*query-default-limit*))
-                  (probe (if (< cap graph-db::*query-default-limit*)
-                             (1+ cap) cap))
-                  (json-string
-                    (let ((graph-db::*query-default-max-inferences*
-                            max-inferences)
-                          (graph-db::*query-default-timeout* timeout))
-                      (graph-db::run-query-goals
-                       vars goals graph
-                       :package (find-package :graph-db)
-                       :limit probe :format :json)))
-                  (columns (mapcar #'graph-db::%query-var-field vars))
-                  (rows (coerce (json:parse json-string) 'list))
-                  (truncated (if (> probe cap) (> (length rows) cap)
-                                 (>= (length rows) cap))))
-             (values columns
-                     (subseq rows 0 (min cap (length rows)))
-                     truncated)))
-      (delete-package scratch))))
+  (graph-db.query:run-guarded-prolog text graph
+                                     :limit limit
+                                     :max-inferences max-inferences
+                                     :timeout timeout
+                                     :format :data))
 
 (defun %find-store (stores store)
   "The graph named STORE in STORES, or the first when STORE is NIL."
@@ -83,9 +62,6 @@ caps rows."
            "store" (mem:store-name graph)
            "columns" (coerce columns 'vector)
            "rows" (map 'vector
-                       (lambda (row)
-                         (map 'vector
-                              (lambda (c) (%json-cell (gethash c row)))
-                              columns))
+                       (lambda (row) (map 'vector #'%json-cell row))
                        rows)
            "truncated" (agent:json-bool truncated))))))))
