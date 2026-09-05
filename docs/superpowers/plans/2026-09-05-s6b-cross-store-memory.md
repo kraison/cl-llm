@@ -180,34 +180,44 @@ are refused; the message names the clockless store."
 
 (test check-scope-refuses-two-stores-on-two-clocks
   "SS3: attached, but to different clocks -- two counters, no shared
-axis.  A second clock in its own directory is legal to open."
-  (with-two-stores (a b)
-    (declare (ignore b))
-    (let* ((stamp (format nil "~a-~a" (get-internal-real-time)
-                          (random 1000000)))
-           (cdir (format nil "/tmp/cl-llm-scope-clock2-~a/" stamp))
-           (dir (format nil "/tmp/cl-llm-scope-c-~a/" stamp))
-           (clock (gdb:open-system-clock cdir))
-           (c nil))
-      (unwind-protect
-           (progn
-             (setf c (gdb:make-graph :memory-private dir
-                                     :buffer-pool-size 1000
-                                     :system-clock clock))
-             (is (not (eq (gdb:graph-system-clock a)
-                          (gdb:graph-system-clock c)))
-                 "control: two clocks")
-             (signals mem:scope-argument-error
-               (mem:check-scope (list a c)))
-             (handler-case (mem:check-scope (list a c))
-               (mem:scope-argument-error (e)
-                 (is (search "different clock" (princ-to-string e))))))
-        (when c (ignore-errors (gdb:close-graph c)))
-        (ignore-errors (gdb:close-system-clock clock))
-        (dolist (d (list dir cdir))
-          (ignore-errors (uiop:delete-directory-tree
-                          (pathname d) :validate t
-                          :if-does-not-exist :ignore)))))))
+axis.  Built outside the fixture: the two store names are the only
+schemas this suite declares, and a third open graph under either name
+is a STORE-ID-COLLISION-ERROR (one system directory per image)."
+  (let* ((stamp (format nil "~a-~a" (get-internal-real-time)
+                        (random 1000000)))
+         (gdb:*system-clock* nil)
+         (gdb:*system-directory*
+           (format nil "/tmp/cl-llm-scope2-sys-~a/" stamp))
+         (cdirs (list (format nil "/tmp/cl-llm-scope2-c1-~a/" stamp)
+                      (format nil "/tmp/cl-llm-scope2-c2-~a/" stamp)))
+         (dirs (list (format nil "/tmp/cl-llm-scope2-a-~a/" stamp)
+                     (format nil "/tmp/cl-llm-scope2-b-~a/" stamp)))
+         (clocks (mapcar #'gdb:open-system-clock cdirs))
+         (a nil) (b nil))
+    (unwind-protect
+         (progn
+           (setf a (gdb:make-graph :cl-llm-memory (first dirs)
+                                   :buffer-pool-size 1000
+                                   :system-clock (first clocks))
+                 b (gdb:make-graph :memory-private (second dirs)
+                                   :buffer-pool-size 1000
+                                   :system-clock (second clocks)))
+           (is (not (eq (gdb:graph-system-clock a)
+                        (gdb:graph-system-clock b)))
+               "control: two clocks")
+           (signals mem:scope-argument-error
+             (mem:check-scope (list a b)))
+           (handler-case (mem:check-scope (list a b))
+             (mem:scope-argument-error (e)
+               (is (search "different clock" (princ-to-string e)))))
+           (is (equal (list a) (mem:check-scope (list a))) "control"))
+      (when a (ignore-errors (gdb:close-graph a)))
+      (when b (ignore-errors (gdb:close-graph b)))
+      (dolist (c clocks) (ignore-errors (gdb:close-system-clock c)))
+      (dolist (d (append cdirs dirs (list gdb:*system-directory*)))
+        (ignore-errors (uiop:delete-directory-tree
+                        (pathname d) :validate t
+                        :if-does-not-exist :ignore))))))
 
 (test scope-snapshots-compose-and-refuse-inside-a-transaction
   "SS3 (recon C9): under WITH-SCOPE-SNAPSHOTS both stores answer and
