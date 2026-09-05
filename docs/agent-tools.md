@@ -179,8 +179,8 @@ Parameters: `decision-id`.
 ```
 
 Found in whichever store of the scope holds it — decision ids are
-random and unique. `epoch` (integer) is the commit epoch; null for a
-decision recorded before the engine stamped one. `confidence` is
+random and unique. `epoch` (integer) is the commit epoch; omitted for
+a decision recorded before the engine stamped one. `confidence` is
 present when the decision that made the claim gave one (omitted
 otherwise). Each evidence cite resolves in the store its evidence
 claim names, when that store is in scope, and the item's `store` is
@@ -313,7 +313,9 @@ that encoding appears, because namespaces are canonical
 
 Runs `fuse` over one belief claim source per store in scope plus any
 `sources` the operator supplied, so each evidence item names its
-`store` when it came from one (omitted for an operator source).
+`store` when it came from one (omitted for an operator source). A fact
+held by two stores is two items, each naming its own `store`; fusion
+no longer collapses copies across stores (#49).
 `from`/`to` set the window explicitly (reported `standing:
 "asserted"`); left out, the window is derived from a first,
 unbounded fusion through `plan-bounds` and then applied — so a

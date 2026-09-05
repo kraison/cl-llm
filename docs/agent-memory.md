@@ -236,7 +236,13 @@ enforcement.
 holding their identity; every rendered cite carries the store it
 resolved in. `decisions-citing` returns `(id . store-name)` pairs and
 `trace` finds a decision in the first store holding it, naming it in
-`decision-record-store`.
+`decision-record-store`. A decision carries one evidence row per cite,
+whatever number of stores hold that cite: the trace family's identity
+has no room for the store, so the row names the first store in scope
+order among those cited (#51). `belief-record-store` and
+`belief-record-superseded-by-store` hold graph objects;
+`cite-record-store` and `decision-record-store` hold store-name
+strings.
 
 **The clock belongs to the image.** A store attached to a system clock
 draws its epochs from it; the attachment lives in memory and in the
