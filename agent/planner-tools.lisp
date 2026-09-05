@@ -41,7 +41,6 @@ family must not borrow the belief cite prefix."
 (defun %evidence-json (scope e)
   (let* ((store (%source-store scope e))
          (cite (%evidence-cite e)))
-    (when (and cite store) (note-cite scope cite store))
     (json:jobject
      "method" (%standing (rag:evidence-method e))
      "source" (let ((s (rag:evidence-source e)))
@@ -105,6 +104,13 @@ evidence existed past k, as in recall."
             (bundle (rag:fuse sources query :k (1+ k) :bounds bounds))
             (fused (rag:bundle-evidence bundle))
             (evidence (subseq fused 0 (min k (length fused)))))
+       ;; Seed the cache in SCOPE order, not ranking order: first-wins
+       ;; must mean first-in-scope (S6b SS6, #48).
+       (dolist (g (scope-stores scope))
+         (dolist (e evidence)
+           (let ((cite (%evidence-cite e)))
+             (when (and cite (eq g (%source-store scope e)))
+               (note-cite scope cite g)))))
        (json:to-json
         (json:jobject
          "query" query

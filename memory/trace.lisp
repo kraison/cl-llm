@@ -156,12 +156,14 @@ epoch (S6b SS7)."
   (list :scope-conflict cite store-name))
 
 (defun %proposal-start (more)
-  "The validity start a (:BELIEF subject relation object . MORE) proposal
+  "The validity start a (:BELIEF subject relation . MORE) proposal
 will be recorded with: its :EXTENT's, else now (RECORD-BELIEF's
 default)."
   (let ((extent (getf (rest more) :extent)))
     (if extent
         (te:bound-earliest (te:extent-start extent))
+        ;; Earlier than RECORD-BELIEF's own NOW, so the filter can
+        ;; only miss a prior, never invent one.
         (local-time:now))))
 
 (defun %governing-prior (proposal producer scope)
@@ -196,11 +198,15 @@ Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
 :REFUSED and REPORT set, never signalled.  Under SCOPE (S6b SS5) a
 belief governed by a prior in a higher-trust store is refused as
 SCOPE-CONFLICT before the transaction opens; one in a lower-trust
-store is overridden and recorded as evidence.  Advisory, like the
-validation report: the commit is the enforcement."
+store is overridden and recorded as evidence.  The scope pre-read is
+the only enforcement of the cross-store rule: no constraint spans
+stores, so a prior committed in another store between the read and
+the commit is not caught (GH #53).  The write store's validator still
+backstops its own store."
   (when gdb:*transaction*
     (%arg-error :transaction gdb:*transaction*
                 "CONCLUDE owns its transaction; call it outside one"))
+  ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
   (check-scope scope :write-store graph)
   (%check-producer producer)
   (unless (stringp rule) (%arg-error :rule rule "a string naming the rule"))

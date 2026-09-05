@@ -28,6 +28,10 @@
 
 (defvar *graph* nil "The open store; also bound as GDB:*GRAPH*.")
 (defvar *producer* nil "Producer string for decisions written here.")
+(defvar *clock* nil
+  "The image's system clock.  A property of the image, not of the store
+on disk: a store reopened without it silently resumes its own counter
+(S6b recon C1), so every open here passes it.")
 
 (defun %env (name default)
   (let ((v (sb-ext:posix-getenv name)))
@@ -47,6 +51,8 @@ through rather than open a store another image left dirty."
                             (%home ".cl-llm-memory/working/"))))
          (system (%dir (%env "CL_LLM_MEMORY_SYSTEM"
                              (%home ".cl-llm-memory/system/"))))
+         (clock-dir (%dir (%env "CL_LLM_MEMORY_CLOCK"
+                                (%home ".cl-llm-memory/clock/"))))
          (name (intern (string-upcase
                         (%env "CL_LLM_MEMORY_GRAPH" "cl-llm-memory"))
                        :keyword))
@@ -56,24 +62,31 @@ through rather than open a store another image left dirty."
           (%env "CL_LLM_MEMORY_PRODUCER"
                 (format nil "claude-code/~(~A~)" (machine-instance))))
     (setf gdb:*system-directory* system)
+    (setf *clock* (gdb:open-system-clock clock-dir))
     (setf *graph*
           (if (probe-file (concatenate 'string store "schema.dat"))
-              (gdb:open-graph name store :buffer-pool-size pool)
-              (gdb:make-graph name store :buffer-pool-size pool)))
+              (gdb:open-graph name store :buffer-pool-size pool
+                             :system-clock *clock*)
+              (gdb:make-graph name store :buffer-pool-size pool
+                             :system-clock *clock*)))
     (setf gdb:*graph* *graph*)
     (swank:create-server :port port :dont-close t :interface "127.0.0.1")
-    (format t "~&memory image: ~(~S~) at ~A as ~A; swank 127.0.0.1:~D~%"
-            name store *producer* port)
+    (format t "~&memory image: ~(~S~) at ~A as ~A; clock ~A; ~
+swank 127.0.0.1:~D~%"
+            name store *producer* clock-dir port)
     (finish-output)
     *graph*))
 
 (defun stop ()
-  "Close the store; never signals.  Installed as an exit hook because
-SBCL runs *EXIT-HOOKS* on SIGTERM (measured in sitrep #25), so a stop
-from the shell or systemd leaves no .dirty marker."
+  "Close the store, then the clock; never signals.  Installed as an
+exit hook because SBCL runs *EXIT-HOOKS* on SIGTERM (measured in sitrep
+#25), so a stop from the shell or systemd leaves no .dirty marker."
   (when *graph*
     (ignore-errors (gdb:close-graph *graph*))
-    (setf *graph* nil gdb:*graph* nil)))
+    (setf *graph* nil gdb:*graph* nil))
+  (when *clock*
+    (ignore-errors (gdb:close-system-clock *clock*))
+    (setf *clock* nil)))
 
 (handler-case (start)
   (gdb:store-not-closed-cleanly-error (c)

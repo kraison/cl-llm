@@ -334,6 +334,8 @@ concludes."
     (let* ((prior (%belief-in p "ci-status" '(:verdict . "green")))
            (before-w (length (st:claims-by-producer w 'mem:belief +p+)))
            (before-p (length (st:claims-by-producer p 'mem:belief +p+)))
+           (before-p-trace (length (st:claims-by-producer p 'mem:trace
+                                                          +p+)))
            (d (mem:conclude w (list :belief +ss+ "ci-status"
                                     '(:verdict . "red") :standing :inferred
                                     :extent (%open-from
@@ -352,6 +354,9 @@ concludes."
         (is (not (search "(:" text)) "prose, not a Lisp form"))
       (is (= before-w (length (st:claims-by-producer w 'mem:belief +p+))))
       (is (= before-p (length (st:claims-by-producer p 'mem:belief +p+))))
+      (is (= before-p-trace
+             (length (st:claims-by-producer p 'mem:trace +p+)))
+          "nothing traced into P either")
       (is (eq :concluded
               (mem:decision-outcome
                (mem:conclude w (list :belief +ss+ "ci-status"
@@ -397,9 +402,7 @@ store itself still goes to the validator (the control)."
                                                (%ts "2026-09-02T08:00:00Z")))
                               :producer +p+ :rule "r" :scope (list w p))))
         (is (eq :refused (mem:decision-outcome d2)))
-        (is (not (member "scope-conflict"
-                         (%families w (mem:decision-id d2))
-                         :test #'string=)))))))
+        (is (equal '("unique") (%families w (mem:decision-id d2))))))))
 
 (test conclude-absence-takes-no-scope-pre-read
   "SS5 (recon C3): an absence has no series; the pre-read does not
