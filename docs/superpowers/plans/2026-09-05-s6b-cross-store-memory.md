@@ -1011,7 +1011,7 @@ Claude-Session: https://claude.ai/code/session_01DeVU44qpXuW4oUz7hnDMNU"
 
 **Interfaces:**
 - Consumes: `check-scope`, `with-scope-snapshots`; `st:claim-commit-epoch` (engine #347); `graph-db::transaction-id` (internal).
-- Produces: `decisions-citing => ((id . store-name) ...)`; `trace` finding the decision first-in-scope, `decision-record-store` (string) and `decision-record-epoch` (integer or NIL); `decision-epoch`; `trace-listing` emitting `(:missing nil nil nil nil)` for an unknown id; `%claim-doc-id (source claim)`; JSON `"epoch"` on `conclude` results and `"store"` on `decisions-citing` entries.
+- Produces: `decisions-citing => ((id . store-name) ...)`; `trace` finding the decision first-in-scope, `decision-record-store` (string) and `decision-record-epoch` (integer or NIL); `decision-epoch`; `trace-listing` emitting `(:missing nil nil nil nil)` for an unknown id; `%claim-doc-id (source claim)`; JSON `"epoch"` on `conclude` results and `"store"` on `decisions-citing` entries; one evidence row per cite (#51 documented).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1041,34 +1041,32 @@ id no store holds instead of signalling."
                  (mem:trace-listing w (list "no-such-id")
                                     :scope (list w p)))))))
 
-(test write-evidence-keeps-one-cite-from-two-stores-as-two-rows
-  "SS7 (#51): the same cite held by both stores, cited from both, gives
-two evidence rows, each with its store as METHOD."
+(test write-evidence-keeps-one-row-per-cite-naming-the-first-store
+  "SS7 (#51, documented bound): the trace family's identity excludes
+METHOD, so one cite cited from two stores is ONE evidence row, naming
+the first store in the pairs list; distinct cites are distinct rows
+(the control).  Two rows for one cite would collide on the unique
+constraint."
   (with-two-stores (w p)
     (let* ((cw (%belief-in w "ci-status" '(:verdict . "green")))
-           (cite (mem:claim-cite cw)))
+           (cite (mem:claim-cite cw))
+           (other (mem:claim-cite (%belief-in w "owner" '(:person . "k")))))
       (%belief-in p "ci-status" '(:verdict . "green"))
       (let* ((d (mem:conclude w (list :belief +ss+ "releasable"
                                       '(:v . "yes") :standing :inferred)
                               :producer +p+
-                              :evidence (list (cons cite "cl-llm-memory")
-                                              (cons cite "memory-private"))
+                              :evidence (list (cons cite "memory-private")
+                                              (cons cite "cl-llm-memory")
+                                              other)
                               :rule "r" :scope (list w p)))
              (rec (mem:trace w (mem:decision-id d) :scope (list w p)))
              (ev (mem:decision-record-evidence rec)))
-        (is (= 2 (length ev)))
-        (is (equal '("cl-llm-memory" "memory-private")
-                   (sort (mapcar #'mem:cite-record-store ev) #'string<)))
-        (is (= 1 (length (mem:decision-record-evidence
-                          (mem:trace w (mem:decision-id
-                                        (mem:conclude
-                                         w (list :belief +ss+ "other"
-                                                 '(:v . "1")
-                                                 :standing :inferred)
-                                         :producer +p+
-                                         :evidence (list cite cite)
-                                         :rule "r"))))))
-            "control: the same cite in the same store is still one row")))))
+        (is (= 2 (length ev)) "one row per cite: two cites, two rows")
+        (is (string= "memory-private"
+                     (mem:cite-record-store
+                      (find cite ev :key #'mem:cite-record-cite
+                                    :test #'string=)))
+            "the first pair's store names the row")))))
 
 (test decisions-record-their-commit-epoch
   "SS7: two conclusions on two stores under one clock record integer
@@ -1282,14 +1280,17 @@ before the engine stamped one (S6b SS7)."
   conclusion evidence refusals store epoch)
 ```
 
-Replace `%write-evidence` with:
+Replace `%write-evidence`'s comment (its body is unchanged: the key stays the cite):
 
 ```lisp
 (defun %write-evidence (graph id pairs producer)
-  ;; The key is the whole (cite . store) pair: one cite held by two
-  ;; stores is two evidence rows (S6b SS7, #51).  :FROM-END T keeps the
-  ;; first of an exact repeat.
-  (dolist (pair (remove-duplicates pairs :test #'equal :from-end t))
+  ;; One row per cite: the family's identity excludes METHOD, so a
+  ;; second row for the same cite from another store would collide on
+  ;; the unique constraint (S6b SS7, #51 documented).  :FROM-END T: the
+  ;; first store in PAIRS -- scope order, as the tools build it -- names
+  ;; the row.
+  (dolist (pair (remove-duplicates pairs :key #'car :test #'string=
+                                   :from-end t))
     (%trace-claim graph id "evidence" :claim (car pair) producer :observed
                   :method (cdr pair))))
 ```
@@ -1394,7 +1395,7 @@ store is in SCOPE (SS4.3).  Runs under the scope's snapshots (S6b)."
         (let* (
 ```
 
-and keep the rest of the existing body, with these three edits inside it: every `graph` in the `%resolve-in` calls becomes `g`; the `evidence` sort becomes `(sort ... (lambda (a b) (or (string< (car a) (car b)) (and (string= (car a) (car b)) (string< (or (cdr a) "") (or (cdr b) ""))))))` so one cite from two stores orders by store; and `make-decision-record` gains `:store (store-name g)` and `:epoch (st:claim-commit-epoch outcome)`. Close the extra `with-scope-snapshots` paren at the end.
+and keep the rest of the existing body, with these three edits inside it: every `graph` in the `%resolve-in` calls becomes `g`; the `evidence` sort stays by cite (one row per cite); and `make-decision-record` gains `:store (store-name g)` and `:epoch (st:claim-commit-epoch outcome)`. Close the extra `with-scope-snapshots` paren at the end.
 
 Replace `trace-listing` with:
 

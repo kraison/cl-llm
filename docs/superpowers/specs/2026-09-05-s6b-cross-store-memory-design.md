@@ -20,7 +20,7 @@ graph. The adversarial pass verified six consequences:
 | #48 | `note-cite` last-wins against `cite-store` first-in-scope; after `recall`, `retract` refuses a claim the write store holds |
 | #49 | `retrieve` keys claim documents without the store, so two stores' copies fuse into one item |
 | #50 | `conclude` validates the write store only; a belief refused by the private store's history is accepted into the working store |
-| #51 | `%write-evidence` dedupes on the cite alone, so two stores' copies collapse to one evidence row naming one store |
+| #51 | `%write-evidence` dedupes on the cite alone, so two stores' copies collapse to one evidence row naming one store (resolved as a documented bound: the family's identity has no room for the store; the row names the first store in scope order) |
 
 The engine facts that bound the fix, verified against `experiment`
 3a8ca96: a read-write transaction on store A refuses every read of
@@ -245,9 +245,14 @@ stay valid.
   by emitting a row with `:missing` as the outcome, so capture-and-diff
   stays deterministic. `annotate-banners` traces with the scope and
   skips an id `trace` cannot find (#47).
-- `%write-evidence` dedupes on `(cite . store-name)`, so two stores'
-  copies cited together are two evidence rows (#51). `trace` orders
-  evidence by cite then store.
+- One evidence row per cite per decision (#51, documented bound): the
+  trace family's identity is producer, decision, relation and the cited
+  cite, and excludes the `method` slot that names the store, so two
+  rows for one cite differing only in store collide on the unique
+  constraint (found in execution; changing the family's identity is a
+  schema migration outside this unit). When a cite is cited from two
+  stores, the row names the first store in the pairs list, which the
+  tools build in scope order. `trace` orders evidence by cite.
 - `%claim-doc-id` includes the store name as its first segment after
   `claim:`, matching `%absence-evidence` (#49). Two stores' copies are
   two retrieval items, each with its store.
