@@ -209,3 +209,29 @@ keeps validity-start-descending order across stores."
                                         :scope (list w p))))
         "at 09-01 noon: green and owner, not red")
     (is (= 3 (length (mem:recall w +ss+ :scope (list w p)))))))
+
+(test resolve-cite-answers-from-the-first-store-in-scope
+  "SS6 (#48): one cite, two stores holding the same identity; the
+record names the first store in scope order, whichever order is
+given.  A cite no store holds is :ABSENT with no store."
+  (with-two-stores (w p)
+    (let* ((cw (%belief-in w "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite cw))
+           (cp (%belief-in p "ci-status" '(:verdict . "green")))
+           ;; AS-OF NOW must postdate both versions' stamps.
+           (now (progn (sleep 0.01) (local-time:now))))
+      (is (string= cite (mem:claim-cite cp))
+          "control: both stores mint one cite for one fact")
+      (let ((r (mem:resolve-cite w cite now :scope (list w p))))
+        (is (eq :resolved (mem:cite-record-state r)))
+        (is (string= "cl-llm-memory" (mem:cite-record-store r))))
+      (let ((r (mem:resolve-cite w cite now :scope (list p w))))
+        (is (eq :resolved (mem:cite-record-state r)))
+        (is (string= "memory-private" (mem:cite-record-store r))))
+      (let ((r (mem:resolve-cite w (mem:claim-cite
+                                    (%belief-in w "owner"
+                                                '(:person . "x")))
+                                 (%ts "2020-01-01T00:00:00Z")
+                                 :scope (list w p))))
+        (is (eq :absent (mem:cite-record-state r)))
+        (is (null (mem:cite-record-store r)))))))

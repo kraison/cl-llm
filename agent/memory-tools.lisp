@@ -25,9 +25,15 @@ one predicate; optional at (RFC 3339) keeps only beliefs valid then."
                        (mem:recall (scope-write-store scope) subject
                                    :relation relation :at instant
                                    :scope (scope-stores scope)))))
-       (dolist (r rows)
-         (note-cite scope (mem:claim-cite (mem:belief-record-claim r))
-                    (mem:belief-record-store r)))
+       ;; Seed the cache in SCOPE order, not row order: first-wins must
+       ;; mean first-in-scope, whatever recall's tie-break put first
+       ;; (S6b SS6, #48).
+       (dolist (g (scope-stores scope))
+         (dolist (r rows)
+           (when (eq g (mem:belief-record-store r))
+             (note-cite scope
+                        (mem:claim-cite (mem:belief-record-claim r))
+                        g))))
        (let* ((cap (scope-max-rows scope))
               (shown (subseq rows 0 (min cap (length rows)))))
          (json:to-json

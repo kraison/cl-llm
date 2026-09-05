@@ -541,3 +541,49 @@ naming P's cite and store."
       (is (string= "memory-private"
                    (json:jget green "superseded-by" "store")))
       (is (mem:cite-p (json:jget green "superseded-by" "cite"))))))
+
+(test recall-does-not-move-the-cite-cache-so-retract-still-works
+  "S6b SS6 (#48): both stores hold one cite; scope (W P), write store
+W.  After RECALL, which sees both copies, RETRACT on the cite acts on
+W's copy -- NOTE-CITE is first-wins and CITE-STORE scans first-in-scope,
+so the cache and the scan agree.  The control: retract in the reversed
+scope (P W), write store W, is refused by name because P's copy resolves
+first."
+  (with-stores (w p)
+    (let* ((cw (%belief w "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite cw)))
+      (%belief p "ci-status" '(:verdict . "green"))
+      (let* ((scope (agent:make-scope (list w p) :write-store w
+                                      :producer +p+))
+             (tools (agent:make-memory-tools scope)))
+        (%call tools "recall" "subject-namespace" "repo"
+               "subject-key" "cl-llm")
+        (is (eq w (agent:cite-store scope cite))
+            "the cache names the first store after recall")
+        (%call tools "retract" "cite" cite)
+        (is (not (st:claim-current-p
+                  (mem:belief-record-claim
+                   (first (mem:recall w +subj+ :include-retracted t)))))
+            "W's copy is retracted")
+        (is (st:claim-current-p
+             (mem:belief-record-claim (first (mem:recall p +subj+))))
+            "P's copy is untouched"))
+      (let* ((scope (agent:make-scope (list p w) :write-store w
+                                      :producer +p+))
+             (tools (agent:make-memory-tools scope)))
+        (%call tools "recall" "subject-namespace" "repo"
+               "subject-key" "cl-llm")
+        (signals llm:llm-tool-error
+          (%call tools "retract" "cite" cite)
+          "control: P resolves first and is not writable")))))
+
+(test make-scope-refuses-what-check-scope-refuses
+  "S6b SS3: MAKE-SCOPE delegates the store-list checks; a repeated
+store is a SCOPE-ERROR whose message names it."
+  (with-stores (w p)
+    (signals agent:scope-error
+      (agent:make-scope (list w w) :producer +p+))
+    (handler-case (agent:make-scope (list w w) :producer +p+)
+      (agent:scope-error (c)
+        (is (search "appears twice" (princ-to-string c)))))
+    (is (agent:make-scope (list w p) :producer +p+) "control")))

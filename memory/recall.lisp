@@ -107,7 +107,8 @@ are excluded unless INCLUDE-RETRACTED.  Each record names its store;
 supersession is computed over the whole scope under the trust rule.
 Nothing recorded returns NIL -- which is not an absence standing."
   (%check-endpoint :subject subject)
-  (check-scope scope)
+  ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
+  (check-scope scope :write-store graph)
   (with-scope-snapshots (scope)
     (let ((series (make-hash-table :test 'equal))
           (owner (make-hash-table :test 'eq))

@@ -62,7 +62,8 @@ review) -- are the engine's SPLIT-CLAIM-IDENTITY-KEY
 or :ABSENT; CLAIM is the version believed then when :RESOLVED.
 CHANGED-SINCE is :RETRACTED, :SUPERSEDED, :UPDATED or NIL.  STORE names
 the store the cite was actually resolved against -- NIL when none was
-(SS4.3); RESOLVE-CITE leaves it to its caller, which knows the graph."
+(SS4.3); RESOLVE-CITE fills it in, from the first store in scope
+holding the identity (S6b SS6)."
   cite family (state :absent) claim standing extent changed-since store)
 
 (defun %stamp= (a b)
@@ -95,34 +96,46 @@ hands back first reported a held belief as :RETRACTED (#30)."
                                      :test-not #'string=)))
     (or (find-if #'st:claim-current-p matches) (first matches))))
 
-(defun resolve-cite (graph cite at)
-  "CITE as of AT (SS5): find the claim by identity among the subject's
-claims, then ask the engine for the version believed at AT.  Never
-substitutes the current version -- it is consulted only for
-CHANGED-SINCE.  A claim from a family with no validity extent can only
-report CHANGED-SINCE :RETRACTED, :UPDATED or NIL -- :SUPERSEDED needs
-%OPEN-P, which such a claim never satisfies."
+(defun resolve-cite (graph cite at &key (scope (list graph)))
+  "CITE as of AT (SS5), in the first store of SCOPE holding its identity
+(S6b SS6): find the claim by identity among the subject's claims, then
+ask that store for the version believed at AT.  Never substitutes the
+current version -- it is consulted only for CHANGED-SINCE, which is
+computed inside the resolving store.  STORE is filled on a resolved or
+reaped record, NIL on an absent one.  A claim from a family with no
+validity extent can only report CHANGED-SINCE :RETRACTED, :UPDATED or
+NIL -- :SUPERSEDED needs %OPEN-P, which such a claim never satisfies.
+Takes no snapshot of its own; TRACE, its caller, does."
+  ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
+  (check-scope scope :write-store graph)
   (multiple-value-bind (family ns key ikey) (split-cite cite)
-    (let* ((current (%current-among ikey
-                                    (st:claims-touching graph family ns key
-                                                        :role :subject)))
+    (let* ((current nil)
+           (g (or (find-if (lambda (s)
+                             (setf current
+                                   (%current-among
+                                    ikey (st:claims-touching s family ns key
+                                                             :role :subject))))
+                           scope)
+                  graph))
            (id (and current (gdb:id current)))
            (then (and id
                       (find-if (lambda (c)
                                  (equalp id (if (st:reaped-claim-p c)
                                                 (st:reaped-claim-id c)
                                                 (gdb:id c))))
-                               (st:claims-touching graph family ns key
+                               (st:claims-touching g family ns key
                                                    :role :subject
                                                    :as-of at)))))
       (cond ((null then)
              (make-cite-record :cite cite :family family :state :absent))
             ((st:reaped-claim-p then)
-             (make-cite-record :cite cite :family family :state :reaped))
+             (make-cite-record :cite cite :family family :state :reaped
+                               :store (store-name g)))
             (t
              (make-cite-record :cite cite :family family :state :resolved
                                :claim then
                                :standing (st:claim-standing then)
                                :extent (st:claim-extent then)
                                :changed-since
-                               (%changed-since then current)))))))
+                               (%changed-since then current)
+                               :store (store-name g)))))))
