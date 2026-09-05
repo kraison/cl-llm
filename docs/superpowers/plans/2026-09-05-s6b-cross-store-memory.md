@@ -1824,6 +1824,7 @@ Claude-Session: https://claude.ai/code/session_01DeVU44qpXuW4oUz7hnDMNU"
 
 **Files:**
 - Modify: `scripts/memory-image.lisp` (`start`, `stop`, the `*graph*` defvars)
+- Modify: `agent/planner-tools.lisp` (`%evidence-json`, `%retrieve-tool`), `tests-agent/planner-tools-tests.lisp` (append)
 - Modify: `docs/agent-memory.md`, `docs/agent-tools.md`
 
 **Interfaces:**
@@ -1866,6 +1867,48 @@ exit hook because SBCL runs *EXIT-HOOKS* on SIGTERM (measured in sitrep
 ```
 
 Verify the file still reads: run `sbcl --non-interactive --eval '(with-open-file (s "scripts/memory-image.lisp") (loop for form = (read s nil :eof) until (eq form :eof)))'` from the worktree (a read-only parse; the script must not be loaded, it starts a server). Expected: exits 0.
+
+- [ ] **Step 1b: The retrieve tool seeds the cite cache in scope order (Task 3 review ruling)**
+
+`%evidence-json` in `agent/planner-tools.lisp` notes each item's cite against its store in fusion (ranking) order, so a cite two stores mint identically can be cached against the lower-trust store when its copy ranks higher — the same defect the recall tool had. Append this test to `tests-agent/planner-tools-tests.lisp` (read its neighbours for the retrieve call shape; the fixture is `with-stores`, the helpers `%belief`, `%call`, `+p+`):
+
+```lisp
+(test retrieve-seeds-the-cite-cache-in-scope-order
+  "S6b SS6 (#48): one cite held by both stores; whatever order fusion
+ranks the two copies, the cache names the FIRST store in scope, so a
+later RETRACT acts on the write store's copy.  The reversed scope is
+the control."
+  (with-stores (w p)
+    (let* ((cw (%belief w "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite cw)))
+      (%belief p "ci-status" '(:verdict . "green"))
+      (let ((scope (agent:make-scope (list w p) :write-store w
+                                     :producer +p+)))
+        (%call (agent:make-planner-tools scope) "retrieve"
+               "query" "ci-status of repo cl-llm")
+        (is (eq w (agent:cite-store scope cite))))
+      (let ((scope (agent:make-scope (list p w) :write-store w
+                                     :producer +p+)))
+        (%call (agent:make-planner-tools scope) "retrieve"
+               "query" "ci-status of repo cl-llm")
+        (is (eq p (agent:cite-store scope cite)) "control: reversed")))))
+```
+
+(If `retrieve` needs endpoint arguments rather than a free query in this harness, use the argument shape the neighbouring retrieve tests use; the assertion is what matters.)
+
+Then in `agent/planner-tools.lisp`, remove the `note-cite` call from `%evidence-json` and, in `%retrieve-tool`, after the items are collected and before they are rendered, seed the cache in scope order:
+
+```lisp
+       ;; Seed the cache in SCOPE order, not ranking order: first-wins
+       ;; must mean first-in-scope (S6b SS6, #48).
+       (dolist (g (scope-stores scope))
+         (dolist (e items)
+           (let ((cite (%evidence-cite e)))
+             (when (and cite (eq g (%source-store scope e)))
+               (note-cite scope cite g)))))
+```
+
+(`items` is whatever `%retrieve-tool` binds the collected evidence list to; read it.) Run the new test alone (expect RED before the change, PASS after), then the agent suite.
 
 - [ ] **Step 2: The docs**
 
@@ -1930,8 +1973,10 @@ Memory, agent, claims, one at a time. Expected: green. Record the counts beside 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add scripts/memory-image.lisp docs/agent-memory.md docs/agent-tools.md
-git commit -m "feat(image): one system clock for the memory image; document scopes, the trust rule and the epoch (#24)
+git add scripts/memory-image.lisp agent/planner-tools.lisp \
+        tests-agent/planner-tools-tests.lisp \
+        docs/agent-memory.md docs/agent-tools.md
+git commit -m "feat(image): one system clock for the memory image; retrieve seeds the cite cache in scope order; docs (#24)
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01DeVU44qpXuW4oUz7hnDMNU"
