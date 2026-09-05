@@ -6,9 +6,11 @@
 (defstruct decision
   "What CONCLUDE returns (SS4).  OUTCOME is :CONCLUDED or :REFUSED; CLAIM
 the belief or absence written (NIL when refused); REPORT the
-VALIDATION-REPORT or the commit condition (NIL when concluded); AT the
-outcome claim's RECORDED-AT."
-  id outcome claim report at)
+VALIDATION-REPORT, the commit condition, or a (:SCOPE-CONFLICT cite
+store) list (NIL when concluded); AT the outcome claim's RECORDED-AT;
+EPOCH the committing transaction's id -- the shared clock's epoch when
+the store is attached to one (S6b SS7)."
+  id outcome claim report at epoch)
 
 (defun %mint-id ()
   (ironclad:byte-array-to-hex-string (ironclad:random-data 16)))
@@ -88,8 +90,11 @@ resolves its own store, falling back to WRITE-STORE."
                        "a claim, a cite string, or (cite . store)"))))
 
 (defun %write-evidence (graph id pairs producer)
-  ;; :FROM-END T: the first store recorded for a repeated cite wins,
-  ;; matching %VIOLATION-FAMILIES' first-per-family rule.
+  ;; One row per cite: the family's identity excludes METHOD, so a
+  ;; second row for the same cite from another store would collide on
+  ;; the unique constraint (S6b SS7, #51 documented).  :FROM-END T: the
+  ;; first store in PAIRS -- scope order, as the tools build it -- names
+  ;; the row.
   (dolist (pair (remove-duplicates pairs :key #'car :test #'string=
                                    :from-end t))
     (%trace-claim graph id "evidence" :claim (car pair) producer :observed
@@ -117,25 +122,33 @@ resolves its own store, falling back to WRITE-STORE."
   "A fresh transaction recording the refusal (SS4 step 2/3): one REFUSED
 claim per violated family, and one ATTEMPTED claim naming the rule the
 agent was applying, with CONCLUDED's slots, so a refused decision still
-says under which rule (#35)."
-  (let ((outcome nil))
-    (gdb:with-transaction (:graph graph)
-      (%trace-claim graph id "attempted" :rule rule producer :observed
-                    :method rule :rule-version rule-version)
-      (dolist (row (%violation-families report))
-        (setf outcome
-              (%trace-claim graph id "refused" :violation (car row)
-                            producer :observed :method (cdr row))))
-      (%write-evidence graph id pairs producer))
+says under which rule (#35).  The transaction's id is the decision's
+epoch (S6b SS7)."
+  (let* ((outcome nil)
+         (tx (gdb:with-transaction (:graph graph)
+               (%trace-claim graph id "attempted" :rule rule producer
+                             :observed :method rule
+                             :rule-version rule-version)
+               (dolist (row (%violation-families report))
+                 (setf outcome
+                       (%trace-claim graph id "refused" :violation (car row)
+                                     producer :observed :method (cdr row))))
+               (%write-evidence graph id pairs producer)
+               gdb:*transaction*)))
     (make-decision :id id :outcome :refused :report report
-                   :at (st:claim-recorded-at outcome))))
+                   :at (st:claim-recorded-at outcome)
+                   ;; TRANSACTION-ID is internal to the engine (recon C10).
+                   :epoch (graph-db::transaction-id tx))))
 
 (defun conclude (graph proposal
-                 &key producer evidence rule rule-version confidence)
+                 &key producer evidence rule rule-version confidence
+                      (scope (list graph)))
   "Decide PROPOSAL from EVIDENCE under RULE (SS4).  Owns its
 transaction; signals BELIEF-ARGUMENT-ERROR when one is already open.
 Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
 :REFUSED and REPORT set, never signalled."
+  ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
+  (check-scope scope :write-store graph)
   (when gdb:*transaction*
     (%arg-error :transaction gdb:*transaction*
                 "CONCLUDE owns its transaction; call it outside one"))
@@ -148,20 +161,23 @@ Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
         (claim nil) (outcome nil))
     (handler-case
         (progn
-          (gdb:with-transaction (:graph graph)
-            (setf claim (%stage graph proposal producer rule rule-version
-                                confidence))
-            (let ((report (gdb:validate-transaction graph)))
-              (when (gdb:validation-report-violations report)
-                (error '%refused :report report)))
-            (setf outcome
-                  (%trace-claim graph id "concluded" :claim
-                                (claim-cite claim) producer :inferred
-                                :method rule :rule-version rule-version
-                                :confidence confidence))
-            (%write-evidence graph id pairs producer))
-          (make-decision :id id :outcome :concluded :claim claim
-                         :at (st:claim-recorded-at outcome)))
+          (let ((tx (gdb:with-transaction (:graph graph)
+                      (setf claim (%stage graph proposal producer rule
+                                          rule-version confidence))
+                      (let ((report (gdb:validate-transaction graph)))
+                        (when (gdb:validation-report-violations report)
+                          (error '%refused :report report)))
+                      (setf outcome
+                            (%trace-claim graph id "concluded" :claim
+                                          (claim-cite claim) producer
+                                          :inferred :method rule
+                                          :rule-version rule-version
+                                          :confidence confidence))
+                      (%write-evidence graph id pairs producer)
+                      gdb:*transaction*)))
+            (make-decision :id id :outcome :concluded :claim claim
+                           :at (st:claim-recorded-at outcome)
+                           :epoch (graph-db::transaction-id tx))))
       (%refused (c)
         (%write-refusal graph id (%refused-report c) pairs producer
                         rule rule-version))
@@ -171,10 +187,12 @@ Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
 
 (defstruct decision-record
   "TRACE's answer (SS5).  CONCLUSION is a CITE-RECORD or NIL; EVIDENCE a
-list of CITE-RECORDs in cite order; REFUSALS (family . text) in family
-order."
+list of CITE-RECORDs in cite order then store; REFUSALS (family . text)
+in family order.  STORE names the store the decision was found in;
+EPOCH is the outcome claim's commit epoch, NIL for a claim written
+before the engine stamped one (S6b SS7)."
   id producer at rule rule-version confidence outcome
-  conclusion evidence refusals)
+  conclusion evidence refusals store epoch)
 
 (defun %decision-claims (graph id)
   (st:claims-touching graph 'trace :decision id :role :subject))
@@ -205,86 +223,106 @@ review)."
 
 (defun trace (graph decision-id &key (scope (list graph)))
   "The decision DECISION-ID reconstructed as of its own instant (SS5),
-or NIL when no such decision was recorded.  Each evidence cite
-resolves in the store it names, when that store is in SCOPE (SS4.3)."
-  (let* ((claims (%decision-claims graph decision-id))
-         (outcome (find-if (lambda (c)
-                             (member (st:claim-relation c)
-                                     '("concluded" "refused")
-                                     :test #'string=))
-                           claims)))
-    (when outcome
-      (let* ((at (%recorded-instant outcome))
-             (concluded (and (string= "concluded" (st:claim-relation outcome))
-                             outcome))
-             ;; The rule on the refused path (#35); NIL for a decision
-             ;; recorded before ATTEMPTED claims existed.
-             (attempted (or concluded
-                            (find "attempted" claims
-                                  :key #'st:claim-relation
-                                  :test #'string=)))
-             (evidence (sort (mapcar (lambda (c)
-                                       (cons (st:claim-object-key c)
-                                             (st:claim-method c)))
-                                     (remove "evidence" claims
-                                             :key #'st:claim-relation
-                                             :test-not #'string=))
-                             #'string< :key #'car))
-             (refusals (sort (loop for c in claims
-                                   when (string= "refused"
-                                                 (st:claim-relation c))
-                                     collect (cons (st:claim-object-key c)
-                                                   (st:claim-method c)))
-                             #'string< :key #'car)))
-        (make-decision-record
-         :id decision-id
-         :producer (st:claim-producer outcome)
-         :at at
-         :rule (and attempted (st:claim-method attempted))
-         :rule-version (and attempted (st:claim-rule-version attempted))
-         :confidence (and concluded (st:claim-confidence concluded))
-         :outcome (if concluded :concluded :refused)
-         ;; The conclusion is always the deciding store's own claim, so
-         ;; it resolves in GRAPH -- %RESOLVE-IN with no named store.
-         :conclusion (and concluded
-                          (%resolve-in (st:claim-object-key concluded)
-                                       nil graph scope at))
-         :evidence (mapcar (lambda (pair)
-                             (%resolve-in (car pair) (cdr pair)
-                                          graph scope at))
-                           evidence)
-         :refusals refusals)))))
+found in the first store of SCOPE holding it, or NIL when no store
+does.  Each evidence cite resolves in the store it names, when that
+store is in SCOPE (SS4.3).  Runs under the scope's snapshots (S6b)."
+  ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
+  (check-scope scope :write-store graph)
+  (with-scope-snapshots (scope)
+    (let* ((g (find-if (lambda (s) (%decision-claims s decision-id))
+                       scope))
+           (claims (and g (%decision-claims g decision-id)))
+           (outcome (find-if (lambda (c)
+                               (member (st:claim-relation c)
+                                       '("concluded" "refused")
+                                       :test #'string=))
+                             claims)))
+      (when outcome
+        (let* ((at (%recorded-instant outcome))
+               (concluded (and (string= "concluded"
+                                        (st:claim-relation outcome))
+                               outcome))
+               ;; The rule on the refused path (#35); NIL for a decision
+               ;; recorded before ATTEMPTED claims existed.
+               (attempted (or concluded
+                              (find "attempted" claims
+                                    :key #'st:claim-relation
+                                    :test #'string=)))
+               (evidence (sort (mapcar (lambda (c)
+                                         (cons (st:claim-object-key c)
+                                               (st:claim-method c)))
+                                       (remove "evidence" claims
+                                               :key #'st:claim-relation
+                                               :test-not #'string=))
+                               #'string< :key #'car))
+               (refusals (sort (loop for c in claims
+                                     when (string= "refused"
+                                                   (st:claim-relation c))
+                                       collect (cons (st:claim-object-key c)
+                                                     (st:claim-method c)))
+                               #'string< :key #'car)))
+          (make-decision-record
+           :id decision-id
+           :producer (st:claim-producer outcome)
+           :at at
+           :rule (and attempted (st:claim-method attempted))
+           :rule-version (and attempted (st:claim-rule-version attempted))
+           :confidence (and concluded (st:claim-confidence concluded))
+           :outcome (if concluded :concluded :refused)
+           ;; The conclusion is always the deciding store's own claim,
+           ;; so it resolves in G -- %RESOLVE-IN with no named store.
+           :conclusion (and concluded
+                            (%resolve-in (st:claim-object-key concluded)
+                                         nil g scope at))
+           :evidence (mapcar (lambda (pair)
+                               (%resolve-in (car pair) (cdr pair)
+                                            g scope at))
+                             evidence)
+           :refusals refusals
+           :store (store-name g)
+           :epoch (st:claim-commit-epoch outcome)))))))
 
 (defun trace-listing (graph decision-ids &key (scope (list graph)))
   "The deterministic shape capture-and-diff compares (SS7): one row per
 id, in the given order, with no id or timestamp in it.  SCOPE resolves
-cross-store evidence as TRACE does (#34)."
+cross-store evidence as TRACE does (#34); an id no store in SCOPE holds
+is a (:MISSING NIL NIL NIL NIL) row, never a signal (S6b, #47)."
   (loop for id in decision-ids
         for rec = (trace graph id :scope scope)
-        collect (list (decision-record-outcome rec)
-                      (decision-record-rule rec)
-                      (let ((c (decision-record-conclusion rec)))
-                        (and c (cite-record-cite c)))
-                      (mapcar (lambda (r) (list (cite-record-cite r)
-                                                (cite-record-state r)
-                                                (cite-record-changed-since r)))
-                              (decision-record-evidence rec))
-                      (mapcar #'car (decision-record-refusals rec)))))
+        collect (if (null rec)
+                    (list :missing nil nil nil nil)
+                    (list (decision-record-outcome rec)
+                          (decision-record-rule rec)
+                          (let ((c (decision-record-conclusion rec)))
+                            (and c (cite-record-cite c)))
+                          (mapcar (lambda (r)
+                                    (list (cite-record-cite r)
+                                          (cite-record-state r)
+                                          (cite-record-changed-since r)))
+                                  (decision-record-evidence rec))
+                          (mapcar #'car (decision-record-refusals rec))))))
 
 (defun decisions-citing (graph claim-or-cite &key (scope (list graph)))
-  "Ids of the decisions whose EVIDENCE cites CLAIM-OR-CITE, RECORDED-AT
-descending then id (SS5), unioned over every store in SCOPE (SS4.3).
-NIL means no decisions cite it."
-  (let* ((cite (%cite-of claim-or-cite))
-         (claims (loop for g in scope
-                       append (st:claims-touching g 'trace :claim cite
-                                                  :role :object
-                                                  :relation "evidence"))))
-    (mapcar #'cdr
-            (sort (mapcar (lambda (c) (cons (%recorded-instant c)
-                                            (st:claim-subject-key c)))
-                          claims)
-                  (lambda (a b)
-                    (or (local-time:timestamp> (car a) (car b))
-                        (and (local-time:timestamp= (car a) (car b))
-                             (string< (cdr a) (cdr b)))))))))
+  "(id . store-name) per decision whose EVIDENCE cites CLAIM-OR-CITE,
+RECORDED-AT descending then id (SS5), unioned over every store in SCOPE
+under its snapshots (S6b SS7).  NIL means no decisions cite it."
+  ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
+  (check-scope scope :write-store graph)
+  (let ((cite (%cite-of claim-or-cite)))
+    (with-scope-snapshots (scope)
+      (let ((rows (loop for g in scope
+                        append (mapcar
+                                (lambda (c)
+                                  (list (%recorded-instant c)
+                                        (st:claim-subject-key c)
+                                        (store-name g)))
+                                (st:claims-touching
+                                 g 'trace :claim cite :role :object
+                                 :relation "evidence")))))
+        (mapcar (lambda (r) (cons (second r) (third r)))
+                (sort rows
+                      (lambda (a b)
+                        (or (local-time:timestamp> (first a) (first b))
+                            (and (local-time:timestamp= (first a)
+                                                        (first b))
+                                 (string< (second a) (second b)))))))))))

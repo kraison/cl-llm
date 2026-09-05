@@ -131,7 +131,7 @@ never silently resolved in the wrong store."
                          (first (mem:decision-record-evidence in)))))
       (is (eq :absent (mem:cite-record-state
                        (first (mem:decision-record-evidence out)))))
-      (is (equal (list (mem:decision-id d))
+      (is (equal (list (cons (mem:decision-id d) "cl-llm-memory"))
                  (mem:decisions-citing b private :scope (list a b))))
       (is (null (mem:decisions-citing b private))
           "control: B alone holds no decision"))))

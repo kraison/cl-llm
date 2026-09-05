@@ -46,10 +46,12 @@ review).")
                      (and bs (list (cons (or (getf fm :name) name) bs)))))))
 
 (defun %newest-decision-by (graph cite producer scope since)
-  "The newest decision citing CITE that PRODUCER made at or after SINCE."
-  (loop for id in (mem:decisions-citing graph cite :scope scope)
+  "The newest decision citing CITE that PRODUCER made at or after SINCE,
+in any store of SCOPE (S6b, #47)."
+  (loop for (id . nil) in (mem:decisions-citing graph cite :scope scope)
         for rec = (mem:trace graph id :scope scope)
-        when (and (string= producer (mem:decision-record-producer rec))
+        when (and rec
+                  (string= producer (mem:decision-record-producer rec))
                   (not (local-time:timestamp< (mem:decision-record-at rec)
                                               since)))
           return id))

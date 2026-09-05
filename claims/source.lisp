@@ -98,7 +98,7 @@ cite the claim (agent-tools design §7)."
     (rag:make-evidence
      :chunk (rag:make-chunk
              text
-             :document-id (%claim-doc-id claim)
+             :document-id (%claim-doc-id source claim)
              :metadata (append
                         (and extent
                              (list :extent (temporal-extent:extent->sexp
@@ -111,10 +111,14 @@ cite the claim (agent-tools design §7)."
      :extent extent
      :standing (st:claim-standing claim))))
 
-(defun %claim-doc-id (claim)
+(defun %claim-doc-id (source claim)
   "The fusion identity: RRF keys on (DOCUMENT-ID . TEXT), so one claim
-reached through two queried endpoints must carry one id."
-  (format nil "claim:~a:~(~a~)~@[:~a~]:~(~a~)"
+reached through two queried endpoints must carry one id -- and copies
+of one claim in two stores must carry two (S6b, #49).  The store is
+the graph's name downcased, as %ABSENCE-EVIDENCE writes it; this system
+cannot see the memory tenant's STORE-NAME (recon C7)."
+  (format nil "claim:~(~a~):~a:~(~a~)~@[:~a~]:~(~a~)"
+          (graph-db:graph-name (claim-source-graph source))
           (%endpoint (st:claim-subject-namespace claim)
                      (st:claim-subject-key claim))
           (st:claim-relation claim)
@@ -163,7 +167,7 @@ assert (§9.2)."
                                                 source)))))
         (if touching
             (dolist (claim touching)
-              (let ((id (%claim-doc-id claim)))
+              (let ((id (%claim-doc-id source claim)))
                 (unless (gethash id seen)
                   (setf (gethash id seen) t)
                   (push claim claims))))

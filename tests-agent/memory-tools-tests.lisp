@@ -587,3 +587,30 @@ store is a SCOPE-ERROR whose message names it."
       (agent:scope-error (c)
         (is (search "appears twice" (princ-to-string c)))))
     (is (agent:make-scope (list w p) :producer +p+) "control")))
+
+(test decisions-citing-tool-carries-the-store-and-trace-tool-finds-it
+  "S6b SS7 (#47): a decision held only by P is listed with its store
+and traced through the scope; the conclude result carries an epoch."
+  (with-stores (w p)
+    (let* ((e (%belief p "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite e))
+           (d (mem:conclude p (list :belief +subj+ "releasable"
+                                    '(:v . "yes") :standing :inferred)
+                            :producer +p+ :evidence (list e) :rule "r"))
+           (tools (agent:make-agent-tools (list w p) :producer +p+))
+           (listed (coerce (json:jget (%call tools "decisions-citing"
+                                             "cite" cite)
+                                      "decisions")
+                           'list))
+           (traced (%call tools "trace" "decision-id" (mem:decision-id d))))
+      (is (= 1 (length listed)))
+      (is (string= "memory-private" (json:jget (first listed) "store")))
+      (is (string= "memory-private" (json:jget traced "store")))
+      (is (string= "concluded" (json:jget traced "outcome")))
+      (is (integerp (json:jget traced "epoch")))
+      (let ((out (%call tools "conclude"
+                        "subject-namespace" "repo" "subject-key" "cl-llm"
+                        "relation" "shippable" "object-namespace" "v"
+                        "object-key" "yes" "rule" "r"
+                        "evidence" (vector cite))))
+        (is (integerp (json:jget out "epoch")))))))

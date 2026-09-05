@@ -47,10 +47,11 @@
    #:cite-record-store
    ;; trace
    #:conclude #:decision #:decision-id #:decision-outcome
-   #:decision-claim #:decision-report #:decision-at
+   #:decision-claim #:decision-report #:decision-at #:decision-epoch
    #:trace #:trace-listing #:decisions-citing
    #:decision-record #:decision-record-id #:decision-record-producer
    #:decision-record-at #:decision-record-rule
    #:decision-record-rule-version #:decision-record-confidence
    #:decision-record-outcome #:decision-record-conclusion
-   #:decision-record-evidence #:decision-record-refusals))
+   #:decision-record-evidence #:decision-record-refusals
+   #:decision-record-store #:decision-record-epoch))

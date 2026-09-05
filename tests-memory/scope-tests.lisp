@@ -235,3 +235,87 @@ given.  A cite no store holds is :ABSENT with no store."
                                  :scope (list w p))))
         (is (eq :absent (mem:cite-record-state r)))
         (is (null (mem:cite-record-store r)))))))
+
+(test decisions-citing-names-the-store-and-trace-finds-it-in-scope
+  "SS7 (#47): a decision recorded in P is found through a scope whose
+first store is W: DECISIONS-CITING returns (id . store-name) and TRACE
+resolves it, naming its store; TRACE-LISTING gives a :MISSING row for an
+id no store holds instead of signalling."
+  (with-two-stores (w p)
+    (let* ((e (%belief-in p "ci-status" '(:verdict . "green")))
+           (d (mem:conclude p (list :belief +ss+ "releasable" '(:v . "yes")
+                                    :standing :inferred)
+                            :producer +p+ :evidence (list e) :rule "r"
+                            :scope (list p))))
+      (is (equal (list (cons (mem:decision-id d) "memory-private"))
+                 (mem:decisions-citing w e :scope (list w p))))
+      (let ((rec (mem:trace w (mem:decision-id d) :scope (list w p))))
+        (is (not (null rec)))
+        (is (string= "memory-private" (mem:decision-record-store rec)))
+        (is (eq :concluded (mem:decision-record-outcome rec))))
+      (is (null (mem:trace w (mem:decision-id d)))
+          "control: W alone does not hold it")
+      (is (equal '((:missing nil nil nil nil))
+                 (mem:trace-listing w (list "no-such-id")
+                                    :scope (list w p)))))))
+
+(test write-evidence-keeps-one-row-per-cite-naming-the-first-store
+  "SS7 (#51, documented bound): the trace family's identity excludes
+METHOD, so one cite cited from two stores is ONE evidence row, naming
+the first store in the pairs list; distinct cites are distinct rows
+(the control).  Two rows for one cite would collide on the unique
+constraint."
+  (with-two-stores (w p)
+    (let* ((cw (%belief-in w "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite cw))
+           (other (mem:claim-cite (%belief-in w "owner" '(:person . "k")))))
+      (%belief-in p "ci-status" '(:verdict . "green"))
+      (let* ((d (mem:conclude w (list :belief +ss+ "releasable"
+                                      '(:v . "yes") :standing :inferred)
+                              :producer +p+
+                              :evidence (list (cons cite "memory-private")
+                                              (cons cite "cl-llm-memory")
+                                              other)
+                              :rule "r" :scope (list w p)))
+             (rec (mem:trace w (mem:decision-id d) :scope (list w p)))
+             (ev (mem:decision-record-evidence rec)))
+        (is (= 2 (length ev)) "one row per cite: two cites, two rows")
+        (is (string= "memory-private"
+                     (mem:cite-record-store
+                      (find cite ev :key #'mem:cite-record-cite
+                                    :test #'string=)))
+            "the first pair's store names the row")))))
+
+(test decisions-record-their-commit-epoch
+  "SS7: two conclusions on two stores under one clock record integer
+epochs in increasing order, and TRACE reads the same number back; a
+refusal records one too."
+  (with-two-stores (w p)
+    (let* ((d1 (mem:conclude w (list :belief +ss+ "a" '(:v . "1")
+                                     :standing :inferred
+                                     :extent (%open-from
+                                              (%ts "2026-09-01T08:00:00Z")))
+                             :producer +p+ :rule "r"))
+           (d2 (mem:conclude p (list :belief +ss+ "b" '(:v . "1")
+                                     :standing :inferred)
+                             :producer +p+ :rule "r"))
+           ;; The validator path: retract, then re-assert the identical
+           ;; fact at the same valid-from -- the unique family refuses
+           ;; (as trace-tests' a-refused-proposal-is-recorded-and-writes-
+           ;; no-belief does).
+           (start (%open-from (%ts "2026-09-01T08:00:00Z")))
+           (d3 (progn (gdb:with-transaction (:graph w)
+                        (mem:retract-belief (mem:decision-claim d1)))
+                      (mem:conclude w (list :belief +ss+ "a" '(:v . "1")
+                                            :standing :inferred
+                                            :extent start)
+                                    :producer +p+ :rule "r"))))
+      (is (integerp (mem:decision-epoch d1)))
+      (is (< (mem:decision-epoch d1) (mem:decision-epoch d2)))
+      (is (= (mem:decision-epoch d1)
+             (mem:decision-record-epoch (mem:trace w (mem:decision-id d1)))))
+      (is (= (mem:decision-epoch d2)
+             (mem:decision-record-epoch
+              (mem:trace w (mem:decision-id d2) :scope (list w p)))))
+      (is (eq :refused (mem:decision-outcome d3)) "control: refused path")
+      (is (integerp (mem:decision-epoch d3))))))
