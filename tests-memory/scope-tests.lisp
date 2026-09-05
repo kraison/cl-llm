@@ -213,7 +213,7 @@ keeps validity-start-descending order across stores."
 (test resolve-cite-answers-from-the-first-store-in-scope
   "SS6 (#48): one cite, two stores holding the same identity; the
 record names the first store in scope order, whichever order is
-given.  A cite no store holds is :ABSENT with no store."
+given.  A cite whose claim postdates AT is :ABSENT with no store."
   (with-two-stores (w p)
     (let* ((cw (%belief-in w "ci-status" '(:verdict . "green")))
            (cite (mem:claim-cite cw))

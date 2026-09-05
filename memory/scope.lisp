@@ -31,10 +31,11 @@ graphs, so the message stays short.")
 
 (defun check-scope (scope &key write-store)
   "SCOPE itself when it is a non-empty list of distinct open stores with
-distinct STORE-NAMEs, WRITE-STORE (when given) among them, and -- for
-more than one store -- every store attached to ONE system clock (SS3,
-one regime).  A single store needs no clock.  Signals
-SCOPE-ARGUMENT-ERROR naming the offending store otherwise."
+distinct STORE-NAMEs, WRITE-STORE (when given) among them -- for the
+readers, the store the call was made on -- and -- for more than one
+store -- every store attached to ONE system clock (SS3, one regime).
+A single store needs no clock.  Signals SCOPE-ARGUMENT-ERROR naming
+the offending store otherwise."
   (unless (consp scope)
     (%scope-error scope "must be a non-empty list of open stores"))
   (dolist (g scope)
@@ -51,7 +52,10 @@ SCOPE-ARGUMENT-ERROR naming the offending store otherwise."
         when (member n rest :test #'string=)
           do (%scope-error scope (format nil "two stores are named ~a" n)))
   (when (and write-store (not (member write-store scope)))
-    (%scope-error scope "the write store is not in the scope"))
+    (%scope-error scope (format nil "~a is not in the scope"
+                                (if (typep write-store 'graph-db::graph)
+                                    (store-name write-store)
+                                    write-store))))
   (when (rest scope)
     (let ((clock (gdb:graph-system-clock (first scope))))
       (dolist (g scope)
@@ -73,7 +77,8 @@ SCOPE-ARGUMENT-ERROR naming the offending store otherwise."
 order; the engine composes them, with no single instant across stores
 (GH #53).  Refused before any engine call inside an open write
 transaction: the own-store half would show uncommitted state and the
-foreign half would hit the engine's cross-graph refusal (recon C9)."
+foreign half would hit the engine's cross-graph refusal (recon C9).
+The caller validates the scope with CHECK-SCOPE; this only snapshots."
   (when gdb:*transaction*
     (%scope-error scope "a scope read inside an open transaction"))
   (labels ((nest (stores)

@@ -558,6 +558,8 @@ first."
              (tools (agent:make-memory-tools scope)))
         (%call tools "recall" "subject-namespace" "repo"
                "subject-key" "cl-llm")
+        (is (eq w (gethash cite (agent::scope-cites scope)))
+            "the cache itself holds W")
         (is (eq w (agent:cite-store scope cite))
             "the cache names the first store after recall")
         (%call tools "retract" "cite" cite)

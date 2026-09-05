@@ -123,11 +123,15 @@ control."
                                      :producer +p+)))
         (%call (agent:make-planner-tools scope) "retrieve"
                "query" "ci-status of repo cl-llm" "endpoints" eps)
+        (is (eq w (gethash cite (agent::scope-cites scope)))
+            "the cache itself holds it")
         (is (eq w (agent:cite-store scope cite))))
       (let ((scope (agent:make-scope (list p w) :write-store w
                                      :producer +p+)))
         (%call (agent:make-planner-tools scope) "retrieve"
                "query" "ci-status of repo cl-llm" "endpoints" eps)
+        (is (eq p (gethash cite (agent::scope-cites scope)))
+            "the cache itself holds it")
         (is (eq p (agent:cite-store scope cite)) "control: reversed")))))
 
 (test retrieve-signals-on-a-noncanonical-endpoint-namespace

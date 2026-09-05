@@ -105,37 +105,43 @@ computed inside the resolving store.  STORE is filled on a resolved or
 reaped record, NIL on an absent one.  A claim from a family with no
 validity extent can only report CHANGED-SINCE :RETRACTED, :UPDATED or
 NIL -- :SUPERSEDED needs %OPEN-P, which such a claim never satisfies.
-Takes no snapshot of its own; TRACE, its caller, does."
+Runs under the scope's snapshots and is refused inside an open write
+transaction, like every reader (SS3)."
   ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
   (check-scope scope :write-store graph)
-  (multiple-value-bind (family ns key ikey) (split-cite cite)
-    (let* ((current nil)
-           (g (or (find-if (lambda (s)
-                             (setf current
-                                   (%current-among
-                                    ikey (st:claims-touching s family ns key
-                                                             :role :subject))))
-                           scope)
-                  graph))
-           (id (and current (gdb:id current)))
-           (then (and id
-                      (find-if (lambda (c)
-                                 (equalp id (if (st:reaped-claim-p c)
-                                                (st:reaped-claim-id c)
-                                                (gdb:id c))))
-                               (st:claims-touching g family ns key
-                                                   :role :subject
-                                                   :as-of at)))))
-      (cond ((null then)
-             (make-cite-record :cite cite :family family :state :absent))
-            ((st:reaped-claim-p then)
-             (make-cite-record :cite cite :family family :state :reaped
-                               :store (store-name g)))
-            (t
-             (make-cite-record :cite cite :family family :state :resolved
-                               :claim then
-                               :standing (st:claim-standing then)
-                               :extent (st:claim-extent then)
-                               :changed-since
-                               (%changed-since then current)
-                               :store (store-name g)))))))
+  (with-scope-snapshots (scope)
+    (multiple-value-bind (family ns key ikey) (split-cite cite)
+      (let* ((current nil)
+             ;; The GRAPH fallback is never dereferenced: CURRENT is NIL
+             ;; then.
+             (g (or (find-if (lambda (s)
+                               (setf current
+                                     (%current-among
+                                      ikey (st:claims-touching s family ns
+                                                               key
+                                                               :role
+                                                               :subject))))
+                             scope)
+                    graph))
+             (id (and current (gdb:id current)))
+             (then (and id
+                        (find-if (lambda (c)
+                                   (equalp id (if (st:reaped-claim-p c)
+                                                  (st:reaped-claim-id c)
+                                                  (gdb:id c))))
+                                 (st:claims-touching g family ns key
+                                                     :role :subject
+                                                     :as-of at)))))
+        (cond ((null then)
+               (make-cite-record :cite cite :family family :state :absent))
+              ((st:reaped-claim-p then)
+               (make-cite-record :cite cite :family family :state :reaped
+                                 :store (store-name g)))
+              (t
+               (make-cite-record :cite cite :family family :state :resolved
+                                 :claim then
+                                 :standing (st:claim-standing then)
+                                 :extent (st:claim-extent then)
+                                 :changed-since
+                                 (%changed-since then current)
+                                 :store (store-name g))))))))

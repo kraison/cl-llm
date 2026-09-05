@@ -286,6 +286,8 @@ review)."
   (let ((g (if store-name (%store-in-scope store-name scope) graph)))
     (if g
         (let ((r (resolve-cite g cite at)))
+          ;; Load-bearing on the :ABSENT branch: RESOLVE-CITE leaves
+          ;; that store NIL.
           (setf (cite-record-store r) (store-name g))
           r)
         (make-cite-record :cite cite :state :absent))))

@@ -66,9 +66,9 @@ through rather than open a store another image left dirty."
     (setf *graph*
           (if (probe-file (concatenate 'string store "schema.dat"))
               (gdb:open-graph name store :buffer-pool-size pool
-                             :system-clock *clock*)
+                              :system-clock *clock*)
               (gdb:make-graph name store :buffer-pool-size pool
-                             :system-clock *clock*)))
+                              :system-clock *clock*)))
     (setf gdb:*graph* *graph*)
     (swank:create-server :port port :dont-close t :interface "127.0.0.1")
     (format t "~&memory image: ~(~S~) at ~A as ~A; clock ~A; ~
@@ -92,6 +92,12 @@ exit hook because SBCL runs *EXIT-HOOKS* on SIGTERM (measured in sitrep
   (gdb:store-not-closed-cleanly-error (c)
     (format *error-output* "~&memory image: ~A~%Another image may hold ~
 the store.  If none does, delete its .dirty marker and start again.~%" c)
+    (finish-output *error-output*)
+    (sb-ext:exit :code 1 :abort t))
+  (gdb:system-clock-in-use (c)
+    (format *error-output* "~&memory image: ~A~%Another image holds the ~
+clock at that location.  Stop it, or point CL_LLM_MEMORY_CLOCK ~
+elsewhere.~%" c)
     (finish-output *error-output*)
     (sb-ext:exit :code 1 :abort t)))
 (push #'stop sb-ext:*exit-hooks*)
