@@ -88,24 +88,32 @@ the answer names that store.
 per store, nested own-store-first:
 
 ```lisp
-(defun call-with-scope-snapshots (scope thunk) ...)
+(defun call-with-scope-snapshots (thunk scope) ...)  ; engine order
 (defmacro with-scope-snapshots ((scope) &body body) ...)
 ```
 
 The helper refuses, before any engine call, when `gdb:*transaction*`
 is bound: a scope read inside an open write transaction would either
-see the writer's own uncommitted state or hit the engine's cross-graph
-refusal. The error is `scope-argument-error` naming the mechanism. A
-scope of one store still takes its snapshot, so the single-store path
-exercises the same code.
+see the writer's own uncommitted state (the own-store half, which the
+engine allows) or hit the engine's cross-graph refusal (the foreign
+half). The error is `scope-argument-error` naming the mechanism. The
+check applies to a single-store scope too, since the engine refuses
+only the foreign half (recon C9); a scope of one store still takes its
+snapshot, so the single-store path exercises the same code.
 
-**Clock ownership.** `scripts/memory-image.lisp` opens one system
+**Clock ownership.** The clock is a property of the image, not of the
+store on disk: an attachment lives in memory and in the clock's
+journal, and a store reopened without the clock silently resumes its
+own counter from its persisted highest id, continuing the same
+integers (recon C1). So `scripts/memory-image.lisp` opens one system
 clock at `CL_LLM_MEMORY_CLOCK` (default `~/.cl-llm-memory/clock/`)
-before its stores and passes it to `make-graph`/`open-graph`
-`:system-clock`; an existing store without a clock is attached with
-`attach-to-system-clock` on open. The two test fixtures do the same
-(section 9). A store opened elsewhere without a clock can still be
-read alone; it cannot join a multi-store scope.
+before its stores, holds it for the image's life, passes it on every
+`make-graph`/`open-graph` (`open-graph :system-clock` attaches; no
+separate `attach-to-system-clock` call), and `stop` closes the clock
+after the stores. The two test fixtures do the same (section 9). A
+store opened elsewhere without a clock can still be read alone; it
+cannot join a multi-store scope, and `check-scope` is the only
+detector, so `docs/agent-memory.md` states the rule.
 
 ## 4. `recall` over a scope
 
@@ -147,9 +155,13 @@ present. `docs/agent-tools.md` documents both.
                                      confidence (scope (list graph))) ...)
 ```
 
-Before its transaction opens, `conclude` reads the proposal's series
-(producer, subject, relation) over the scope under snapshots and
-applies the trust rule to the proposal as if it were recorded:
+Before its transaction opens, `conclude` of a `(:belief ...)`
+proposal reads the proposal's series (producer, subject, relation)
+over the scope under snapshots and applies the trust rule to the
+proposal as if it were recorded. An `(:absence ...)` proposal has no
+series and no predecessor (`record-absence` has none), so the pre-read
+does not apply and `conclude-absence` reaches `conclude` unchanged
+(recon C3). For a belief:
 
 - no prior anywhere: unchanged, the transaction opens as today;
 - the prior that would govern is in the write store: unchanged, the
@@ -160,8 +172,10 @@ applies the trust rule to the proposal as if it were recorded:
   of family `scope-conflict` whose text names the conflicting cite and
   its store, plus the evidence rows. The returned `decision` has
   `:outcome :refused` and a `report` of `(:scope-conflict cite
-  store-name)`; `%violation-families` renders that list as one
-  `scope-conflict` row. Nothing is written to any other store;
+  store-name)`; `%violation-families` gains a third branch keyed on
+  that list's head and renders exactly one `scope-conflict` row whose
+  text names the cite and its store in prose, never a Lisp form
+  (recon C2). Nothing is written to any other store;
 - the governing prior is only in a store later in scope order (lower
   trust): the write proceeds. It supersedes the lower-trust prior at
   read time under section 4. The trace records the overridden cite as
@@ -170,10 +184,13 @@ applies the trust rule to the proposal as if it were recorded:
 
 "The governing prior" is the current claim in the series whose
 validity start is latest but not later than the proposal's start,
-found by the section 4 rule. A proposal whose start precedes every
-prior is governed by nothing and proceeds; the write store's
-`belief-successor-before-predecessor` check still applies within that
-store.
+computed by the pre-read itself over the union of the scope's stores
+and then filtered by the section 4 rule. It is not
+`%current-predecessor`, which is a first-found search that is
+unambiguous only inside the write store (recon C3). A proposal whose
+start precedes every prior is governed by nothing and proceeds; the
+write store's `belief-successor-before-predecessor` check still
+applies within that store.
 
 The scope read is advisory, like the validation report. The commit is
 the enforcement, and the composed snapshots mean a concurrent writer in
@@ -261,18 +278,24 @@ stay valid.
 Every test is red first against the single-store code and named for the
 mechanism it proves.
 
-- **Fixtures.** `tests-memory` gains `with-scoped-stores ((private
-  working) &body)`: one system clock opened in the test's system
-  directory, two stores made with `:system-clock`, scope private-first.
-  `tests-agent`'s `with-stores` opens the same clock and attaches both
-  stores. The single-store `with-memory-graph` is untouched.
+- **Fixtures.** `tests-memory`'s existing `with-two-stores` is
+  extended, not duplicated (recon C5): a third scratch directory holds
+  one system clock opened before the stores and closed in an outer
+  `unwind-protect` after them (a leaked clock makes every later
+  `open-system-clock` in the run signal `system-clock-in-use`); both
+  stores are made with `:system-clock`; the fixture asserts inside
+  itself that both graphs answer one `eq` clock. `tests-agent`'s
+  `with-stores` gets the same three changes. The single-store
+  `with-memory-graph` is untouched.
 - **Scope validation.** One test per refusal: duplicate graph, two
   graphs with one store-name, a closed graph, a write store not in the
   list, two stores on different clocks, two stores with no clock. One
   positive test for a clockless single-store scope.
 - **Snapshot discipline.** A scope read inside `with-transaction` is
-  refused as `scope-argument-error` before any engine call; the engine's
-  cross-graph error never surfaces.
+  refused as `scope-argument-error` before any engine call, for a
+  two-store scope (the engine's cross-graph error never surfaces) and
+  for a single-store scope (which the engine would have allowed, showing
+  uncommitted state).
 - **Trust rule, both directions (#46).** One series split across
   stores. Newer belief in the higher-trust store: the older row has
   `superseded-by` naming the successor and its store and is not current.
@@ -329,16 +352,16 @@ mechanism it proves.
 | `memory/scope.lisp` (new) | `check-scope`, `scope-argument-error`, `call-with-scope-snapshots`, `with-scope-snapshots` |
 | `memory/recall.lisp` | `:scope`, union series table, trust rule, `store` slot |
 | `memory/trace.lisp` | `:scope` on `conclude`, pre-read and `scope-conflict`; `decisions-citing` pairs; `trace` first-in-scope; `trace-listing` NIL-safe; `%write-evidence` key; `epoch` slots |
-| `memory/cite.lisp` | `resolve-cite :scope`, `%changed-since` through the resolved store |
+| `memory/cite.lisp` | `resolve-cite &key scope`; `%changed-since` is already per resolving store |
 | `memory/packages.lisp` | exports |
 | `agent/scope.lisp` | `make-scope` delegates to `check-scope`; `note-cite` first-wins |
 | `agent/memory-tools.lisp` | drop the local merge; pass scope; `"store"` on decisions and evidence |
 | `agent/annotate.lisp` | scope-aware trace, skip missing |
 | `agent/render.lisp` | `"superseded-by"` object |
-| `claims/source.lisp` | `%claim-doc-id` with store |
-| `scripts/memory-image.lisp` | open the clock first |
+| `claims/source.lisp` | `%claim-doc-id claim source` with the source graph's downcased name, as `%absence-evidence` already does (`cl-llm/claims` cannot see `mem:store-name`) |
+| `scripts/memory-image.lisp` | open the clock first, pass it on every open, close it last |
 | `tests-memory/harness.lisp`, `tests-agent/harness.lisp` | clocked fixtures |
-| `docs/agent-memory.md`, `docs/agent-tools.md`, `docs/decision-trace.md` | scope, trust rule, JSON fields, refusal family, clock requirement |
+| `docs/agent-memory.md`, `docs/agent-tools.md` | scope, trust rule, JSON fields, refusal family, clock as a property of the image, the epoch field (the trace surface is documented in agent-tools.md; there is no decision-trace doc) |
 
 ## 12. Sequencing
 
