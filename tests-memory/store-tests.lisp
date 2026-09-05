@@ -22,22 +22,23 @@ failed to attach would pass every epoch test for the wrong reason."
          (cdir (format nil "/tmp/cl-llm-mem2-clock-~a/" stamp))
          (dirs (list (format nil "/tmp/cl-llm-mem2-a-~a/" stamp)
                      (format nil "/tmp/cl-llm-mem2-b-~a/" stamp)))
-         (clock (gdb:open-system-clock cdir)))
+         (clock (gdb:open-system-clock cdir))
+         (a nil) (b nil))
     (unwind-protect
-         (let ((a (gdb:make-graph :cl-llm-memory (first dirs)
-                                  :buffer-pool-size 1000
-                                  :system-clock clock))
-               (b (gdb:make-graph :memory-private (second dirs)
-                                  :buffer-pool-size 1000
-                                  :system-clock clock)))
-           (unwind-protect
-                (progn
-                  (is (eq (gdb:graph-system-clock a)
-                          (gdb:graph-system-clock b))
-                      "fixture: both stores on one clock")
-                  (funcall fn a b))
-             (ignore-errors (gdb:close-graph a))
-             (ignore-errors (gdb:close-graph b))))
+         (progn
+           (setf a (gdb:make-graph :cl-llm-memory (first dirs)
+                                   :buffer-pool-size 1000
+                                   :system-clock clock))
+           (setf b (gdb:make-graph :memory-private (second dirs)
+                                   :buffer-pool-size 1000
+                                   :system-clock clock))
+           (is (eq (gdb:graph-system-clock a) clock)
+               "fixture: both stores on one clock")
+           (is (eq (gdb:graph-system-clock b) clock)
+               "fixture: both stores on one clock")
+           (funcall fn a b))
+      (when a (ignore-errors (gdb:close-graph a)))
+      (when b (ignore-errors (gdb:close-graph b)))
       (ignore-errors (gdb:close-system-clock clock))
       (dolist (d (list* cdir gdb:*system-directory* dirs))
         (ignore-errors (uiop:delete-directory-tree

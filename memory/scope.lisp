@@ -18,7 +18,7 @@ graphs, so the message stays short.")
       (mapcar (lambda (g)
                 (if (typep g 'graph-db::graph) (store-name g) g))
               scope)
-      scope))
+      (list (if (typep scope 'graph-db::graph) (store-name scope) scope))))
 
 (defun %scope-error (scope reason)
   (error 'scope-argument-error

@@ -44,9 +44,9 @@ a single store needs no clock."
     (is (equal (list a) (mem:check-scope (list a))))))
 
 (test check-scope-refuses-a-malformed-scope
-  "SS3: empty, a repeated graph, a closed graph, a write store outside
-the list -- each SCOPE-ARGUMENT-ERROR, a BELIEF-ARGUMENT-ERROR whose
-message names the store."
+  "SS3: empty, a repeated graph, a write store outside the list --
+each SCOPE-ARGUMENT-ERROR, a BELIEF-ARGUMENT-ERROR whose message names
+the store."
   (with-two-stores (a b)
     (signals mem:scope-argument-error (mem:check-scope '()))
     (signals mem:scope-argument-error (mem:check-scope (list a a)))
@@ -67,8 +67,8 @@ message names the store."
     (signals mem:scope-argument-error (mem:check-scope (list a)))))
 
 (test check-scope-refuses-two-stores-not-on-one-clock
-  "SS3 one regime: two clockless stores, and one clocked with one not,
-are refused; the message names the clockless store."
+  "SS3 one regime: two clockless stores are refused; the message names
+the clockless store."
   (with-clockless-pair (a b)
     (signals mem:scope-argument-error (mem:check-scope (list a b)))
     (handler-case (mem:check-scope (list a b))
