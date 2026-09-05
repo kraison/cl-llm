@@ -74,7 +74,9 @@ came from; the private store is invisible when out of scope."
                       (json:jget r "records"))))
       (let ((old (second (coerce (json:jget r "records") 'list))))
         (is (eq nil (json:jget old "current")))
-        (is (mem:cite-p (json:jget old "superseded-by")))))
+        (is (mem:cite-p (json:jget old "superseded-by" "cite")))
+        (is (string= "cl-llm-memory"
+                     (json:jget old "superseded-by" "store")))))
     (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
            (r (%call tools "recall" "subject-namespace" "repo"
                      "subject-key" "cl-llm" "relation" "ci-status"
@@ -93,7 +95,13 @@ of scope order (spec SS6)."
                      "subject-key" "cl-llm" "relation" "ci-status")))
       (is (equal '("new" "old")
                  (map 'list (lambda (x) (json:jget x "object" "key"))
-                      (json:jget r "records")))))))
+                      (json:jget r "records"))))
+      ;; S6b (#46): W is more trusted than P here, so P's newer belief
+      ;; does not supersede W's -- both current, nothing superseded.
+      (let ((rows (coerce (json:jget r "records") 'list)))
+        (is (every (lambda (x) (eq t (json:jget x "current"))) rows))
+        (is (every (lambda (x) (null (json:jget x "superseded-by")))
+                   rows))))))
 
 (test recall-breaks-a-genuine-cross-store-tie-by-scope-order
   "Equal validity start AND equal recorded-at: STABLE-SORT then keeps
@@ -511,3 +519,25 @@ copy -- the answer TRACE must not use")
              (ev (first (coerce (json:jget r "evidence") 'list))))
         (is (string= "memory-private" (json:jget ev "store")))
         (is (string= "resolved" (json:jget ev "state")))))))
+
+(test recall-renders-a-cross-store-successor-with-its-store
+  "S6b SS4 JSON: scope (P W) with W the write store; P more trusted and
+newer: the W row is not current and its superseded-by is an object
+naming P's cite and store."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (%belief p "ci-status" '(:verdict . "red")
+             :start "2026-09-02T08:00:00Z")
+    (let* ((tools (agent:make-agent-tools (list p w) :write-store w
+                                          :producer +p+))
+           (r (%call tools "recall" "subject-namespace" "repo"
+                     "subject-key" "cl-llm"))
+           (rows (coerce (json:jget r "records") 'list))
+           (green (find "cl-llm-memory" rows
+                        :key (lambda (x) (json:jget x "store"))
+                        :test #'string=)))
+      (is (= 2 (length rows)))
+      (is (eq nil (json:jget green "current")))
+      (is (string= "memory-private"
+                   (json:jget green "superseded-by" "store")))
+      (is (mem:cite-p (json:jget green "superseded-by" "cite"))))))

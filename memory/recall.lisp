@@ -5,15 +5,19 @@
 
 (defstruct belief-record
   "One recalled claim plus what a caller would otherwise recompute
-wrongly.  SUPERSEDED-BY is COMPUTED -- the next claim in the same
-(producer subject relation) series by validity start -- never stored,
-so it cannot go stale (spec SS4)."
+wrongly.  SUPERSEDED-BY is COMPUTED -- the next current claim in the
+same (producer subject relation) series by validity start, in a store
+no later in scope order (SS4, the trust rule) -- never stored, so it
+cannot go stale.  STORE is the graph the claim lives in;
+SUPERSEDED-BY-STORE the successor's."
   claim
   (current-p nil)
   (superseded-by nil)
   (retracted-at nil)
   standing
-  extent)
+  extent
+  store
+  (superseded-by-store nil))
 
 (defun %retracted-at (claim)
   (let ((e (st:claim-transaction-extent claim)))
@@ -35,14 +39,18 @@ so it cannot go stale (spec SS4)."
         (st:claim-subject-key claim)
         (st:claim-relation claim)))
 
-(defun %successor (claim series)
+(defun %successor (claim series owner)
   "The earliest-starting current claim in SERIES that starts after
-CLAIM, or NIL."
+CLAIM and lives in a store no later in scope order than CLAIM's, or
+NIL.  OWNER maps each claim to its store's position in the scope (SS4:
+a lower-trust store never supersedes a higher one)."
   (let ((start (%start-instant claim))
+        (pos (gethash claim owner))
         (best nil))
     (dolist (c series best)
       (when (and (not (eq c claim))
                  (st:claim-current-p c)
+                 (<= (gethash c owner) pos)
                  (local-time:timestamp< start (%start-instant c))
                  (or (null best)
                      (local-time:timestamp< (%start-instant c)
@@ -68,12 +76,10 @@ object key ascending."
   "T when claim A sorts before claim B under RECALL's order (SS6)."
   (%before-p a b))
 
-(defun recall (graph subject &key relation producer at include-retracted)
-  "BELIEF-RECORDs about SUBJECT, ordered newest validity first (SS6).
-RELATION and PRODUCER narrow the series; AT keeps only beliefs valid at
-that instant; retracted claims are excluded unless INCLUDE-RETRACTED.
-Nothing recorded returns NIL -- which is not an absence standing."
-  (%check-endpoint :subject subject)
+(defun %recall-in (graph subject relation producer at include-retracted)
+  "Today's single-store selection for GRAPH: (values WANTED ALL).  The
+:AT membership test is EQL on claim objects, sound only within one
+store (recon E4), so it stays here, before the union."
   (let* ((all (st:claims-touching graph 'belief (car subject)
                                   (cdr subject) :role :subject))
          ;; The engine's :AT is the validity filter (cl-temporal-extent#2
@@ -89,18 +95,51 @@ Nothing recorded returns NIL -- which is not an absence standing."
                              (string= producer (st:claim-producer c)))
                          (or include-retracted (st:claim-current-p c))
                          (or (null at) (member c at-window))))
-                  all))
-         (series (make-hash-table :test 'equal)))
-    ;; Successors are found within the full series, so a claim outside
-    ;; the AT window can still be named as what superseded one inside.
-    (dolist (c all) (push c (gethash (%series-key c) series)))
-    (loop for c in (sort (copy-list wanted) #'%before-p)
-          for current = (st:claim-current-p c)
-          collect (make-belief-record
-                   :claim c
-                   :current-p (and current (%open-p c))
-                   :superseded-by
-                   (%successor c (gethash (%series-key c) series))
-                   :retracted-at (%retracted-at c)
-                   :standing (st:claim-standing c)
-                   :extent (st:claim-extent c)))))
+                  all)))
+    (values wanted all)))
+
+(defun recall (graph subject &key relation producer at include-retracted
+                                  (scope (list graph)))
+  "BELIEF-RECORDs about SUBJECT over SCOPE, ordered newest validity
+first (SS6; SS4 for the scope).  RELATION and PRODUCER narrow the
+series; AT keeps only beliefs valid at that instant; retracted claims
+are excluded unless INCLUDE-RETRACTED.  Each record names its store;
+supersession is computed over the whole scope under the trust rule.
+Nothing recorded returns NIL -- which is not an absence standing."
+  (%check-endpoint :subject subject)
+  (check-scope scope)
+  (with-scope-snapshots (scope)
+    (let ((series (make-hash-table :test 'equal))
+          (owner (make-hash-table :test 'eq))
+          (rows '()))
+      ;; Store-major in scope order, then a stable sort: a genuine
+      ;; cross-store tie breaks by scope order (agent SS6).
+      (loop for g in scope
+            for pos from 0
+            do (multiple-value-bind (wanted all)
+                   (%recall-in g subject relation producer at
+                               include-retracted)
+                 ;; Successors are found within the full series, so a
+                 ;; claim outside the AT window can still be named as
+                 ;; what superseded one inside.
+                 (dolist (c all)
+                   (setf (gethash c owner) pos)
+                   (push c (gethash (%series-key c) series)))
+                 (dolist (c (sort (copy-list wanted) #'%before-p))
+                   (push (cons g c) rows))))
+      (loop for (g . c) in (stable-sort (nreverse rows) #'%before-p
+                                        :key #'cdr)
+            for succ = (%successor c (gethash (%series-key c) series)
+                                   owner)
+            collect (make-belief-record
+                     :claim c
+                     :current-p (and (st:claim-current-p c) (%open-p c)
+                                     (null succ))
+                     :superseded-by succ
+                     :superseded-by-store (and succ
+                                               (nth (gethash succ owner)
+                                                    scope))
+                     :retracted-at (%retracted-at c)
+                     :standing (st:claim-standing c)
+                     :extent (st:claim-extent c)
+                     :store g)))))

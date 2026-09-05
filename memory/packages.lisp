@@ -30,7 +30,8 @@
    #:recall #:belief-record #:belief-record-claim
    #:belief-record-current-p #:belief-record-superseded-by
    #:belief-record-retracted-at #:belief-record-standing
-   #:belief-record-extent #:claim-before-p
+   #:belief-record-extent #:belief-record-store
+   #:belief-record-superseded-by-store #:claim-before-p
    ;; capture
    #:capture-memory-dir #:capture-listing #:read-frontmatter
    #:body-digest

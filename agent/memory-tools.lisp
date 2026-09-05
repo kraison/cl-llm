@@ -19,25 +19,20 @@ one predicate; optional at (RFC 3339) keeps only beliefs valid then."
      (let* ((ns (%find-keyword subject-namespace))
             (subject (and ns (cons ns subject-key)))
             (instant (and at (%parse-iso at)))
-            (rows '()))
-       (when subject
-         (dolist (g (scope-stores scope))
-           (dolist (r (mem:recall g subject :relation relation :at instant))
-             (note-cite scope (mem:claim-cite (mem:belief-record-claim r))
-                        g)
-             (push (cons g r) rows))))
-       (setf rows (stable-sort (nreverse rows)
-                               (lambda (a b)
-                                 (mem:claim-before-p
-                                  (mem:belief-record-claim (cdr a))
-                                  (mem:belief-record-claim (cdr b))))))
+            ;; One RECALL over the scope: the memory layer merges and
+            ;; computes supersession under the trust rule (S6b SS4).
+            (rows (and subject
+                       (mem:recall (scope-write-store scope) subject
+                                   :relation relation :at instant
+                                   :scope (scope-stores scope)))))
+       (dolist (r rows)
+         (note-cite scope (mem:claim-cite (mem:belief-record-claim r))
+                    (mem:belief-record-store r)))
        (let* ((cap (scope-max-rows scope))
               (shown (subseq rows 0 (min cap (length rows)))))
          (json:to-json
           (json:jobject
-           "records" (map 'vector
-                          (lambda (x) (%record-json (car x) (cdr x)))
-                          shown)
+           "records" (map 'vector #'%record-json shown)
            "truncated" (%bool (> (length rows) cap)))))))))
 
 (defun %find-decision (scope id)

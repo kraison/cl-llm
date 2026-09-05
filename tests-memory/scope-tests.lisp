@@ -144,3 +144,68 @@ shown uncommitted state.  The control is the engine's own refusal."
       (is (= 1 (length (st:claims-touching a 'mem:belief :repo "cl-llm"
                                            :role :subject)))
           "control: the engine allows the own-store half"))))
+
+(defun %row (records object-key)
+  (find object-key records
+        :key (lambda (r) (st:claim-object-key (mem:belief-record-claim r)))
+        :test #'string=))
+
+(test recall-supersedes-across-stores-from-equal-or-higher-trust-only
+  "SS4 (#46): one series split across two stores.  Scope (P W), P more
+trusted.  A newer belief in P supersedes W's older one: the W row is
+not current and names P's claim and store.  A newer belief in W does
+NOT supersede P's older one: both rows current, nothing superseded.
+The reversed scope is the control that proves the rule reads the
+order."
+  (with-two-stores (w p)
+    ;; W: green from 09-01; P: red from 09-02 -- P newer.
+    (%belief-in w "ci-status" '(:verdict . "green"))
+    (gdb:with-transaction (:graph p)
+      (mem:record-belief p +ss+ "ci-status" '(:verdict . "red")
+                         :producer +p+ :standing :observed
+                         :extent (%open-from (%ts "2026-09-02T08:00:00Z"))))
+    (let* ((rows (mem:recall p +ss+ :scope (list p w)))
+           (green (%row rows "green"))
+           (red (%row rows "red")))
+      (is (= 2 (length rows)))
+      (is (eq w (mem:belief-record-store green)))
+      (is (eq p (mem:belief-record-store red)))
+      (is (mem:belief-record-current-p red))
+      (is (not (mem:belief-record-current-p green))
+          "P is more trusted and newer: W's belief is superseded")
+      (is (eq (mem:belief-record-claim red)
+              (mem:belief-record-superseded-by green)))
+      (is (eq p (mem:belief-record-superseded-by-store green))))
+    ;; The reversed scope: W more trusted than P; P's newer belief may
+    ;; not supersede W's.
+    (let* ((rows (mem:recall w +ss+ :scope (list w p)))
+           (green (%row rows "green"))
+           (red (%row rows "red")))
+      (is (mem:belief-record-current-p green) "control: reversed order")
+      (is (mem:belief-record-current-p red))
+      (is (null (mem:belief-record-superseded-by green)))
+      (is (null (mem:belief-record-superseded-by red))))
+    ;; Single-store reads are unchanged: each store sees only itself.
+    (is (= 1 (length (mem:recall w +ss+))))
+    (is (mem:belief-record-current-p (first (mem:recall w +ss+))))))
+
+(test recall-keeps-filters-per-store-and-the-order-contract
+  "SS4: :AT and :RELATION apply per store before the union; the union
+keeps validity-start-descending order across stores."
+  (with-two-stores (w p)
+    (%belief-in w "ci-status" '(:verdict . "green"))
+    (%belief-in w "owner" '(:person . "kevin"))
+    (gdb:with-transaction (:graph p)
+      (mem:record-belief p +ss+ "ci-status" '(:verdict . "red")
+                         :producer +p+ :standing :observed
+                         :extent (%open-from (%ts "2026-09-02T08:00:00Z"))))
+    (let ((rows (mem:recall w +ss+ :relation "ci-status"
+                                   :scope (list w p))))
+      (is (= 2 (length rows)))
+      (is (string= "red" (st:claim-object-key
+                          (mem:belief-record-claim (first rows))))
+          "newest validity first, across stores"))
+    (is (= 2 (length (mem:recall w +ss+ :at (%ts "2026-09-01T12:00:00Z")
+                                        :scope (list w p))))
+        "at 09-01 noon: green and owner, not red")
+    (is (= 3 (length (mem:recall w +ss+ :scope (list w p)))))))
