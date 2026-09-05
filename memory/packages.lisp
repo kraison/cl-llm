@@ -23,6 +23,9 @@
    ;; write
    #:record-belief #:record-absence #:retract-belief
    #:belief-argument-error #:belief-successor-before-predecessor
+   ;; scope (S6b)
+   #:check-scope #:scope-argument-error
+   #:call-with-scope-snapshots #:with-scope-snapshots
    ;; recall
    #:recall #:belief-record #:belief-record-claim
    #:belief-record-current-p #:belief-record-superseded-by
