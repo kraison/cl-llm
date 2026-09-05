@@ -614,3 +614,24 @@ and traced through the scope; the conclude result carries an epoch."
                         "object-key" "yes" "rule" "r"
                         "evidence" (vector cite))))
         (is (integerp (json:jget out "epoch")))))))
+
+(test conclude-tool-refuses-a-higher-trust-conflict-by-name
+  "S6b SS5 (#50): through the tool, scope (P W) write W, P's prior
+governs: the result is a refusal whose refusals name the scope-conflict
+family, the cite and the store."
+  (with-stores (w p)
+    (let* ((prior (%belief p "ci-status" '(:verdict . "green")))
+           (tools (agent:make-agent-tools (list p w) :write-store w
+                                          :producer +p+))
+           (out (%call tools "conclude"
+                       "subject-namespace" "repo" "subject-key" "cl-llm"
+                       "relation" "ci-status" "object-namespace" "verdict"
+                       "object-key" "red" "rule" "r"
+                       "valid-from" "2026-09-02T08:00:00Z"))
+           (refusals (coerce (json:jget out "refusals") 'list)))
+      (is (string= "refused" (json:jget out "outcome")))
+      (is (= 1 (length refusals)))
+      (is (string= "scope-conflict" (json:jget (first refusals) "family")))
+      (is (search (mem:claim-cite prior)
+                  (json:jget (first refusals) "text")))
+      (is (search "memory-private" (json:jget (first refusals) "text"))))))

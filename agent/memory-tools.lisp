@@ -176,7 +176,8 @@ the belief starts to hold (RFC 3339; default now)."
                 :producer (scope-producer scope)
                 :evidence (%evidence-pairs scope evidence)
                 :rule rule :rule-version rule-version
-                :confidence confidence)))
+                :confidence confidence
+                :scope (scope-stores scope))))
        (%decision-json scope d)))))
 
 (defun %conclude-absence-tool (scope)
@@ -202,7 +203,8 @@ Validated and traced like conclude."
                                 standing +absence-standings+))
                :producer (scope-producer scope)
                :evidence (%evidence-pairs scope evidence)
-               :rule rule :rule-version rule-version)))
+               :rule rule :rule-version rule-version
+               :scope (scope-stores scope))))
        (%decision-json scope d)))))
 
 (defun %retract-tool (scope)

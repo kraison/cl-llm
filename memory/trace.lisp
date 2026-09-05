@@ -106,15 +106,27 @@ resolves its own store, falling back to WRITE-STORE."
 (SS4 step 2); never escapes CONCLUDE."))
 
 (defun %violation-families (report-or-condition)
-  "(family . text) per violation, first per family, in family order."
-  (let ((rows (if (typep report-or-condition 'gdb:validation-report)
-                  (loop for (family nil detail)
-                          in (gdb:validation-report-violations
-                              report-or-condition)
-                        collect (cons (string-downcase (symbol-name family))
-                                      (princ-to-string detail)))
-                  (list (cons "commit"
-                              (princ-to-string report-or-condition))))))
+  "(family . text) per violation, first per family, in family order.
+A (:SCOPE-CONFLICT cite store) report is one SCOPE-CONFLICT row whose
+text is prose, never a printed form (S6b SS5, recon C2)."
+  (let ((rows (cond ((typep report-or-condition 'gdb:validation-report)
+                     (loop for (family nil detail)
+                             in (gdb:validation-report-violations
+                                 report-or-condition)
+                           collect (cons (string-downcase
+                                          (symbol-name family))
+                                         (princ-to-string detail))))
+                    ((and (consp report-or-condition)
+                          (eq :scope-conflict (first report-or-condition)))
+                     (list (cons "scope-conflict"
+                                 (format nil "~a in the higher-trust ~
+                                              store ~a governs this ~
+                                              series"
+                                         (second report-or-condition)
+                                         (third report-or-condition)))))
+                    (t (list (cons "commit"
+                                   (princ-to-string
+                                    report-or-condition)))))))
     (sort (remove-duplicates rows :key #'car :test #'string= :from-end t)
           #'string< :key #'car)))
 
@@ -140,18 +152,56 @@ epoch (S6b SS7)."
                    ;; TRANSACTION-ID is internal to the engine (recon C10).
                    :epoch (graph-db::transaction-id tx))))
 
+(defun %scope-conflict-report (cite store-name)
+  (list :scope-conflict cite store-name))
+
+(defun %proposal-start (more)
+  "The validity start a (:BELIEF subject relation object . MORE) proposal
+will be recorded with: its :EXTENT's, else now (RECORD-BELIEF's
+default)."
+  (let ((extent (getf (rest more) :extent)))
+    (if extent
+        (te:bound-earliest (te:extent-start extent))
+        (local-time:now))))
+
+(defun %governing-prior (proposal producer scope)
+  "For a (:BELIEF ...) PROPOSAL, (values PRIOR STORE): the current open
+binary claim of the same series, across SCOPE, whose validity start is
+latest but not after the proposal's; the first store in scope order on
+a tie.  NIL for an absence, which has no series (recon C3), and when no
+prior governs.  Computed here, not by %CURRENT-PREDECESSOR, which is
+unambiguous only inside one store.  Caller holds the snapshots."
+  (destructuring-bind (kind subject relation &rest more) proposal
+    (when (eq kind :belief)
+      (let ((start (%proposal-start more))
+            (best nil) (best-store nil))
+        (dolist (g scope (values best best-store))
+          (dolist (c (%series g producer subject relation))
+            (when (and (typep c 'belief-binary)
+                       (st:claim-current-p c)
+                       (%open-p c)
+                       (not (local-time:timestamp< start
+                                                   (%start-instant c)))
+                       (or (null best)
+                           (local-time:timestamp< (%start-instant best)
+                                                  (%start-instant c))))
+              (setf best c best-store g))))))))
+
 (defun conclude (graph proposal
                  &key producer evidence rule rule-version confidence
                       (scope (list graph)))
   "Decide PROPOSAL from EVIDENCE under RULE (SS4).  Owns its
 transaction; signals BELIEF-ARGUMENT-ERROR when one is already open.
 Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
-:REFUSED and REPORT set, never signalled."
-  ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
-  (check-scope scope :write-store graph)
+:REFUSED and REPORT set, never signalled.  Under SCOPE (S6b SS5) a
+belief governed by a prior in a higher-trust store is refused as
+SCOPE-CONFLICT before the transaction opens; one in a lower-trust
+store is overridden and recorded as evidence.  Advisory, like the
+validation report: the commit is the enforcement."
   (when gdb:*transaction*
     (%arg-error :transaction gdb:*transaction*
                 "CONCLUDE owns its transaction; call it outside one"))
+  (check-scope scope :write-store graph)
   (%check-producer producer)
   (unless (stringp rule) (%arg-error :rule rule "a string naming the rule"))
   (%check-proposal proposal)
@@ -159,25 +209,38 @@ Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
         (pairs (mapcar (lambda (e) (%evidence-of e (store-name graph)))
                        evidence))
         (claim nil) (outcome nil))
+    (multiple-value-bind (prior store)
+        (with-scope-snapshots (scope)
+          (%governing-prior proposal producer scope))
+      (when (and prior (not (eq store graph)))
+        (if (< (position store scope) (position graph scope))
+            (return-from conclude
+              (%write-refusal graph id
+                              (%scope-conflict-report (claim-cite prior)
+                                                      (store-name store))
+                              pairs producer rule rule-version))
+            ;; Lower trust: overridden at read time (SS4); say so.
+            (setf pairs (append pairs
+                                (list (cons (claim-cite prior)
+                                            (store-name store))))))))
     (handler-case
-        (progn
-          (let ((tx (gdb:with-transaction (:graph graph)
-                      (setf claim (%stage graph proposal producer rule
-                                          rule-version confidence))
-                      (let ((report (gdb:validate-transaction graph)))
-                        (when (gdb:validation-report-violations report)
-                          (error '%refused :report report)))
-                      (setf outcome
-                            (%trace-claim graph id "concluded" :claim
-                                          (claim-cite claim) producer
-                                          :inferred :method rule
-                                          :rule-version rule-version
-                                          :confidence confidence))
-                      (%write-evidence graph id pairs producer)
-                      gdb:*transaction*)))
-            (make-decision :id id :outcome :concluded :claim claim
-                           :at (st:claim-recorded-at outcome)
-                           :epoch (graph-db::transaction-id tx))))
+        (let ((tx (gdb:with-transaction (:graph graph)
+                    (setf claim (%stage graph proposal producer rule
+                                        rule-version confidence))
+                    (let ((report (gdb:validate-transaction graph)))
+                      (when (gdb:validation-report-violations report)
+                        (error '%refused :report report)))
+                    (setf outcome
+                          (%trace-claim graph id "concluded" :claim
+                                        (claim-cite claim) producer
+                                        :inferred :method rule
+                                        :rule-version rule-version
+                                        :confidence confidence))
+                    (%write-evidence graph id pairs producer)
+                    gdb:*transaction*)))
+          (make-decision :id id :outcome :concluded :claim claim
+                         :at (st:claim-recorded-at outcome)
+                         :epoch (graph-db::transaction-id tx)))
       (%refused (c)
         (%write-refusal graph id (%refused-report c) pairs producer
                         rule rule-version))
@@ -187,7 +250,7 @@ Returns a DECISION -- a refusal is RETURNED as one with :OUTCOME
 
 (defstruct decision-record
   "TRACE's answer (SS5).  CONCLUSION is a CITE-RECORD or NIL; EVIDENCE a
-list of CITE-RECORDs in cite order then store; REFUSALS (family . text)
+list of CITE-RECORDs in cite order; REFUSALS (family . text)
 in family order.  STORE names the store the decision was found in;
 EPOCH is the outcome claim's commit epoch, NIL for a claim written
 before the engine stamped one (S6b SS7)."
@@ -286,21 +349,27 @@ store is in SCOPE (SS4.3).  Runs under the scope's snapshots (S6b)."
   "The deterministic shape capture-and-diff compares (SS7): one row per
 id, in the given order, with no id or timestamp in it.  SCOPE resolves
 cross-store evidence as TRACE does (#34); an id no store in SCOPE holds
-is a (:MISSING NIL NIL NIL NIL) row, never a signal (S6b, #47)."
-  (loop for id in decision-ids
-        for rec = (trace graph id :scope scope)
-        collect (if (null rec)
-                    (list :missing nil nil nil nil)
-                    (list (decision-record-outcome rec)
-                          (decision-record-rule rec)
-                          (let ((c (decision-record-conclusion rec)))
-                            (and c (cite-record-cite c)))
-                          (mapcar (lambda (r)
-                                    (list (cite-record-cite r)
-                                          (cite-record-state r)
-                                          (cite-record-changed-since r)))
-                                  (decision-record-evidence rec))
-                          (mapcar #'car (decision-record-refusals rec))))))
+is a (:MISSING NIL NIL NIL NIL) row, never a signal (S6b, #47).  Runs
+under the scope's snapshots, once, so the listing is one consistent
+read (S6b)."
+  ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
+  (check-scope scope :write-store graph)
+  (with-scope-snapshots (scope)
+    (loop for id in decision-ids
+          for rec = (trace graph id :scope scope)
+          collect (if (null rec)
+                      (list :missing nil nil nil nil)
+                      (list (decision-record-outcome rec)
+                            (decision-record-rule rec)
+                            (let ((c (decision-record-conclusion rec)))
+                              (and c (cite-record-cite c)))
+                            (mapcar (lambda (r)
+                                      (list (cite-record-cite r)
+                                            (cite-record-state r)
+                                            (cite-record-changed-since r)))
+                                    (decision-record-evidence rec))
+                            (mapcar #'car
+                                    (decision-record-refusals rec)))))))
 
 (defun decisions-citing (graph claim-or-cite &key (scope (list graph)))
   "(id . store-name) per decision whose EVIDENCE cites CLAIM-OR-CITE,

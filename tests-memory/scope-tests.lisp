@@ -319,3 +319,94 @@ refusal records one too."
               (mem:trace w (mem:decision-id d2) :scope (list w p)))))
       (is (eq :refused (mem:decision-outcome d3)) "control: refused path")
       (is (integerp (mem:decision-epoch d3))))))
+
+(defun %families (g id)
+  (mapcar #'car (mem:decision-record-refusals (mem:trace g id))))
+
+(test conclude-refuses-a-belief-governed-by-a-higher-trust-store
+  "SS5 (#50): scope (P W), write store W.  P holds the governing prior
+of the proposal's series; the proposal is refused with the
+SCOPE-CONFLICT family naming P's cite and store, nothing is written to
+either store, and the decision's report is the (:SCOPE-CONFLICT ...)
+list.  The control: the same proposal with P absent from the scope
+concludes."
+  (with-two-stores (w p)
+    (let* ((prior (%belief-in p "ci-status" '(:verdict . "green")))
+           (before-w (length (st:claims-by-producer w 'mem:belief +p+)))
+           (before-p (length (st:claims-by-producer p 'mem:belief +p+)))
+           (d (mem:conclude w (list :belief +ss+ "ci-status"
+                                    '(:verdict . "red") :standing :inferred
+                                    :extent (%open-from
+                                             (%ts "2026-09-02T08:00:00Z")))
+                            :producer +p+ :rule "r" :scope (list p w))))
+      (is (eq :refused (mem:decision-outcome d)))
+      (is (null (mem:decision-claim d)))
+      (is (equal (list :scope-conflict (mem:claim-cite prior)
+                       "memory-private")
+                 (mem:decision-report d)))
+      (is (equal '("scope-conflict") (%families w (mem:decision-id d))))
+      (let ((text (cdr (first (mem:decision-record-refusals
+                               (mem:trace w (mem:decision-id d)))))))
+        (is (search (mem:claim-cite prior) text))
+        (is (search "memory-private" text))
+        (is (not (search "(:" text)) "prose, not a Lisp form"))
+      (is (= before-w (length (st:claims-by-producer w 'mem:belief +p+))))
+      (is (= before-p (length (st:claims-by-producer p 'mem:belief +p+))))
+      (is (eq :concluded
+              (mem:decision-outcome
+               (mem:conclude w (list :belief +ss+ "ci-status"
+                                     '(:verdict . "red")
+                                     :standing :inferred
+                                     :extent (%open-from
+                                              (%ts "2026-09-02T08:00:00Z")))
+                             :producer +p+ :rule "r" :scope (list w))))
+          "control: without P in scope the write proceeds"))))
+
+(test conclude-overrides-a-lower-trust-prior-and-records-it-as-evidence
+  "SS5 (#50): scope (W P), write store W.  P holds the prior; W's newer
+belief is concluded, supersedes P's at read time, and the trace carries
+the overridden cite with P's name as its store.  A prior in the write
+store itself still goes to the validator (the control)."
+  (with-two-stores (w p)
+    (let* ((prior (%belief-in p "ci-status" '(:verdict . "green")))
+           (d (mem:conclude w (list :belief +ss+ "ci-status"
+                                    '(:verdict . "red") :standing :inferred
+                                    :extent (%open-from
+                                             (%ts "2026-09-02T08:00:00Z")))
+                            :producer +p+ :rule "r" :scope (list w p)))
+           (rec (mem:trace w (mem:decision-id d) :scope (list w p)))
+           (ev (mem:decision-record-evidence rec)))
+      (is (eq :concluded (mem:decision-outcome d)))
+      (is (= 1 (length ev)))
+      (is (string= (mem:claim-cite prior) (mem:cite-record-cite (first ev))))
+      (is (string= "memory-private" (mem:cite-record-store (first ev))))
+      (let ((rows (mem:recall w +ss+ :scope (list w p))))
+        (is (not (mem:belief-record-current-p (%row rows "green"))))
+        (is (mem:belief-record-current-p (%row rows "red"))))
+      ;; Control: the validator path is untouched -- retract W's red,
+      ;; re-assert the identical fact at the same valid-from, and the
+      ;; unique family refuses, not scope-conflict.  RETRACT-BELIEF
+      ;; needs an ambient transaction or :GRAPH to resolve (as the
+      ;; analogous fix in decisions-record-their-commit-epoch does).
+      (gdb:with-transaction (:graph w)
+        (mem:retract-belief (mem:decision-claim d)))
+      (let ((d2 (mem:conclude w (list :belief +ss+ "ci-status"
+                                      '(:verdict . "red")
+                                      :standing :inferred
+                                      :extent (%open-from
+                                               (%ts "2026-09-02T08:00:00Z")))
+                              :producer +p+ :rule "r" :scope (list w p))))
+        (is (eq :refused (mem:decision-outcome d2)))
+        (is (not (member "scope-conflict"
+                         (%families w (mem:decision-id d2))
+                         :test #'string=)))))))
+
+(test conclude-absence-takes-no-scope-pre-read
+  "SS5 (recon C3): an absence has no series; the pre-read does not
+apply and the write proceeds under any scope."
+  (with-two-stores (w p)
+    (%belief-in p "ci-status" '(:verdict . "green"))
+    (let ((d (mem:conclude w (list :absence +ss+ "ci-status"
+                                   :standing :searched-empty)
+                           :producer +p+ :rule "r" :scope (list p w))))
+      (is (eq :concluded (mem:decision-outcome d))))))
