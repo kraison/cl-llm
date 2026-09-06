@@ -52,18 +52,34 @@ connections are not drained (SS9).  Idempotent; never signals."
                              :element-type 'character))))
                (when socket
                  (bt:make-thread
-                  (lambda () (%serve-connection listener socket))
+                  (lambda () (%serve-guarded listener socket))
                   :name "cl-llm memory mcp connection"))))))
+
+(defun %serve-guarded (listener socket)
+  "Run %SERVE-CONNECTION; the image runs with the debugger disabled, so
+an escaping condition -- a dead client, a broken pipe out of
+RUN-SERVER's own error path onto this SOCKET's stream -- would end the
+whole image, not just this connection.  Logs the peer and the
+condition TYPE only, never its message, which could carry a secret."
+  (handler-case (%serve-connection listener socket)
+    (error (c)
+      (format *error-output* "~&memory mcp: connection from ~a ended: ~a~%"
+              (%address-string (ignore-errors
+                                (usocket:get-peer-address socket)))
+              (type-of c))
+      (finish-output *error-output*))))
 
 (defun %serve-connection (listener socket)
   "Read the first line; a hello is consumed, any other line is replayed
 ahead of the socket (with its newline: READ-LINE runs across a
 concatenated stream's boundary, recon E3).  A refused identity closes
-the socket before any handshake."
-  (let* ((stream (usocket:socket-stream socket))
-         (peer (usocket:get-peer-address socket))
-         (line (read-line stream nil nil)))
-    (unwind-protect
+the socket before any handshake.  The UNWIND-PROTECT is established
+before any read of SOCKET, so a reset during that read still closes
+it."
+  (unwind-protect
+       (let* ((stream (usocket:socket-stream socket))
+              (peer (usocket:get-peer-address socket))
+              (line (read-line stream nil nil)))
          (when line
            (let* ((hello-p (hello-line-p line))
                   (principals (and (listener-principals-path listener)
@@ -89,5 +105,5 @@ the socket before any handshake."
                                     (concatenate 'string line
                                                  (string #\Newline)))
                                    stream))))
-                   (mcp:run-server server :input input :output stream)))))
-      (ignore-errors (usocket:socket-close socket)))))
+                   (mcp:run-server server :input input :output stream))))))
+    (ignore-errors (usocket:socket-close socket))))

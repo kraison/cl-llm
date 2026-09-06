@@ -19,10 +19,15 @@ when PATH does not exist; signals on a malformed entry."
       (format nil "~{~a~^.~}" (coerce address 'list))))
 
 (defun loopback-p (address)
-  "ADDRESS -- a usocket address vector or a string -- is loopback."
-  (let ((s (%address-string address)))
-    (or (string= s "localhost") (string= s "::1")
-        (and (>= (length s) 4) (string= "127." (subseq s 0 4))))))
+  "ADDRESS -- a usocket address vector or a string -- is loopback.  A
+16-element vector is IPv6 (usocket's octet form): loopback iff every
+element but the last is 0 and the last is 1."
+  (if (and (vectorp address) (not (stringp address))
+           (= 16 (length address)))
+      (and (every #'zerop (subseq address 0 15)) (= 1 (aref address 15)))
+      (let ((s (%address-string address)))
+        (or (string= s "localhost") (string= s "::1")
+            (and (>= (length s) 4) (string= "127." (subseq s 0 4)))))))
 
 (defun check-bind (address principals)
   "ADDRESS when it is loopback or PRINCIPALS is non-NIL (SS5): an open
@@ -33,9 +38,13 @@ listener with the default identity cannot exist."
   address)
 
 (defun %hello-object (line)
-  (let ((object (ignore-errors (yason:parse line :object-as :alist))))
-    (and (consp object)
-         (assoc "cl-llm-memory" object :test #'string=))))
+  ;; A top-level JSON array (a batch request) parses fine but makes
+  ;; ASSOC signal; the whole form is guarded, not just YASON:PARSE, so
+  ;; any non-object LINE is simply not a hello.
+  (ignore-errors
+   (let ((object (yason:parse line :object-as :alist)))
+     (and (consp object)
+          (assoc "cl-llm-memory" object :test #'string=)))))
 
 (defun hello-line-p (line)
   "LINE is a hello (SS5), well-formed or not."

@@ -133,13 +133,40 @@ gone and a connect is refused.  The control is a connect before STOP."
     (let ((l (mcp:start-listener :bind "127.0.0.1" :port 0
                                  :stores (list w p) :write-store w
                                  :default-producer +p+)))
+      (unwind-protect
+           (progn
+             (multiple-value-bind (socket stream)
+                 (%connect (mcp:listener-port l))
+               (is (cl-mcp.json-rpc:response-result (%initialize stream))
+                   "control: accepting before stop")
+               (usocket:socket-close socket))
+             (let ((thread (mcp:listener-thread l)))
+               (mcp:stop-listener l)
+               (is (not (bt:thread-alive-p thread)))
+               (signals usocket:connection-refused-error
+                 (usocket:socket-connect "127.0.0.1"
+                                         (mcp:listener-port l)))
+               (finishes (mcp:stop-listener l) "idempotent")))
+        (mcp:stop-listener l)))))
+
+(test a-json-array-first-line-is-replayed-not-fatal
+  "A top-level JSON array is not a hello: %HELLO-OBJECT's widened
+IGNORE-ERRORS covers the ASSOC a non-object line would otherwise make
+signal, so HELLO-LINE-P is NIL and the array replays as an ordinary
+JSON-RPC line; cl-mcp's own RUN-SERVER loop answers it with an error
+response rather than the connection ending the image (recon: the
+connection thread's HANDLER-CASE is the other half of this fix).  The
+control is a second, ordinary connection on the same listener
+completing INITIALIZE -- proof the image survived."
+  (with-stores (w p)
+    (with-listener (l w p)
+      (multiple-value-bind (socket stream) (%connect (mcp:listener-port l))
+        (write-string "[1,2,3]" stream) (write-char #\Newline stream)
+        (force-output stream)
+        (is (cl-mcp.json-rpc:response-error
+             (client:parse-client-message (read-line stream))))
+        (usocket:socket-close socket))
       (multiple-value-bind (socket stream) (%connect (mcp:listener-port l))
         (is (cl-mcp.json-rpc:response-result (%initialize stream))
-            "control: accepting before stop")
-        (usocket:socket-close socket))
-      (let ((thread (mcp:listener-thread l)))
-        (mcp:stop-listener l)
-        (is (not (bt:thread-alive-p thread)))
-        (signals error (usocket:socket-connect "127.0.0.1"
-                                               (mcp:listener-port l)))
-        (finishes (mcp:stop-listener l) "idempotent")))))
+            "control: the image survived")
+        (usocket:socket-close socket)))))
