@@ -51,7 +51,10 @@ agent 269, 0 failures. Each ruling names what it costs if wrong.
     to defer: IPv4-mapped IPv6 loopback; `k`/`max-rows` for listener
     connections; shell line widths; the concurrent test with distinct
     producers; a constant-time secret compare; `check-bind` ignoring the
-    provider.
+    provider; an accepted socket left unclosed when `make-thread` fails
+    inside the guarded accept loop (one fd per exhaustion event); the
+    round-trip process test without the `unwind-protect` its siblings
+    have; the JSON-null refusal documented from the code, not a test.
 
 ## What an operator sees differently
 
