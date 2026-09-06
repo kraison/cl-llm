@@ -25,13 +25,21 @@ either of which carries a secret."
       address
       (format nil "~{~a~^.~}" (coerce address 'list))))
 
+(defun %mapped-loopback-p (v)
+  ;; ::ffff:127.0.0.0/8 -- what a dual-stack accept reports for an IPv4
+  ;; loopback peer (#58).
+  (and (every #'zerop (subseq v 0 10))
+       (= 255 (aref v 10)) (= 255 (aref v 11)) (= 127 (aref v 12))))
+
 (defun loopback-p (address)
   "ADDRESS -- a usocket address vector or a string -- is loopback.  A
-16-element vector is IPv6 (usocket's octet form): loopback iff every
-element but the last is 0 and the last is 1."
+16-element vector is IPv6 (usocket's octet form): loopback iff it is
+::1, or an IPv4-mapped address in 127.0.0.0/8."
   (if (and (vectorp address) (not (stringp address))
            (= 16 (length address)))
-      (and (every #'zerop (subseq address 0 15)) (= 1 (aref address 15)))
+      (or (and (every #'zerop (subseq address 0 15))
+               (= 1 (aref address 15)))
+          (%mapped-loopback-p address))
       (let ((s (%address-string address)))
         (or (string= s "localhost") (string= s "::1")
             (and (>= (length s) 4) (string= "127." (subseq s 0 4)))))))
@@ -79,6 +87,16 @@ listener with the default identity cannot exist."
        (let ((producer (format nil "claude-code/~(~a~)" name)))
          (and (st:canonical-producer-p producer) producer))))))
 
+(defun %secret= (a b)
+  "A and B are the same secret, compared without an early return: XOR
+over the longer of the two, 0 past the end, and the lengths compared
+only at the end (#58)."
+  (let ((la (length a)) (lb (length b)) (acc 0))
+    (dotimes (i (max la lb))
+      (setf acc (logior acc (logxor (if (< i la) (char-code (char a i)) 0)
+                                    (if (< i lb) (char-code (char b i)) 0)))))
+    (and (zerop acc) (= la lb))))
+
 (defun resolve-identity (provider line peer default principals)
   "The producer for a connection, or :REFUSED (SS5).  :SECRET -- a hello
 LINE matching PRINCIPALS names it; no hello on a loopback PEER is
@@ -88,7 +106,7 @@ DEFAULT; anything else is refused.  :TAILSCALE -- the peer's node."
      (multiple-value-bind (principal secret) (and line (parse-hello line))
        (cond ((and (stringp principal) (stringp secret))
               (let ((entry (assoc principal principals :test #'string=)))
-                (if (and entry (string= (cdr entry) secret))
+                (if (and entry (%secret= (cdr entry) secret))
                     principal
                     :refused)))
              (line :refused)

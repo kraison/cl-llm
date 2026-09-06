@@ -75,10 +75,15 @@ child at the developer's real store."
 
 (defun %reap (process)
   "SIGTERM PROCESS and wait, when it is still alive: a scratch store is
-never deleted under a live holder."
-  (when (sb-ext:process-alive-p process)
-    (sb-ext:process-kill process sb-unix:sigterm)
-    (%wait process)))
+never deleted under a live holder.  Takes either handle -- RUN-PROGRAM's
+process, or the PROCESS-INFO cl-mcp's client holds (#58)."
+  (cond ((sb-ext:process-p process)
+         (when (sb-ext:process-alive-p process)
+           (sb-ext:process-kill process sb-unix:sigterm)
+           (%wait process)))
+        ((uiop:process-alive-p process)
+         (uiop:terminate-process process)
+         (uiop:wait-process process))))
 
 (defun %stderr (process)
   (let ((s (sb-ext:process-error process)))
@@ -106,42 +111,51 @@ inherits the environment (recon C13), restored afterwards."
   "SS4, SS6: cl-mcp/client spawns the solo server; tools list, a
 conclude, a recall; then EOF, then the child exits and the store has no
 .dirty marker and reopens clean.  DISCONNECT does not wait (recon C8),
-so the process handle is captured first; the reopen binds
-GDB:*SYSTEM-DIRECTORY* to the child's, which is where OPEN-GRAPH reads
-the store's type ids from (GH #186)."
+so the process handle is captured first, and the session runs under an
+UNWIND-PROTECT that reaps it: a failing assertion must not leave a
+child holding the store WITH-SCRATCH-ROOT is about to delete (#58).
+The reopen binds GDB:*SYSTEM-DIRECTORY* to the child's, which is where
+OPEN-GRAPH reads the store's type ids from (GH #186)."
   (with-scratch-root (root)
     (with-solo-env (root)
       (let ((c (client:make-client
                 :command (list (%script "run-memory-mcp.sh")))))
         (client:connect c)
         (let ((process (cl-mcp.client::client-process c)))
-          (is (= 8 (length (client:list-tools c))))
-          (let* ((out (client:call-tool
-                       c "conclude"
-                       '(("subject-namespace" . "repo")
-                         ("subject-key" . "cl-llm") ("relation" . "a")
-                         ("object-namespace" . "v") ("object-key" . "1")
-                         ("rule" . "r"))))
-                 (text (cdr (assoc "text" (first (getf out :content))
-                                   :test #'string=))))
-            (is (string= "concluded"
-                         (json:jget (json:parse text) "outcome"))))
-          (let* ((out (client:call-tool
-                       c "recall" '(("subject-namespace" . "repo")
-                                    ("subject-key" . "cl-llm"))))
-                 (text (cdr (assoc "text" (first (getf out :content))
-                                   :test #'string=))))
-            (is (= 1 (length (json:jget (json:parse text) "records")))))
-          (client:disconnect c)
-          (uiop:wait-process process)
-          (is (not (uiop:process-alive-p process)) "no child left running")
-          (is (not (%dirty-p (%sub root "store/"))) "clean after EOF")
-          (let* ((gdb:*system-directory* (%sub root "sys/"))
-                 (g (gdb:open-graph :cl-llm-memory (%sub root "store/")
-                                    :buffer-pool-size 1000)))
-            (is (= 1 (length (mem:recall g '(:repo . "cl-llm"))))
-                "reopens clean and holds the decision's belief")
-            (let ((gdb:*graph* g)) (gdb:close-graph g :snapshot-p nil))))))))
+          (unwind-protect
+               (progn
+                 (is (= 8 (length (client:list-tools c))))
+                 (let* ((out (client:call-tool
+                              c "conclude"
+                              '(("subject-namespace" . "repo")
+                                ("subject-key" . "cl-llm") ("relation" . "a")
+                                ("object-namespace" . "v") ("object-key" . "1")
+                                ("rule" . "r"))))
+                        (text (cdr (assoc "text" (first (getf out :content))
+                                          :test #'string=))))
+                   (is (string= "concluded"
+                                (json:jget (json:parse text) "outcome"))))
+                 (let* ((out (client:call-tool
+                              c "recall" '(("subject-namespace" . "repo")
+                                           ("subject-key" . "cl-llm"))))
+                        (text (cdr (assoc "text" (first (getf out :content))
+                                          :test #'string=))))
+                   (is (= 1 (length (json:jget (json:parse text)
+                                               "records")))))
+                 (client:disconnect c)
+                 (uiop:wait-process process)
+                 (is (not (uiop:process-alive-p process))
+                     "no child left running")
+                 (is (not (%dirty-p (%sub root "store/"))) "clean after EOF")
+                 (let* ((gdb:*system-directory* (%sub root "sys/"))
+                        (g (gdb:open-graph :cl-llm-memory
+                                           (%sub root "store/")
+                                           :buffer-pool-size 1000)))
+                   (is (= 1 (length (mem:recall g '(:repo . "cl-llm"))))
+                       "reopens clean and holds the decision's belief")
+                   (let ((gdb:*graph* g))
+                     (gdb:close-graph g :snapshot-p nil))))
+            (%reap process)))))))
 
 (test a-second-solo-server-on-a-held-store-refuses
   "SS4: while one solo server holds the store, a second exits 1 with the

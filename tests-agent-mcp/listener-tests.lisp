@@ -21,6 +21,14 @@
       (force-output stream))
     (values socket stream)))
 
+(defun %read-bounded (socket stream &optional (timeout 5))
+  "The next line of STREAM, :EOF when the peer closed, :TIMEOUT when
+nothing arrives within TIMEOUT seconds -- a socket the server leaked
+must fail a test, not hang the suite (#58)."
+  (if (usocket:wait-for-input socket :timeout timeout :ready-only t)
+      (read-line stream nil :eof)
+      :timeout))
+
 (defvar *rpc-id* 0)
 
 (defun %rpc (stream method &optional params)
@@ -170,3 +178,98 @@ completing INITIALIZE -- proof the image survived."
         (is (cl-mcp.json-rpc:response-result (%initialize stream))
             "control: the image survived")
         (usocket:socket-close socket)))))
+
+(test a-dropped-connection-is-closed-when-its-thread-cannot-start
+  "#58: when the connection thread cannot start, the accept guard
+logged and continued, leaving the accepted socket open -- a client
+waiting on a connection nobody would serve.  The handler now closes it,
+so the first read is EOF.  *MAKE-CONNECTION-THREAD* is SETF, not bound:
+the accept loop runs in its own thread, which sees the global value.
+The control is a second connection completing INITIALIZE while the hook
+is still installed -- the loop kept accepting and the hook delegated."
+  (with-stores (w p)
+    (with-listener (l w p)
+      (let ((default mcp::*make-connection-thread*)
+            (failed nil))
+        (unwind-protect
+             (progn
+               (setf mcp::*make-connection-thread*
+                     (lambda (fn name)
+                       (if failed
+                           (funcall default fn name)
+                           (progn (setf failed t)
+                                  (error "no thread")))))
+               (multiple-value-bind (socket stream)
+                   (%connect (mcp:listener-port l))
+                 (is (eq :eof (%read-bounded socket stream)))
+                 (usocket:socket-close socket))
+               (multiple-value-bind (socket stream)
+                   (%connect (mcp:listener-port l))
+                 (is (cl-mcp.json-rpc:response-result (%initialize stream))
+                     "control: the loop kept accepting")
+                 (usocket:socket-close socket)))
+          (setf mcp::*make-connection-thread* default))
+        (is-true failed "the hook fired: MAKE-THREAD did signal once")))))
+
+(test listener-caps-reach-the-tools
+  "#58: the caps a listener is started with are the caps of every
+connection's tools -- MAKE-MEMORY-SERVER's K and MAX-ROWS were fixed at
+their defaults before.  With :MAX-ROWS 1 over two beliefs on one
+subject, recall returns one record and truncated true; the control is a
+listener with the defaults, which returns both and truncated false."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (%belief w "owner" '(:person . "kevin"))
+    (let ((args '(("subject-namespace" . "repo")
+                  ("subject-key" . "cl-llm"))))
+      (with-listener (l w p :max-rows 1)
+        (multiple-value-bind (socket stream) (%connect (mcp:listener-port l))
+          (%initialize stream)
+          (let ((out (json:parse (%call stream "recall" args))))
+            (is (= 1 (length (json:jget out "records"))))
+            (is (eq t (json:jget out "truncated"))))
+          (usocket:socket-close socket)))
+      (with-listener (l w p)
+        (multiple-value-bind (socket stream) (%connect (mcp:listener-port l))
+          (%initialize stream)
+          (let ((out (json:parse (%call stream "recall" args))))
+            (is (= 2 (length (json:jget out "records")))
+                "control: the default cap returns both")
+            (is (null (json:jget out "truncated"))))
+          (usocket:socket-close socket))))))
+
+(test two-principals-write-concurrently-under-their-own-names
+  "SS5 (#58): identity is per connection, not per image.  Two
+connections are open at once, each having sent its own hello; each
+concludes and each decision carries its own producer.  The two
+assertions are each other's control: one producer for the image would
+fail one of them."
+  (with-stores (w p)
+    (with-scratch-root (root)
+      (let ((path (%write-principals root '(("claude-code/alpha" . "sa")
+                                            ("claude-code/beta" . "sb")))))
+        (with-listener (l w p :principals-path path)
+          (multiple-value-bind (sa sta)
+              (%connect (mcp:listener-port l)
+                        (%hello "claude-code/alpha" "sa"))
+            (multiple-value-bind (sb stb)
+                (%connect (mcp:listener-port l)
+                          (%hello "claude-code/beta" "sb"))
+              (%initialize sta)
+              (%initialize stb)
+              (let ((ida (json:jget (json:parse
+                                     (%call sta "conclude"
+                                            (%conclude-args "alpha")))
+                                    "id"))
+                    (idb (json:jget (json:parse
+                                     (%call stb "conclude"
+                                            (%conclude-args "beta")))
+                                    "id")))
+                (is (string= "claude-code/alpha"
+                             (mem:decision-record-producer
+                              (mem:trace w ida))))
+                (is (string= "claude-code/beta"
+                             (mem:decision-record-producer
+                              (mem:trace w idb)))))
+              (usocket:socket-close sb))
+            (usocket:socket-close sa)))))))
