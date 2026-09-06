@@ -70,16 +70,23 @@ vivace-graph (section 8).
   with `cl-mcp:register-tool`: `tool-name` and `tool-description` pass
   through; `tool-schema`, which cl-llm holds as nested `equal` hash tables
   with vectors for arrays, is converted by `%schema-alist` to the
-  string-keyed alist `cl-mcp` encodes and validates (`required` as the
-  sequence form `cl-mcp`'s own tools use -- a recon item settles list vs
-  vector). With `:query-tool t` the guarded Prolog tool from
-  `cl-llm/agent/prolog` joins the set, loading `graph-db/gui` as it does
-  in `make-query-tool` today.
+  string-keyed alist `cl-mcp` encodes and validates, with `required`
+  coerced to a LIST: `cl-mcp` validates it with `dolist`, so the vector
+  cl-llm holds would turn every call into an internal error while
+  `tools/list` looked right (recon C1). With `:query-tool t` the adapter
+  also calls `make-query-tool` from `cl-llm/agent/prolog` over the store
+  list and registers it; `make-agent-tools` has no such keyword, and the
+  query tool runs on `graph-db/query`, not `graph-db/gui`, since #44
+  (recon C5, C9). The query tool is scope-blind: a cite it returns is
+  found by `cite-store`'s fallback scan, today's behaviour.
 - **Calls.** `cl-mcp` hands a handler the decoded arguments as an alist.
   `%arguments-table` rebuilds the `equal` hash table `llm:call-tool`
   expects; a value for an array-typed parameter becomes a vector, since
-  the tools read arrays with `across`. The tool's JSON string result is
-  the text content block. A `c:llm-tool-error` -- a refusal or a bad
+  the tools read arrays with `across`; yason decodes arrays as lists,
+  `null` and `false` as NIL, and a JSON float as a double, so an
+  integer-typed cap sent as `5.0` falls back to the configured cap
+  (recon C12, documented). The tool's JSON string result is the text
+  content block. A `c:llm-tool-error` -- a refusal or a bad
   argument, the same thing the in-process loop shows the model -- becomes
   a text block with `cl-mcp`'s second value `t`, so the client sees
   `isError: true` and the message. Any other condition propagates to
@@ -107,8 +114,12 @@ claude mcp add --scope user memory -- /path/to/cl-llm/scripts/run-memory-mcp.sh
   stdout. All loading output goes to stderr: stdout carries JSON-RPC only.
 - **A multi-store scope** comes from `CL_LLM_MEMORY_SCOPE`, a
   comma-separated list of `name=dir` in trust order, most trusted first,
-  each name a graph name whose schema `define-memory-store` declared; the
-  write store is `CL_LLM_MEMORY_WRITE`, default the last entry. Unset,
+  each name a graph name; the config layer declares the schema for each
+  name at startup (`define-memory-store` takes an unevaluated name, so
+  this is an `eval` per name; if the plan's first red test shows that
+  cannot work, the scope is restricted to names declared in the image
+  and the rest refused at startup -- recon C11); the write store is
+  `CL_LLM_MEMORY_WRITE`, default the last entry. Unset,
   the scope is the single `CL_LLM_MEMORY_STORE` store, and today's
   variables mean what they mean.
 - **Refusal to double-hold.** If the store or the clock is already held,
@@ -130,11 +141,16 @@ its SWANK port. Configuration:
 | `CL_LLM_MEMORY_PRINCIPALS` | `~/.cl-llm-memory/principals.sexp` | the principals file, optional on loopback |
 | `CL_LLM_MEMORY_IDENTITY` | `secret` | identity provider: `secret` or `tailscale` |
 
-- **Connections.** An accept loop runs in its own thread. Each accepted
-  socket gets its own server from `make-memory-server` with the
-  connection's producer, run by `cl-mcp:run-server` over the socket's
-  character streams in its own thread, and ends when the client
-  disconnects or the hello is refused. Concurrent connections are
+- **Connections.** An accept loop runs in its own thread, polling
+  `usocket:wait-for-input` with a timeout and checking a `stopping` flag
+  between ticks, because closing a listening socket does not wake a
+  parked accept (recon C3). Each accepted socket gets its own server
+  from `make-memory-server` with the connection's producer -- one server
+  and one tool set per connection, since `cl-mcp` keeps the output
+  stream in the server and a handler sees only its arguments (recon
+  C10) -- run by `cl-mcp:run-server` over the socket's character
+  streams in its own thread, and ends when the client disconnects or
+  the hello is refused. Concurrent connections are
   concurrent transactions on one image, which the engine handles.
 - **The hello.** Before any JSON-RPC, a client may send one line:
   `{"cl-llm-memory": {"principal": "<producer>", "secret": "<secret>"}}`.
@@ -175,16 +191,24 @@ claude mcp add --scope user memory -- sbcl --script \
 
 ## 6. Shutdown
 
-One idempotent `stop`, in both modes, that never signals: close the
-listener socket first, so no new connection arrives; then `close-graph`
-on every store in the scope; then `close-system-clock`. It runs on three
-paths: `run-server` returning on EOF (the client closed the transport),
-SIGTERM through `sb-ext:*exit-hooks*` (the memory image's existing
-pattern; SBCL runs the hooks on SIGTERM, measured in kraison/sitrep#25),
-and normal exit. It does no work that could outlast the unknown grace
-period before SIGKILL; an in-flight tool call is cut and its transaction
-either committed or did not. SIGKILL leaves at worst a `.dirty` marker
-for the write-ahead log to recover on the next open, never a torn close.
+One idempotent `stop`, in both modes, that never signals: set the
+listener's `stopping` flag and join its thread, then close the listening
+socket, so no new connection arrives; then `close-graph` on every store
+in the scope, each with `gdb:*graph*` bound to that store and with
+`:snapshot-p nil`; then `close-system-clock`. The two close arguments
+are what makes the promise true: `close-graph` requires `*graph*` bound
+to the store it closes, and its default takes a full logical snapshot
+before removing the `.dirty` marker, unbounded work; without the
+snapshot the marker removal and the index-root saves still run, so the
+store is clean (recon C2, defended in `docs/agent-memory.md`). `stop`
+runs on three paths: `run-server` returning on EOF (the client closed
+the transport), SIGTERM through `sb-ext:*exit-hooks*` (SBCL runs the
+hooks on SIGTERM under both `--script` and `--load`, measured in the
+recon note; kraison/sitrep#25 recorded a service with NO hook, and is
+not the citation), and normal exit. An in-flight tool call is cut and
+its transaction either committed or did not. SIGKILL leaves at worst a
+`.dirty` marker for the write-ahead log to recover on the next open,
+never a torn close.
 
 ## 7. Errors
 
@@ -209,15 +233,23 @@ has a control.
   as a vector; a bad standing returns text with the error flag and the
   in-process message; the query tool appears only with `:query-tool t`.
 - **Solo round trip, one subprocess:** `cl-mcp/client` spawns
-  `run-memory-mcp.sh` on a scratch store; `list-tools`, `conclude`,
-  `recall` of the decision, then close stdin; assert the results, no
-  `.dirty` in the store directory, and a clean reopen. A second solo
-  server on the held store exits non-zero with the message and no
-  handshake.
-- **SIGTERM:** the solo subprocess receives SIGTERM mid-session; the
-  store is clean afterwards.
-- **Listener, in process, ephemeral loopback port**, speaking NDJSON with
-  `cl-mcp`'s `read-message`/`write-message`: a known secret's decisions
+  `run-memory-mcp.sh` on a scratch store, the environment set in the
+  test image since the client passes none; `list-tools`, `conclude`,
+  `recall` of the decision, then `disconnect`, then `uiop:wait-process`
+  on the process handle captured beforehand, since `disconnect` does
+  not wait (recon C8); assert the results, no `.dirty` in the store
+  directory, and a clean reopen.
+- **A subprocess harness of our own** (`sb-ext:run-program` with an
+  environment, stderr captured, exit code read), because `cl-mcp/client`
+  discards stderr and never reports an exit code (recon C7): a second
+  solo server on the held store exits non-zero with the message and no
+  handshake; and **SIGTERM** sent to a solo server mid-session leaves
+  the store clean, which is the fact section 6 rests on.
+- **Listener, in process, ephemeral loopback port**, speaking NDJSON as
+  a client with `cl-mcp.json-rpc:make-request`,
+  `cl-mcp.client:encode-request` and `cl-mcp.client:parse-client-message`
+  (the server's `read-message`/`write-message` pair rejects responses;
+  recon C6): a known secret's decisions
   carry its producer; a wrong secret is closed before `initialize`; no
   hello on loopback gets the image's producer; two concurrent connections
   each see the other's committed decision; `stop` refuses new
