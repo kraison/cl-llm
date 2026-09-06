@@ -529,6 +529,24 @@ decodes as NIL, so the tool sees NIL rather than its declared default
 and answers with the refusal as text with `isError`; omit the key to
 get the default.
 
+### Telling an agent to use it
+
+Configuring the server makes the tools *reachable*; it does not make an
+agent *reach for them*. Nothing about an MCP server enters a model's
+context on its own, and several runtimes defer MCP tools behind a
+search, so an agent may not see them listed at all. Left at that, a
+session will mostly answer from its own context and never call
+`recall` -- the store stays empty and honest, which is the safe
+failure but a failure all the same.
+
+What closes the gap is a **skill**: a markdown file the runtime loads
+when its description matches the task, naming when to read, when a
+fact is worth a `conclude`, and the conventions -- namespaces,
+standings, evidence -- that keep one session's writes legible to the
+next. `examples/skills/graph-memory/` is a working one, with
+`examples/skills/README.md` covering installation per runtime and what
+to adapt.
+
 ### Shutdown
 
 Both modes close the store on EOF, on SIGTERM (SBCL runs its exit
