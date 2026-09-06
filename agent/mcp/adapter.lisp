@@ -8,7 +8,9 @@
 string-keyed alist cl-mcp encodes and validates.  \"required\" becomes
 a LIST: cl-mcp validates it with DOLIST, and a vector would turn every
 call into an internal error while tools/list looked right (recon C1)."
-  (cond ((hash-table-p schema)
+  (cond ((and (hash-table-p schema) (zerop (hash-table-count schema)))
+         (make-hash-table :test 'equal)) ; {} not [] (Task 2 review)
+        ((hash-table-p schema)
          (loop for key being the hash-keys of schema using (hash-value v)
                collect (cons key (if (string= key "required")
                                      (coerce v 'list)
