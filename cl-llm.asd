@@ -300,6 +300,39 @@ retrieval planner (#14 unit 2)."
              (unless (symbol-call :fiveam :run! :cl-llm-agent-prolog)
                (error "cl-llm/agent/prolog suite failed."))))
 
+(defsystem "cl-llm/agent/mcp"
+  :description "The agent memory as its own MCP server (#57)."
+  :license "MIT"
+  ;; cl-mcp brings yason, bordeaux-threads and opsis/conditions; none
+  ;; is in the Quicklisp dist (docs/ci.md).
+  :depends-on ("cl-llm/agent" "cl-mcp" "usocket")
+  :serial t
+  :pathname "agent/mcp/"
+  :components ((:file "packages")
+               (:file "config")
+               (:file "adapter")
+               (:file "identity")
+               (:file "listener"))
+  :in-order-to ((test-op (test-op "cl-llm/agent/mcp/tests"))))
+
+(defsystem "cl-llm/agent/mcp/tests"
+  :description "The MCP adapter, the listener, and the solo process."
+  :license "MIT"
+  :depends-on ("cl-llm/agent/mcp" "cl-llm/agent/prolog"
+               "cl-llm/agent/tests" "cl-mcp/client" "fiveam")
+  :serial t
+  :pathname "tests-agent-mcp/"
+  :components ((:file "packages")
+               (:file "harness")
+               (:file "config-tests")
+               (:file "adapter-tests")
+               (:file "identity-tests")
+               (:file "listener-tests")
+               (:file "process-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run! :cl-llm-agent-mcp)
+               (error "cl-llm/agent/mcp suite failed."))))
+
 (defsystem "cl-llm/agent/live"
   :description "Live: annotate-banners against a real provider.
 Requires CL_LLM_LIVE=1."
