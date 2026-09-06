@@ -93,8 +93,11 @@ keyword. The alphabet is bounded but the count is not: any canonical
 string the model invents becomes a namespace, there and then, with
 no registry to consult first. An uncanonical one is refused, never
 interned — minting it would be unrecoverable. `recall`'s own
-`subject-namespace` never mints at all: an unrecognised namespace
-just reads back as nothing recorded, never an error. A cite whose
+`subject-namespace` is resolved the same way, and deliberately: what
+was recorded under a namespace is the store's answer, not a property
+of the process asking, so a session recalls whatever any earlier
+session wrote there. Only an uncanonical name reads back as nothing
+recorded — an empty result, never an error (#61). A cite whose
 namespace is canonical but unknown likewise parses and resolves to
 nothing, since a fresh image must be able to trace a decision before
 it has read a claim under that namespace.

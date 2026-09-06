@@ -25,12 +25,6 @@ the tool loop shows the model the message."
 (defun %standing (keyword)
   (and keyword (string-downcase (symbol-name keyword))))
 
-(defun %find-keyword (string)
-  "STRING as the KEYWORD already interned under that name, or NIL --
-never mints one, so a namespace nothing was ever recorded under reads
-as an empty result, not an error.  For reads (SS6)."
-  (find-symbol (string-upcase string) :keyword))
-
 (defun %canonical-name-p (string)
   "Non-empty and [a-z0-9-] only -- ST:CANONICAL-RELATION-P's rule
 (GH #160), spelled out here so a bad namespace reports as this tool
@@ -40,6 +34,17 @@ set's error; MEMORY/CITE.LISP calls the exported predicate directly."
                 (or (char<= #\a ch #\z) (char<= #\0 ch #\9)
                     (char= ch #\-)))
               string)))
+
+(defun %find-keyword (string)
+  "STRING as a KEYWORD for reads (SS6): a canonical name is interned
+and returned -- a canonical keyword is exactly what a store may hold
+-- and any other string is NIL, so an uncanonical namespace still
+reads as an empty result, not an error.  The trap: whether anything
+was recorded under a namespace is the store's answer, never this
+image's; a keyword being absent from the keyword package says nothing
+about the data (#61)."
+  (and (%canonical-name-p string)
+       (intern (string-upcase string) :keyword)))
 
 (defun %keyword (string)
   "STRING as a KEYWORD, for writes: signals unless STRING is a

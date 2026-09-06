@@ -139,17 +139,23 @@ each row's pre-sort position, which is scope order (spec SS6)."
         (is (= 0 (length (json:jget none "records"))))))))
 
 (test recall-of-an-unknown-namespace-is-an-empty-array
-  "A namespace no belief was ever recorded under is never interned by
-%FIND-KEYWORD, so it reads as nothing recorded, not an error (SS6)."
+  "A canonical namespace nothing was recorded under reads as nothing
+recorded, not an error (SS6).  Since #61 the read RESOLVES the name --
+interning it -- instead of asking whether this image already holds it;
+the keyword is uninterned first so that control cannot pass vacuously
+on a second run in one image."
   (with-stores (w p)
     (%belief w "ci-status" '(:verdict . "green"))
+    (sb-ext:without-package-locks
+      (let ((s (find-symbol "TOTALLY-UNKNOWN-NAMESPACE-ZZZ" :keyword)))
+        (when s (unintern s :keyword))))
     (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
            (r (%call tools "recall" "subject-namespace"
                      "totally-unknown-namespace-zzz"
                      "subject-key" "cl-llm")))
       (is (= 0 (length (json:jget r "records"))))
-      (is (null (find-symbol "TOTALLY-UNKNOWN-NAMESPACE-ZZZ" :keyword))
-          "control: the read minted no keyword"))))
+      (is (find-symbol "TOTALLY-UNKNOWN-NAMESPACE-ZZZ" :keyword)
+          "the read resolved the namespace against the store (#61)"))))
 
 (test recall-of-a-malformed-timestamp-signals
   (with-stores (w p)
@@ -673,3 +679,44 @@ successor is the less trusted store and may not supersede."
         (is (null (json:jget ev2 "changed-since"))
             "control: P is less trusted; it may not supersede")
         (is (null (json:jget ev2 "superseded-by")))))))
+
+(test recall-reads-a-namespace-this-image-never-interned
+  "#61: %FIND-KEYWORD asked FIND-SYMBOL on the keyword package, which
+tests this image and not the store, so a cold process -- MCP solo mode
+runs one per session -- recalled nothing an earlier process wrote.
+The cold process is simulated whole: the write store is closed, the
+namespace keyword uninterned, and the store reopened from disk.  An
+UNINTERN alone would not do -- the live index holds the very symbol
+the write interned, so the read would miss for a second reason."
+  (with-stores (w p)
+    (let ((dir (gdb:location w))
+          (clock (gdb:graph-system-clock w))
+          (cold nil))
+      (gdb:with-transaction (:graph w)
+        (mem:record-belief w (cons (intern "COLD-NS-61" :keyword) "k")
+                           "ci-status" '(:verdict . "green")
+                           :producer +p+ :standing :observed
+                           :extent (%open-from "2026-09-01T08:00:00Z")))
+      (gdb:close-graph w)
+      (sb-ext:without-package-locks
+        (unintern (find-symbol "COLD-NS-61" :keyword) :keyword))
+      (is (null (find-symbol "COLD-NS-61" :keyword))
+          "control: the keyword is gone from the image")
+      (unwind-protect
+           (progn
+             (setf cold (gdb:open-graph :cl-llm-memory dir
+                                        :buffer-pool-size 1000
+                                        :system-clock clock))
+             (let* ((tools (agent:make-agent-tools (list cold p)
+                                                   :producer +p+))
+                    (r (%call tools "recall" "subject-namespace"
+                              "cold-ns-61" "subject-key" "k"))
+                    (records (json:jget r "records"))
+                    ;; A non-canonical name is still no namespace: it
+                    ;; reads as an empty result, not an error (#61).
+                    (bad (%call tools "recall" "subject-namespace"
+                                "Not Canonical" "subject-key" "k")))
+               (is (= 1 (length records)))
+               (is (= 0 (length (json:jget bad "records"))))
+               (is (mem:cite-p (json:jget (elt records 0) "cite")))))
+        (when cold (ignore-errors (gdb:close-graph cold)))))))
