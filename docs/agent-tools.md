@@ -448,7 +448,17 @@ the cap decides `truncated`. **Row
 cells use an actual JSON `null`** for an unbound variable or an
 empty slot — the one place in this tool set that null appears rather
 than an omitted key, because a row is a fixed-width tuple, not an
-object with optional fields. A keyword cell — a namespace, a standing
+object with optional fields.
+
+Three things the runner does since kraison/vivace-graph#351: a
+keyword-valued slot — a namespace, a standing — is filtered by a
+string, case-insensitively (`(node-slot-value ?c subject-namespace
+"incident")`); an unbound node enumerates, so `(node-slot-value ?c
+subject-key "x")` alone finds the claim with no `is-a`; and an
+unbound slot lists a vertex's slots, `(node-slot-value ?c ?slot ?v)`,
+the slot names rendering lowercase like any keyword cell.
+
+A keyword cell — a namespace, a standing
 — renders as its canonical lowercase name (`"decision"`, not
 `"DECISION"`), so a namespace read off a row can be handed straight
 to `recall` or `retrieve` (#63).

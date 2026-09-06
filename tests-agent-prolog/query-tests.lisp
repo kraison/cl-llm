@@ -158,3 +158,59 @@ query joins the engine's is-a with that edge's own functor."
         (is (= 1 (length (json:jget r "rows"))))
         (is (string= (gdb:string-id a)
                      (aref (aref (json:jget r "rows") 0) 0)))))))
+
+;;; kraison/vivace-graph#351 (cl-llm#64): the three query-language gaps.
+
+(test a-namespace-is-filtered-by-a-string
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (%belief w "owner" '(:person . "kevin"))
+    (let* ((tool (prolog:make-query-tool (list w p)))
+           (rows (json:jget
+                  (json:parse
+                   (llm:call-tool
+                    tool (%args "text"
+                                (concatenate
+                                 'string "(is-a ?c belief-binary) "
+                                 "(node-slot-value ?c object-namespace "
+                                 "\"verdict\") "
+                                 "(node-slot-value ?c object-key ?k)"))))
+                  "rows")))
+      (is (= 1 (length rows)))
+      (is (string= "green" (elt (elt rows 0) 1))))))
+
+(test a-lookup-by-slot-needs-no-is-a
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (let* ((tool (prolog:make-query-tool (list w p)))
+           (rows (json:jget
+                  (json:parse
+                   (llm:call-tool
+                    tool (%args "text"
+                                (concatenate
+                                 'string
+                                 "(node-slot-value ?c relation \"ci-status\") "
+                                 "(node-slot-value ?c object-key ?k)"))))
+                  "rows")))
+      (is (= 1 (length rows)))
+      (is (string= "green" (elt (elt rows 0) 1))))))
+
+(test an-unbound-slot-lists-a-beliefs-slots-lowercase
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (let* ((tool (prolog:make-query-tool (list w p)))
+           (rows (coerce
+                  (json:jget
+                   (json:parse
+                    (llm:call-tool
+                     tool (%args "text"
+                                 (concatenate
+                                  'string "(is-a ?c belief-binary) "
+                                  "(node-slot-value ?c ?slot ?v)"))))
+                   "rows")
+                  'list))
+           (slots (mapcar (lambda (r) (elt r 1)) rows)))
+      (is (member "subject-namespace" slots :test #'string=))
+      (is (member "relation" slots :test #'string=))
+      (is (notany (lambda (s) (string/= s (string-downcase s))) slots)
+          "a slot name is a keyword cell and renders lowercase (#63)"))))
