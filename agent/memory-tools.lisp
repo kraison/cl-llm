@@ -14,8 +14,9 @@ one predicate; optional at (RFC 3339) keeps only beliefs valid then."
    '((subject-namespace :type string) (subject-key :type string)
      (relation :type string :optional t) (at :type string :optional t))
    (lambda (subject-namespace subject-key relation at)
-     ;; An unknown namespace is never interned by %FIND-KEYWORD, so it
-     ;; reads as "nothing recorded" -- an empty array -- not an error.
+     ;; The namespace is resolved, not looked up in this image: what
+     ;; was recorded under it is the store's answer (#61).  Only an
+     ;; uncanonical name is NIL here, and reads as an empty array.
      (let* ((ns (%find-keyword subject-namespace))
             (subject (and ns (cons ns subject-key)))
             (instant (and at (%parse-iso at)))
