@@ -240,7 +240,8 @@ believed then and flagged if it has moved since (kraison/cl-llm#14 unit
 agent memory: `recall`, `trace` and `decisions-citing` across a scope
 of stores; `conclude` and `conclude-absence` into one writable store,
 each a validated decision with a trace, and `retract` to say a belief
-was wrong; `retrieve` and `plan-bounds` over the retrieval planner.
+was wrong; `list-taxonomy` to discover what the memory names before
+reading it; `retrieve` and `plan-bounds` over the retrieval planner.
 The scope and every bound are the operator's at construction; the
 model names subjects, never stores. `cl-llm/agent/prolog` adds
 `query`, guarded free-text Prolog with effects off and budgets over

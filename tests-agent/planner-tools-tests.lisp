@@ -145,3 +145,75 @@ namespace is a tool error, not a silent intern."
         (llm:call-tool (%tool tools "retrieve")
                        (%args "query" "q"
                               "endpoints" (vector "Bad NS:cl-llm")))))))
+
+;;; #64 SS4.2: the query string finds endpoints.
+
+(test retrieve-finds-endpoints-in-the-query-string
+  (with-stores (w p)
+    (%belief w "outage-root-cause" '(:cause . "quill")
+             :subject '(:incident . "ledger-freeze-2026-05-22"))
+    (%belief p "owner" '(:person . "kevin"))
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (r (%call tools "retrieve"
+                     "query" "why did the ledger freeze in May"))
+           (ev (coerce (json:jget r "evidence") 'list)))
+      (is (equal '("incident:ledger-freeze-2026-05-22")
+                 (coerce (json:jget r "endpoints") 'list)))
+      (is (= 1 (length ev)))
+      (is (search "ledger-freeze-2026-05-22" (json:jget (first ev) "text")))
+      (is (mem:cite-p (json:jget (first ev) "cite")))
+      (is (string= "cl-llm-memory" (json:jget (first ev) "store"))))))
+
+(test explicit-endpoints-come-first-and-are-never-displaced
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (%belief w "outage-root-cause" '(:cause . "quill")
+             :subject '(:incident . "ledger-freeze-2026-05-22"))
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+ :k 1))
+           (r (%call tools "retrieve" "query" "ledger freeze"
+                     "endpoints" (vector "repo:cl-llm"))))
+      ;; the union is capped at 2k = 2: the explicit one, then the best
+      ;; extracted one; the explicit one is consulted in both stores
+      ;; and listed once
+      (is (equal '("repo:cl-llm" "incident:ledger-freeze-2026-05-22")
+                 (coerce (json:jget r "endpoints") 'list)))
+      (is (= 1 (length (json:jget r "evidence"))))
+      (is (json:jget r "truncated")))))
+
+(test retrieve-refuses-when-nothing-would-be-consulted
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (let ((tools (agent:make-agent-tools (list w p) :producer +p+)))
+      (handler-case
+          (progn (%call tools "retrieve"
+                        "query" "completely unrelated banana helicopter")
+                 (fail "an unconsulted retrieve must be refused"))
+        (llm:llm-tool-error (e)
+          (let ((text (princ-to-string (llm:llm-error-underlying e))))
+            (is (search "no endpoint recognised" text))
+            (is (search "banana helicopter" text))
+            (is (search "list-taxonomy" text)))))
+      (signals llm:llm-tool-error
+        (%call tools "plan-bounds" "query" "banana helicopter")))))
+
+(defclass %stub-source () ())
+
+(defmethod rag:collect-evidence ((s %stub-source) query &key k bounds)
+  (declare (ignore query k bounds))
+  (list (rag:make-evidence
+         :chunk (rag:make-chunk "stub text" :document-id "stub:1")
+         :score 1d0 :method :dense :source s :standing :observed)))
+
+(test retrieve-runs-over-an-operator-source-with-no-endpoints
+  (with-stores (w p)
+    (let* ((tools (agent:make-agent-tools
+                   (list w p) :producer +p+
+                   :sources (list (make-instance '%stub-source))))
+           (r (%call tools "retrieve" "query" "banana helicopter"))
+           (ev (json:jget r "evidence")))
+      (is (= 0 (length (json:jget r "endpoints"))))
+      (is (= 1 (length ev)))
+      (is (string= "stub text" (json:jget (elt ev 0) "text")))
+      (is (= 0 (length (json:jget (%call tools "plan-bounds"
+                                         "query" "banana helicopter")
+                                  "endpoints")))))))

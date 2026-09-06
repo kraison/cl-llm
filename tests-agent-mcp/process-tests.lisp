@@ -124,7 +124,7 @@ OPEN-GRAPH reads the store's type ids from (GH #186)."
         (let ((process (cl-mcp.client::client-process c)))
           (unwind-protect
                (progn
-                 (is (= 8 (length (client:list-tools c))))
+                 (is (= 9 (length (client:list-tools c))))
                  (let* ((out (client:call-tool
                               c "conclude"
                               '(("subject-namespace" . "repo")

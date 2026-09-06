@@ -32,6 +32,11 @@
    #:belief-record-retracted-at #:belief-record-standing
    #:belief-record-extent #:belief-record-store
    #:belief-record-superseded-by-store #:claim-before-p
+   ;; vocabulary (#64)
+   #:vocabulary #:make-vocabulary #:vocabulary-store
+   #:vocabulary-namespaces #:vocabulary-relations #:vocabulary-endpoints
+   #:namespace-entry #:namespace-entry-name #:namespace-entry-subjects
+   #:namespace-entry-objects #:namespace-entry-keys #:namespace-keys
    ;; capture
    #:capture-memory-dir #:capture-listing #:read-frontmatter
    #:body-digest

@@ -6,7 +6,7 @@
   (list (%recall-tool scope) (%trace-tool scope)
         (%decisions-citing-tool scope)
         (%conclude-tool scope) (%conclude-absence-tool scope)
-        (%retract-tool scope)))
+        (%retract-tool scope) (%taxonomy-tool scope)))
 
 (defun make-planner-tools (scope)
   (list (%retrieve-tool scope) (%plan-bounds-tool scope)))

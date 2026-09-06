@@ -96,6 +96,26 @@ is not current), `:include-retracted`.
 **Order is the contract:** validity start descending, then `recorded-at`
 descending, then object key. A reordering is a regression.
 
+## What a store names
+
+```lisp
+(mem:with-scope-snapshots ((list g))
+  (mem:vocabulary g))
+;; => #S(vocabulary :namespaces #<hash "repo" "verdict" ...>
+;;                  :relations #<hash "ci-status" ...>
+;;                  :endpoints ((:repo . "cl-llm") (:verdict . "green")))
+```
+
+`vocabulary` is one walk of a store's belief vertices under the
+caller's snapshot: every namespace with its subject and object claim
+counts and the keys filed under it, every relation with its count,
+and every distinct endpoint. Retracted claims are skipped unless
+`:include-retracted`. It is linear in the store's beliefs and caches
+nothing, which is the right trade at hundreds to low thousands of
+beliefs; the engine-side index that replaces the walk behind the same
+function is kraison/vivace-graph#350. The agent's `list-taxonomy` and
+the key extractor behind `retrieve` are its two consumers (#64).
+
 ## Capturing a memory directory
 
 The proving corpus is the agent's own memory files

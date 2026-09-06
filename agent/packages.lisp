@@ -19,5 +19,6 @@
    #:json-bool
    ;; tools
    #:make-agent-tools #:make-memory-tools #:make-planner-tools
+   #:make-key-extractor
    ;; annotate
    #:annotation-tools #:annotate-banners #:*annotation-instructions*))

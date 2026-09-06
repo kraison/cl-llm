@@ -56,8 +56,8 @@ a bug to chase.
 ```lisp
 (agent:make-agent-tools stores &key write-store producer sources
                                      (k 5) (max-rows 50))
-;; => 8 tools: recall trace decisions-citing conclude
-;;    conclude-absence retract retrieve plan-bounds
+;; => 9 tools: recall trace decisions-citing conclude
+;;    conclude-absence retract list-taxonomy retrieve plan-bounds
 
 (prolog:make-query-tool stores &key (max-rows 50)
                                      (max-inferences 100000)
@@ -106,12 +106,13 @@ it has read a claim under that namespace.
 
 ## The tools
 
-Every JSON key below is hyphenated, matching the parameter names.
-**A field whose value is absent is omitted from the object entirely
-— never rendered as JSON `null`** — with two exceptions: `truncated`
-and `current`, which are always present booleans. The `query` tool's
-row cells are the one place an actual JSON `null` appears (for an
-unbound Prolog variable or an empty slot).
+Every JSON key below is hyphenated, matching the parameter names. **A
+field whose value is absent is omitted from the object entirely —
+never rendered as JSON `null`** — with three exceptions: `truncated`
+and `current`, always-present booleans, and `retrieve`/`plan-bounds`'
+`endpoints`, an always-present array. The `query` tool's row cells are
+the one place an actual JSON `null` appears (for an unbound Prolog
+variable or an empty slot).
 
 ### `recall`
 
@@ -296,6 +297,46 @@ since retraction is a write. Among claims sharing a cite, the
 still-current one is preferred; a cite that resolves to nothing, or
 only to an already-retracted claim, is an error result.
 
+### `list-taxonomy`
+
+Parameters: optional `namespace`, `store`, `limit`.
+
+Without `namespace`, what every store in scope names, in scope order:
+
+```json
+{"stores": [
+  {"store": "cl-llm-memory",
+   "namespaces": [
+     {"name": "incident", "subjects": 5, "objects": 0, "keys": 5,
+      "sample": ["drift-b8dc70-2026", "ledger-freeze-2026-05-22"]}],
+   "relations": [{"name": "outage-root-cause", "claims": 5}]}]}
+```
+
+Namespaces sort by subject plus object claims descending, then name;
+relations by claims descending, then name. `sample` is the first keys
+alphabetically, at most `limit`, itself clamped to `max-rows`; `keys`
+is the full distinct count.
+
+With `namespace`, the keys filed under it across the scope, each
+naming its store, claims descending, then key, then scope order:
+
+```json
+{"namespace": "incident",
+ "keys": [{"key": "ledger-freeze-2026-05-22", "store": "cl-llm-memory",
+           "claims": 1}],
+ "truncated": false}
+```
+
+`limit` clamps to `max-rows`; `truncated` follows `recall`'s rule. An
+uncanonical `namespace` is the #63 error; a canonical one no store
+holds returns an empty `keys` array, the store's own answer. `store`
+restricts either shape to one store; an out-of-scope name is an error.
+
+Every name here is the spelling `recall` and `retrieve` take, which
+is the point: discover the address, then read it. The walk behind
+this tool is `mem:vocabulary` (`docs/agent-memory.md`), linear in the
+store's beliefs per call (#64).
+
 ### `retrieve`
 
 Parameters: `query`; optional `endpoints` (a list of
@@ -303,9 +344,23 @@ Parameters: `query`; optional `endpoints` (a list of
 that encoding appears, because namespaces are canonical
 `[a-z0-9-]`), `from`, `to` (RFC 3339), `k`.
 
+The query string finds endpoints on its own: it is lowercased and
+split into runs of `[a-z0-9]` of three characters or more, each
+store's keys are split on `-`, and an endpoint whose key shares a
+token with the query (or equals it whole) is consulted, scored by the
+number of matching tokens, ties broken by a namespace the query
+names, then the shorter key, then `namespace:key` alphabetically.
+Explicit `endpoints` come first and are never displaced; the union is
+capped at twice the operator's `k` per store (the cap fixed at
+construction, not the call's `k`). So "why did the ledger freeze in
+May" consults `incident:ledger-freeze-2026-05-22` with no endpoints
+given. The vocabulary behind this is `mem:vocabulary`, walked once
+per call (#64).
+
 ```json
 {
   "query": "is it releasable?",
+  "endpoints": ["incident:ledger-freeze-2026-05-22"],
   "modes": ["claim"],
   "bounds": {
     "window": {
@@ -327,6 +382,15 @@ that encoding appears, because namespaces are canonical
   "truncated": false
 }
 ```
+
+`endpoints` is always present: the `"namespace:key"` strings actually
+consulted, in consultation order, each once across stores. A call
+that would consult nothing — no endpoint named, none found, and no
+operator `sources` — is an error naming the query and pointing at
+`list-taxonomy`, not an empty bundle: an empty result must mean
+"looked, found nothing", never "did not look" (#64). When the union is
+empty but operator sources are configured, the fusion runs over them
+alone and `endpoints` is empty; with both present, both are fused.
 
 Runs `fuse` over one belief claim source per store in scope plus any
 `sources` the operator supplied, so each evidence item names its
@@ -351,7 +415,9 @@ survives into the bundle rather than reading as an omission.
 Parameters: `query`; optional `endpoints`, `k`. Returns the `bounds`
 object alone (see `retrieve`, above), from a seed retrieval — the
 derivation as a callable on its own, for a caller that wants the
-window or region without paying for a full fetch.
+window or region without paying for a full fetch. Endpoints come from
+the query as in `retrieve`; the result carries the same `endpoints`
+array, and the same nothing-consulted error applies.
 
 ### `query` (`cl-llm/agent/prolog`)
 
@@ -385,7 +451,17 @@ the cap decides `truncated`. **Row
 cells use an actual JSON `null`** for an unbound variable or an
 empty slot — the one place in this tool set that null appears rather
 than an omitted key, because a row is a fixed-width tuple, not an
-object with optional fields. A keyword cell — a namespace, a standing
+object with optional fields.
+
+Three things the runner does since kraison/vivace-graph#351: a
+keyword-valued slot — a namespace, a standing — is filtered by a
+string, case-insensitively (`(node-slot-value ?c subject-namespace
+"incident")`); an unbound node enumerates, so `(node-slot-value ?c
+subject-key "x")` alone finds the claim with no `is-a`; and an
+unbound slot lists a vertex's slots, `(node-slot-value ?c ?slot ?v)`,
+the slot names rendering lowercase like any keyword cell.
+
+A keyword cell — a namespace, a standing
 — renders as its canonical lowercase name (`"decision"`, not
 `"DECISION"`), so a namespace read off a row can be handed straight
 to `recall` or `retrieve` (#63).
