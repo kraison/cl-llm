@@ -36,6 +36,7 @@ Each example is its own package (`examples/<name>`) so they don't clash.
 | [errors-and-retries.lisp](errors-and-retries.lisp) | The condition hierarchy, timeouts, the `retry-request` restart | some (parts are offline) |
 | [evaluation.lisp](evaluation.lisp) | `defsuite` / scorers / judge / `report` | **no** — runs offline via the mock |
 | [testing-with-mock.lisp](testing-with-mock.lisp) | `mock-provider`: test your own cl-llm code with no network | **no** — offline |
+| [skills/](skills/) | Agent skills: when and how an agent should reach for the memory over MCP — not a Lisp example | n/a |
 
 Start with **rag-quickstart**, **evaluation**, and **testing-with-mock** if you
 want to run something immediately without an API key or a running model — they use
