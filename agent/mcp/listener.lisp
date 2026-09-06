@@ -5,13 +5,17 @@
 
 (defstruct listener
   socket thread (stopping nil) port stores write-store
-  (provider :secret) principals-path default-producer query-tool)
+  (provider :secret) principals-path default-producer query-tool
+  ;; The caps every connection's tools get (#58).
+  (k 5) (max-rows 50) sources)
 
 (defun start-listener (&key (bind "127.0.0.1") (port 0) stores write-store
                             (provider :secret) principals-path
-                            default-producer query-tool)
+                            default-producer query-tool
+                            (k 5) (max-rows 50) sources)
   "Listen on BIND:PORT (0 for an ephemeral port; LISTENER-PORT reads it
-back) and serve each connection its own server over STORES.  Refuses a
+back) and serve each connection its own server over STORES, with caps K
+and MAX-ROWS and planner SOURCES (MAKE-MEMORY-SERVER's).  Refuses a
 non-loopback BIND without principals (SS5)."
   (check-bind bind (and principals-path (read-principals principals-path)))
   (let* ((socket (usocket:socket-listen bind port :reuse-address t
@@ -22,7 +26,9 @@ non-loopback BIND without principals (SS5)."
                                   :provider provider
                                   :principals-path principals-path
                                   :default-producer default-producer
-                                  :query-tool query-tool))
+                                  :query-tool query-tool
+                                  :k k :max-rows max-rows
+                                  :sources sources))
          (ok nil))
     ;; BT:MAKE-THREAD signals on thread exhaustion; the listening socket
     ;; would leak.  Success flag, as in OPEN-SCOPE.
@@ -49,6 +55,12 @@ connections are not drained (SS9).  Idempotent; never signals."
     (setf (listener-socket listener) nil))
   listener)
 
+(defvar *make-connection-thread*
+  (lambda (fn name) (bt:make-thread fn :name name))
+  "How %ACCEPT-LOOP starts a connection thread.  A seam, not a knob:
+the test that proves a dropped connection is closed sets it to a
+function that signals on its first call (#58).")
+
 (defun %accept-loop (listener)
   "Accept until STOPPING.  The body is guarded: the image runs with the
 debugger disabled, so a condition escaping here -- fd exhaustion,
@@ -56,23 +68,28 @@ BT:MAKE-THREAD out of threads -- would end the whole image, not the
 loop.  A ready socket that accepts NIL sleeps, so an exhausted fd table
 does not spin the loop hot.  Logs the condition TYPE only."
   (loop until (listener-stopping listener)
-        do (handler-case
-               (when (usocket:wait-for-input (listener-socket listener)
-                                             :timeout 0.5 :ready-only t)
-                 (let ((socket (ignore-errors
-                                (usocket:socket-accept
-                                 (listener-socket listener)
-                                 :element-type 'character))))
+        do (let ((socket nil))
+             (handler-case
+                 (when (usocket:wait-for-input (listener-socket listener)
+                                               :timeout 0.5 :ready-only t)
+                   (setf socket (ignore-errors
+                                 (usocket:socket-accept
+                                  (listener-socket listener)
+                                  :element-type 'character)))
                    (if socket
-                       (bt:make-thread
-                        (lambda () (%serve-guarded listener socket))
-                        :name "cl-llm memory mcp connection")
-                       (sleep 0.1))))
-             (error (c)
-               (ignore-errors      ; a broken stderr must not escape it
-                (format *error-output* "~&memory mcp: accept: ~a~%"
-                        (type-of c))
-                (finish-output *error-output*))))))
+                       (funcall *make-connection-thread*
+                                (lambda () (%serve-guarded listener socket))
+                                "cl-llm memory mcp connection")
+                       (sleep 0.1)))
+               (error (c)
+                 ;; An accepted socket whose thread never started would
+                 ;; be leaked open, and its client would wait forever
+                 ;; (#58).
+                 (when socket (ignore-errors (usocket:socket-close socket)))
+                 (ignore-errors      ; a broken stderr must not escape it
+                  (format *error-output* "~&memory mcp: accept: ~a~%"
+                          (type-of c))
+                  (finish-output *error-output*)))))))
 
 (defun %serve-guarded (listener socket)
   "Run %SERVE-CONNECTION; the image runs with the debugger disabled, so
@@ -118,7 +135,10 @@ it."
                                 (listener-stores listener)
                                 :write-store (listener-write-store listener)
                                 :producer producer
-                                :query-tool (listener-query-tool listener)))
+                                :query-tool (listener-query-tool listener)
+                                :k (listener-k listener)
+                                :max-rows (listener-max-rows listener)
+                                :sources (listener-sources listener)))
                        (input (if hello-p
                                   stream
                                   (make-concatenated-stream

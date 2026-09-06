@@ -130,3 +130,27 @@ store list; it is absent otherwise."
       (is (mcp.tools:get-tool (%registry with) "query"))
       (is (null (mcp.tools:get-tool (%registry without) "query"))
           "control"))))
+
+(test a-json-null-argument-is-refused-not-defaulted
+  "SS3, the MCP-level argument rule (#58): a JSON null for an optional
+argument decodes as a present NIL -- POSITIONAL-ARGUMENTS reads
+GETHASH's present-p, not the value -- so the tool sees NIL rather than
+its declared default and refuses.  The control is the same call with
+the key absent, which defaults to \"inferred\" and concludes."
+  (with-stores (w p)
+    (let* ((server (mcp:make-memory-server (list w p) :write-store w
+                                                      :producer +p+))
+           (registry (%registry server))
+           (base '(("subject-namespace" . "repo") ("subject-key" . "cl-llm")
+                   ("relation" . "x") ("object-namespace" . "v")
+                   ("object-key" . "1") ("rule" . "r"))))
+      (multiple-value-bind (content error-p)
+          (mcp.tools:call-tool registry "conclude"
+                               (cons '("standing" . nil) base))
+        (is (eq t error-p))
+        (is (search "standing must be one of" (%text content))))
+      (multiple-value-bind (content error-p)
+          (mcp.tools:call-tool registry "conclude" base)
+        (is (null error-p) "control: the absent key takes the default")
+        (is (string= "concluded"
+                     (json:jget (json:parse (%text content)) "outcome")))))))

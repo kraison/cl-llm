@@ -459,6 +459,14 @@ SWANK.
 | `CL_LLM_MEMORY_PRINCIPALS` | `~/.cl-llm-memory/principals.sexp` |
 | `CL_LLM_MEMORY_IDENTITY` | `secret` (or `tailscale`) |
 | `CL_LLM_MEMORY_QUERY_TOOL` | empty; `1` adds the guarded Prolog tool |
+| `CL_LLM_MEMORY_K` | `5`; the retrieval cap for every connection |
+| `CL_LLM_MEMORY_MAX_ROWS` | `50`; the row cap for every connection |
+
+The caps are the image's, not the caller's: `CL_LLM_MEMORY_K` and
+`CL_LLM_MEMORY_MAX_ROWS` bound retrieval and rows for every connection,
+as `make-agent-tools` does in process, so the model chooses arguments
+and never a bound. `listener-caps-reach-the-tools` asserts a listener
+started with `:max-rows 1` returns one record and `truncated` true.
 
 A client connects through the relay:
 

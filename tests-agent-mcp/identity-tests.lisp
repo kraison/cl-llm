@@ -71,3 +71,29 @@ address."
   (signals error (mcp:check-bind "0.0.0.0" nil))
   (is (string= "0.0.0.0" (mcp:check-bind "0.0.0.0" '(("a/b" . "s")))))
   (is (string= "127.0.0.1" (mcp:check-bind "127.0.0.1" nil)) "control"))
+
+(test an-ipv4-mapped-loopback-peer-is-loopback
+  "#58: a dual-stack accept reports an IPv4 loopback peer as
+::ffff:127.0.0.1 -- ten zero octets, 255 255, then the IPv4 address.
+That peer is loopback, so a connection from it with no hello writes as
+the image's default instead of being refused.  The controls: a mapped
+off-host address is not loopback, and ::1 still is."
+  (is (mcp:loopback-p #(0 0 0 0 0 0 0 0 0 0 255 255 127 0 0 1)))
+  (is (not (mcp:loopback-p #(0 0 0 0 0 0 0 0 0 0 255 255 10 0 0 7)))
+      "control: a mapped 10.0.0.7 is not loopback")
+  (is (mcp:loopback-p #(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1))
+      "control: ::1 still is"))
+
+(test a-secret-comparison-does-not-stop-at-the-first-difference
+  "#58: RESOLVE-IDENTITY compared secrets with STRING=, which returns
+at the first differing character; %SECRET= XOR-accumulates over the
+longer of the two and only then compares the lengths.  Equal is T, a
+difference at equal length is NIL, unequal lengths are NIL, and the
+empty secret matches itself.  RESOLVE-IDENTITY's own refusal of a wrong
+secret is asserted by RESOLVE-IDENTITY-UNDER-THE-SECRET-PROVIDER."
+  (is (eq t (mcp::%secret= "a-long-random-secret" "a-long-random-secret")))
+  (is (not (mcp::%secret= "a-long-random-secret" "a-long-random-secreT"))
+      "control: same length, one character apart")
+  (is (not (mcp::%secret= "secret" "secretsecret"))
+      "control: a prefix is not the secret")
+  (is (eq t (mcp::%secret= "" ""))))
