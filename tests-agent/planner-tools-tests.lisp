@@ -104,6 +104,36 @@
       (is (null (json:jget r "box")))
       (is (string= "searched-empty" (json:jget r "box-standing"))))))
 
+(test retrieve-seeds-the-cite-cache-in-scope-order
+  "S6b SS6 (#48): one cite held by both stores.  W also matches a
+confound claim FUSE ranks ahead of its own ci-status copy, so P's
+copy -- P's only match -- always out-ranks W's: with no confound the
+two copies would tie in FUSE's own ranking and hash order could
+launder the bug either way.  With a genuine rank gap, whatever order
+SCOPE lists the two stores in, the cache must still name the FIRST
+store in scope, not fusion's ranking.  The reversed scope is the
+control."
+  (with-stores (w p)
+    (%belief w "marker" '(:flag . "set") :subject (cons :repo "confound"))
+    (let* ((cw (%belief w "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite cw))
+           (eps (vector "repo:confound" "repo:cl-llm")))
+      (%belief p "ci-status" '(:verdict . "green"))
+      (let ((scope (agent:make-scope (list w p) :write-store w
+                                     :producer +p+)))
+        (%call (agent:make-planner-tools scope) "retrieve"
+               "query" "ci-status of repo cl-llm" "endpoints" eps)
+        (is (eq w (gethash cite (agent::scope-cites scope)))
+            "the cache itself holds it")
+        (is (eq w (agent:cite-store scope cite))))
+      (let ((scope (agent:make-scope (list p w) :write-store w
+                                     :producer +p+)))
+        (%call (agent:make-planner-tools scope) "retrieve"
+               "query" "ci-status of repo cl-llm" "endpoints" eps)
+        (is (eq p (gethash cite (agent::scope-cites scope)))
+            "the cache itself holds it")
+        (is (eq p (agent:cite-store scope cite)) "control: reversed")))))
+
 (test retrieve-signals-on-a-noncanonical-endpoint-namespace
   "Controller ruling 2: %ENDPOINTS uses the validating %KEYWORD for the
 namespace half of each \"namespace:key\" string, so a non-canonical

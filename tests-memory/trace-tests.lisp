@@ -349,7 +349,7 @@ NIL, which is 'no decisions', not an absence."
                                     :producer +p+ :evidence (list e)
                                     :rule "r"))))
       (is (equal (list (mem:decision-id d2) (mem:decision-id d1))
-                 (mem:decisions-citing g e)))
+                 (mapcar #'car (mem:decisions-citing g e))))
       (is (equal (mem:decisions-citing g e)
                  (mem:decisions-citing g (mem:claim-cite e))))
       (is (null (mem:decisions-citing g other))))))

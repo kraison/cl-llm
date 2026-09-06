@@ -10,10 +10,6 @@
 (defun %scope-error (fmt &rest args)
   (error 'scope-error :reason (apply #'format nil fmt args)))
 
-;; GRAPH-P and the GRAPH class are graph-db internals, not exported.
-(defun %graph-p (x)
-  (typep x 'graph-db::graph))
-
 (defstruct (scope (:constructor %make-scope))
   "STORES readable in order; WRITE-STORE one of them; PRODUCER the
 canonical agent name; SOURCES extra COLLECT-EVIDENCE sources; K and
@@ -24,11 +20,12 @@ returned (SS6)."
 
 (defun make-scope (stores &key write-store producer sources
                                 (k 5) (max-rows 50))
-  (unless (and (consp stores) (every #'%graph-p stores))
-    (%scope-error "STORES must be a non-empty list of open graphs"))
-  (let ((write (or write-store (first stores))))
-    (unless (member write stores)
-      (%scope-error "the write store must be one of the readable stores"))
+  (let ((write (or write-store (first (and (consp stores) stores)))))
+    ;; The store-list checks live in the memory layer (S6b SS3); the
+    ;; message is re-signalled as the model-readable SCOPE-ERROR.
+    (handler-case (mem:check-scope stores :write-store write)
+      (mem:scope-argument-error (c)
+        (%scope-error "~a" (princ-to-string c))))
     (unless (st:canonical-producer-p producer)
       (%scope-error "PRODUCER is required: a canonical string ~
                      \"<agent>/<host>\""))
@@ -48,7 +45,11 @@ SCOPE-ERROR the model can read."
       (%scope-error "store ~s is not in this scope" name)))
 
 (defun note-cite (scope cite graph)
-  (setf (gethash cite (scope-cites scope)) graph))
+  "Remember GRAPH as the store CITE was returned from -- first wins, so
+the cache agrees with CITE-STORE's first-in-scope scan whatever order
+the tools ran in (S6b SS6, #48)."
+  (unless (nth-value 1 (gethash cite (scope-cites scope)))
+    (setf (gethash cite (scope-cites scope)) graph)))
 
 (defun cite-store (scope cite)
   "The store CITE was returned from, else the first store in scope

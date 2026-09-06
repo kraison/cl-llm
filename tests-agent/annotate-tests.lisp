@@ -210,3 +210,26 @@ the index hands back first (#14 unit 3 residual)."
       (is (every (lambda (r) (null (cdr r))) results))
       (is (null (st:claims-by-producer w 'mem:trace "claude-code/agent"))
           "control: nothing was written"))))
+
+(test annotate-banners-survives-a-decision-held-by-the-other-store
+  "S6b (#47): the banner dir captured into BOTH stores mints one cite
+per banner in each; a decision citing one lands in P.  A declining run
+over (W P) then meets P's decision id through DECISIONS-CITING and must
+return the declined shape, not signal on a TRACE that W cannot answer."
+  (with-stores (w p)
+    (mem:capture-memory-dir w (%banner-dir) :producer "capture/test")
+    (mem:capture-memory-dir p (%banner-dir) :producer "capture/test")
+    (let ((cite (%annotates-cite-for p "correction" 1)))
+      (is (mem:cite-p cite) "control: P holds the banner's cite")
+      (mem:conclude p (list :belief '(:memory-note . "correction")
+                            "annotated" '(:verdict . "yes")
+                            :standing :inferred)
+                    :producer "claude-code/agent" :evidence (list cite)
+                    :rule "annotate"))
+    (let* ((provider (llm:make-mock-provider
+                      :responder (lambda (c) (declare (ignore c)) "no")))
+           (results (agent:annotate-banners (list w p) (%banner-dir)
+                                            :provider provider
+                                            :producer "claude-code/agent")))
+      (is (= 5 (length results)))
+      (is (every (lambda (r) (null (cdr r))) results)))))

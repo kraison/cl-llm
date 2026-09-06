@@ -61,7 +61,7 @@ cons, not a two-message tail."
                                               :tools tools)))
       (is (string= "Done." text))
       (let* ((ids (mem:decisions-citing w seen-cite :scope (list w p)))
-             (rec (mem:trace w (first ids) :scope (list w p))))
+             (rec (mem:trace w (car (first ids)) :scope (list w p))))
         (is (= 1 (length ids)))
         (is (string= seen-cite
                      (mem:cite-record-cite

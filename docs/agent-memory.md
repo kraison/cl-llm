@@ -202,6 +202,60 @@ omitted. Building a tool surface a model calls over several stores —
 scope, caps, the writable one — is `docs/agent-tools.md`
 (kraison/cl-llm#14 unit 2).
 
+## Scopes
+
+A scope is a list of open stores in trust order, most trusted first.
+Every reader (`recall`, `resolve-cite`, `trace`, `decisions-citing`)
+and `conclude` take `:scope`, defaulting to the store they were called
+on. `check-scope` refuses an empty list, a closed or repeated store,
+two stores with one name, a write store outside the list, and a
+multi-store scope whose stores are not attached to one system clock
+(one regime, never a wall-clock fallback). Scope reads run under one
+read snapshot per store, composed by the engine with no single instant
+across stores, and are refused inside an open write transaction: the
+engine refuses only the foreign half, and the own-store half would show
+uncommitted state.
+
+**One memory, trust-ordered supersession.** `recall` builds one series
+over the scope. A belief supersedes an older one across stores only
+from a store of equal or higher trust; a lower-trust belief is listed
+beside a higher one and never marks it superseded. A record names its
+store and, when superseded, the successor's cite and store. Nothing is
+written: no store closes another's validity.
+
+**`conclude` at the boundary.** Before its transaction opens, a belief
+proposal is read against the series over the scope. A governing prior
+in a higher-trust store refuses the proposal with the `scope-conflict`
+family, naming the cite and its store; one in a lower-trust store is
+overridden at read time and recorded as an evidence row with that
+store's name. An absence has no series and takes no pre-read. The
+pre-read is advisory like the validation report; the commit is the
+enforcement.
+
+**Cites** stay store-free and resolve in the first store in scope order
+holding their identity; every rendered cite carries the store it
+resolved in. `decisions-citing` returns `(id . store-name)` pairs and
+`trace` finds a decision in the first store holding it, naming it in
+`decision-record-store`. A decision carries one evidence row per cite,
+whatever number of stores hold that cite: the trace family's identity
+has no room for the store, so the row names the first store in scope
+order among those cited (#51). `belief-record-store` and
+`belief-record-superseded-by-store` hold graph objects;
+`cite-record-store` and `decision-record-store` hold store-name
+strings.
+
+**The clock belongs to the image.** A store attached to a system clock
+draws its epochs from it; the attachment lives in memory and in the
+clock's journal, not in the store, so a store reopened without the
+clock silently resumes its own counter, continuing the same integers.
+The memory image opens one clock (`CL_LLM_MEMORY_CLOCK`, default
+`~/.cl-llm-memory/clock/`) before its stores, passes it on every open,
+and closes it last. Every decision records its commit epoch
+(`decision-epoch`, `decision-record-epoch`); the number is comparable
+across stores only for decisions recorded under the shared clock. As-of
+reads still use wall clock; they move to the epoch axis when
+vivace-graph#347 is consumed.
+
 ## Banners
 
 The proving corpus's notes carry hand-written supersession banners in

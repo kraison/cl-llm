@@ -11,6 +11,7 @@
 ;; global in graph-db, so this deliberately stays out of any tenant's
 ;; namespace.
 (st:def-claim-classes probe-claim :cl-llm-claims-test)
+(st:def-claim-classes probe-claim-2 :cl-llm-claims-test-2)
 
 (defun %call-with-graph (fn)
   (let* ((dir (format nil "/tmp/cl-llm-claims-test-~a-~a/"
@@ -236,3 +237,41 @@ unless built with :INCLUDE-RETRACTED."
                          g 'probe-claim (%extract-devices "d42")
                          :include-retracted t)
                         "d42")))))))
+
+(test copies-in-two-stores-carry-two-document-ids
+  "S6b (#49): the claim document id carries the store, so one fact held
+by two stores is two RRF identities, not one fused item.  The control:
+the two items' TEXTs are equal, so only the id can separate them."
+  (with-claims-graph (g)
+    (let* ((dir (format nil "/tmp/cl-llm-claims-test2-~a-~a/"
+                        (get-internal-real-time) (random 1000000)))
+           (g2 (gdb:make-graph :cl-llm-claims-test-2 dir
+                               :buffer-pool-size 1000)))
+      (unwind-protect
+           (progn
+             (%seed g)
+             (gdb:with-transaction ((graph-db::transaction-manager g2))
+               (make-probe-claim-2-binary
+                :graph g2
+                :subject-namespace :device :subject-key "d42"
+                :relation "feeds"
+                :object-namespace :sensor :object-key "s1"
+                :producer "rule-a" :standing :observed))
+             (let* ((s1 (claims:make-claim-source
+                         g 'probe-claim (%extract-devices "d42")))
+                    (s2 (claims:make-claim-source
+                         g2 'probe-claim-2 (%extract-devices "d42")))
+                    (e1 (first (rag:collect-evidence s1 "d42")))
+                    (e2 (first (rag:collect-evidence s2 "d42")))
+                    (id1 (rag:chunk-document-id (rag:evidence-chunk e1)))
+                    (id2 (rag:chunk-document-id (rag:evidence-chunk e2))))
+               (is (string= (rag:chunk-text (rag:evidence-chunk e1))
+                            (rag:chunk-text (rag:evidence-chunk e2)))
+                   "control: same text")
+               (is (not (string= id1 id2)))
+               (is (eql 0 (search "claim:cl-llm-claims-test:" id1)))
+               (is (eql 0 (search "claim:cl-llm-claims-test-2:" id2)))))
+        (ignore-errors (gdb:close-graph g2))
+        (ignore-errors (uiop:delete-directory-tree
+                        (pathname dir) :validate t
+                        :if-does-not-exist :ignore))))))

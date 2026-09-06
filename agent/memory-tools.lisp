@@ -19,32 +19,27 @@ one predicate; optional at (RFC 3339) keeps only beliefs valid then."
      (let* ((ns (%find-keyword subject-namespace))
             (subject (and ns (cons ns subject-key)))
             (instant (and at (%parse-iso at)))
-            (rows '()))
-       (when subject
-         (dolist (g (scope-stores scope))
-           (dolist (r (mem:recall g subject :relation relation :at instant))
-             (note-cite scope (mem:claim-cite (mem:belief-record-claim r))
-                        g)
-             (push (cons g r) rows))))
-       (setf rows (stable-sort (nreverse rows)
-                               (lambda (a b)
-                                 (mem:claim-before-p
-                                  (mem:belief-record-claim (cdr a))
-                                  (mem:belief-record-claim (cdr b))))))
+            ;; One RECALL over the scope: the memory layer merges and
+            ;; computes supersession under the trust rule (S6b SS4).
+            (rows (and subject
+                       (mem:recall (scope-write-store scope) subject
+                                   :relation relation :at instant
+                                   :scope (scope-stores scope)))))
+       ;; Seed the cache in SCOPE order, not row order: first-wins must
+       ;; mean first-in-scope, whatever recall's tie-break put first
+       ;; (S6b SS6, #48).
+       (dolist (g (scope-stores scope))
+         (dolist (r rows)
+           (when (eq g (mem:belief-record-store r))
+             (note-cite scope
+                        (mem:claim-cite (mem:belief-record-claim r))
+                        g))))
        (let* ((cap (scope-max-rows scope))
               (shown (subseq rows 0 (min cap (length rows)))))
          (json:to-json
           (json:jobject
-           "records" (map 'vector
-                          (lambda (x) (%record-json (car x) (cdr x)))
-                          shown)
+           "records" (map 'vector #'%record-json shown)
            "truncated" (%bool (> (length rows) cap)))))))))
-
-(defun %find-decision (scope id)
-  "The store holding decision ID, or NIL."
-  (find-if (lambda (g) (st:claims-touching g 'mem:trace :decision id
-                                           :role :subject :limit 1))
-           (scope-stores scope)))
 
 (defun %trace-tool (scope)
   (llm:make-tool
@@ -54,31 +49,32 @@ outcome, the conclusion, every evidence cite resolved to the version
 believed then with what has changed since, and any refusals."
    '((decision-id :type string))
    (lambda (decision-id)
-     (let ((g (%find-decision scope decision-id)))
-       (unless g (error "no decision ~a in scope" decision-id))
-       ;; No NOTE-CITE here: each record already carries the store
-       ;; MEM:TRACE resolved it against, and seeding the cache from a
-       ;; trace would make a later CONCLUDE charge the evidence to
-       ;; whichever store the cache saw (#14 unit 2 final review).
-       (let ((rec (mem:trace g decision-id :scope (scope-stores scope))))
-         (json:to-json
-          (json:jobject
-           "id" decision-id
-           "store" (mem:store-name g)
-           "producer" (mem:decision-record-producer rec)
-           "at" (%iso (mem:decision-record-at rec))
-           "rule" (mem:decision-record-rule rec)
-           "rule-version" (mem:decision-record-rule-version rec)
-           "confidence" (mem:decision-record-confidence rec)
-           "outcome" (%standing (mem:decision-record-outcome rec))
-           "conclusion" (let ((c (mem:decision-record-conclusion rec)))
-                          (and c (%cite-record-json c)))
-           "evidence" (map 'vector #'%cite-record-json
-                           (mem:decision-record-evidence rec))
-           "refusals" (map 'vector
-                           (lambda (f) (json:jobject "family" (car f)
-                                                     "text" (cdr f)))
-                           (mem:decision-record-refusals rec)))))))))
+     ;; No NOTE-CITE here: each record already carries the store
+     ;; MEM:TRACE resolved it against, and seeding the cache from a
+     ;; trace would make a later CONCLUDE charge the evidence to
+     ;; whichever store the cache saw (#14 unit 2 final review).
+     (let ((rec (mem:trace (scope-write-store scope) decision-id
+                           :scope (scope-stores scope))))
+       (unless rec (error "no decision ~a in scope" decision-id))
+       (json:to-json
+        (json:jobject
+         "id" decision-id
+         "store" (mem:decision-record-store rec)
+         "epoch" (mem:decision-record-epoch rec)
+         "producer" (mem:decision-record-producer rec)
+         "at" (%iso (mem:decision-record-at rec))
+         "rule" (mem:decision-record-rule rec)
+         "rule-version" (mem:decision-record-rule-version rec)
+         "confidence" (mem:decision-record-confidence rec)
+         "outcome" (%standing (mem:decision-record-outcome rec))
+         "conclusion" (let ((c (mem:decision-record-conclusion rec)))
+                        (and c (%cite-record-json c)))
+         "evidence" (map 'vector #'%cite-record-json
+                         (mem:decision-record-evidence rec))
+         "refusals" (map 'vector
+                         (lambda (f) (json:jobject "family" (car f)
+                                                   "text" (cdr f)))
+                         (mem:decision-record-refusals rec))))))))
 
 (defun %decisions-citing-tool (scope)
   (llm:make-tool
@@ -87,19 +83,17 @@ believed then with what has changed since, and any refusals."
 conclusions rest on this belief."
    '((cite :type string))
    (lambda (cite)
-     ;; MEM:DECISIONS-CITING already unions SCOPE and orders newest
-     ;; first with an id tiebreak (SS5) -- one call, not one per store,
-     ;; and no per-decision TRACE just to re-derive that order.
-     (let ((ids (mem:decisions-citing (first (scope-stores scope)) cite
-                                      :scope (scope-stores scope))))
+     ;; MEM:DECISIONS-CITING unions SCOPE, orders newest first with an
+     ;; id tiebreak (SS5), and names each decision's store (S6b SS7).
+     (let ((pairs (mem:decisions-citing (scope-write-store scope) cite
+                                        :scope (scope-stores scope))))
        (json:to-json
         (json:jobject
          "decisions"
          (map 'vector
-              (lambda (id)
-                (json:jobject "id" id "store"
-                              (mem:store-name (%find-decision scope id))))
-              ids)))))))
+              (lambda (pair)
+                (json:jobject "id" (car pair) "store" (cdr pair)))
+              pairs)))))))
 
 ;;; Write tools: conclude, conclude-absence, retract.  Spec SS6.
 
@@ -126,6 +120,7 @@ to the write store (SS6)."
    (json:jobject
     "id" (mem:decision-id d)
     "store" (mem:store-name (scope-write-store scope))
+    "epoch" (mem:decision-epoch d)
     "outcome" (%standing (mem:decision-outcome d))
     "claim-cite" (let ((c (mem:decision-claim d)))
                    (and c (progn (note-cite scope (mem:claim-cite c)
@@ -181,7 +176,8 @@ the belief starts to hold (RFC 3339; default now)."
                 :producer (scope-producer scope)
                 :evidence (%evidence-pairs scope evidence)
                 :rule rule :rule-version rule-version
-                :confidence confidence)))
+                :confidence confidence
+                :scope (scope-stores scope))))
        (%decision-json scope d)))))
 
 (defun %conclude-absence-tool (scope)
@@ -207,7 +203,8 @@ Validated and traced like conclude."
                                 standing +absence-standings+))
                :producer (scope-producer scope)
                :evidence (%evidence-pairs scope evidence)
-               :rule rule :rule-version rule-version)))
+               :rule rule :rule-version rule-version
+               :scope (scope-stores scope))))
        (%decision-json scope d)))))
 
 (defun %retract-tool (scope)

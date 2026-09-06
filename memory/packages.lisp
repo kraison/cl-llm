@@ -23,11 +23,15 @@
    ;; write
    #:record-belief #:record-absence #:retract-belief
    #:belief-argument-error #:belief-successor-before-predecessor
+   ;; scope (S6b)
+   #:check-scope #:scope-argument-error
+   #:call-with-scope-snapshots #:with-scope-snapshots
    ;; recall
    #:recall #:belief-record #:belief-record-claim
    #:belief-record-current-p #:belief-record-superseded-by
    #:belief-record-retracted-at #:belief-record-standing
-   #:belief-record-extent #:claim-before-p
+   #:belief-record-extent #:belief-record-store
+   #:belief-record-superseded-by-store #:claim-before-p
    ;; capture
    #:capture-memory-dir #:capture-listing #:read-frontmatter
    #:body-digest
@@ -43,10 +47,11 @@
    #:cite-record-store
    ;; trace
    #:conclude #:decision #:decision-id #:decision-outcome
-   #:decision-claim #:decision-report #:decision-at
+   #:decision-claim #:decision-report #:decision-at #:decision-epoch
    #:trace #:trace-listing #:decisions-citing
    #:decision-record #:decision-record-id #:decision-record-producer
    #:decision-record-at #:decision-record-rule
    #:decision-record-rule-version #:decision-record-confidence
    #:decision-record-outcome #:decision-record-conclusion
-   #:decision-record-evidence #:decision-record-refusals))
+   #:decision-record-evidence #:decision-record-refusals
+   #:decision-record-store #:decision-record-epoch))

@@ -135,9 +135,13 @@ Reads run over every store in scope and merge under
 recorded-at, then object key — ties broken by scope order. An
 absence record has no `object` key at all (omitted, per the rule
 above) and its `standing` is one of `searched-empty`,
-`indeterminate`, `uncovered`. `valid-to` and `superseded-by` are
-likewise omitted when there is none. An empty `records` array means
-"nothing recorded" — it is not an absence; an absence is a record.
+`indeterminate`, `uncovered`. `valid-to` is likewise omitted when
+there is none. `superseded-by` is an object `{"cite", "store"}` naming
+the successor and the store it lives in, which may be another store
+in scope, or absent; `current` is false when a claim is superseded
+anywhere in scope under the trust rule. An empty `records` array
+means "nothing recorded" — it is not an absence; an absence is a
+record.
 
 ### `trace`
 
@@ -147,6 +151,7 @@ Parameters: `decision-id`.
 {
   "id": "9f8e...",
   "store": "cl-llm-memory",
+  "epoch": 42,
   "producer": "claude-code/agent",
   "at": "2026-09-03T10:00:00.000000Z",
   "rule": "owner-says",
@@ -174,16 +179,17 @@ Parameters: `decision-id`.
 ```
 
 Found in whichever store of the scope holds it — decision ids are
-random and unique. `confidence` is present when the decision that
-made the claim gave one (omitted otherwise). Each evidence cite
-resolves in the store its evidence claim names, when that store is
-in scope, and the item's `store` is **the store it was resolved
-against** — so a belief held identically by two stores still reports
-the half this decision cited. A cite naming a store the tool set was
-not built with reports `state: "absent"` and carries **no `store` key
-at all** — never falling back to the decision's own store, which
-would falsely suggest it was found. A refused decision has no
-`conclusion` and no
+random and unique. `epoch` (integer) is the commit epoch; omitted for
+a decision recorded before the engine stamped one. `confidence` is
+present when the decision that made the claim gave one (omitted
+otherwise). Each evidence cite resolves in the store its evidence
+claim names, when that store is in scope, and the item's `store` is
+**the store it was resolved against** — so a belief held identically
+by two stores still reports the half this decision cited. A cite
+naming a store the tool set was not built with reports
+`state: "absent"` and carries **no `store` key at all** — never
+falling back to the decision's own store, which would falsely suggest
+it was found. A refused decision has no `conclusion` and no
 `rule`/`rule-version`/`confidence` (omitted); `refusals` is
 `[{"family": ..., "text": ...}]`, one per constraint family that
 objected.
@@ -210,6 +216,7 @@ of cites), `standing` — `inferred` (default), `observed` or
 {
   "id": "9f8e...",
   "store": "cl-llm-memory",
+  "epoch": 42,
   "outcome": "concluded",
   "claim-cite": "cl-llm.memory::belief|9f8e...",
   "refusals": []
@@ -224,17 +231,21 @@ why:
 {
   "id": "...",
   "store": "cl-llm-memory",
+  "epoch": 43,
   "outcome": "refused",
   "refusals": [{"family": "subsystem", "text": "..."}]
 }
 ```
 
-(`claim-cite` is omitted on a refusal.) Every `evidence` cite the
-model passes must be one this tool set has already returned in a
-result, or one `recall`/`retrieve`/`trace` could still find by
-searching the scope; a cite that resolves nowhere in scope is an
-*error* result, never silently charged to the write store. Every
-namespace argument — subject and object — is validated canonical
+(`claim-cite` is omitted on a refusal.) `epoch` is the commit epoch
+(integer). `scope-conflict` is one of the refusal families: a belief
+governed by a prior in a higher-trust store is refused; the text
+names the cite and its store. Every `evidence` cite the model passes
+must be one this tool set has already returned in a result, or one
+`recall`/`retrieve`/`trace` could still find by searching the scope; a
+cite that resolves nowhere in scope is an *error* result, never
+silently charged to the write store. Every namespace argument —
+subject and object — is validated canonical
 (`[a-z0-9-]+`) before anything is staged; a bad one is an error
 result and writes nothing, on either side of the proposal.
 
@@ -302,7 +313,9 @@ that encoding appears, because namespaces are canonical
 
 Runs `fuse` over one belief claim source per store in scope plus any
 `sources` the operator supplied, so each evidence item names its
-`store` when it came from one (omitted for an operator source).
+`store` when it came from one (omitted for an operator source). A fact
+held by two stores is two items, each naming its own `store`; fusion
+no longer collapses copies across stores (#49).
 `from`/`to` set the window explicitly (reported `standing:
 "asserted"`); left out, the window is derived from a first,
 unbounded fusion through `plan-bounds` and then applied — so a
@@ -493,9 +506,9 @@ It depends on `cl-llm/agent/tests` for the two-store on-disk harness
 
 ## What this is not
 
-- **No cross-store consistent instant.** Reads run per store and
-  merge; one epoch spanning several stores at once is S6b's job
-  (`#24`), not this one's.
+- **No cross-store consistent instant.** Recall, supersession and
+  `current` are computed over the whole scope under the trust rule;
+  as-of reads remain wall-clock until vivace-graph#347 is consumed.
 - **No web stack anywhere.** `cl-llm/agent/prolog` depends on
   `graph-db/query`, the guard's web-free home since
   kraison/vivace-graph#322; nothing here loads ningle, clack or

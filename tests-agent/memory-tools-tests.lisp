@@ -74,7 +74,9 @@ came from; the private store is invisible when out of scope."
                       (json:jget r "records"))))
       (let ((old (second (coerce (json:jget r "records") 'list))))
         (is (eq nil (json:jget old "current")))
-        (is (mem:cite-p (json:jget old "superseded-by")))))
+        (is (mem:cite-p (json:jget old "superseded-by" "cite")))
+        (is (string= "cl-llm-memory"
+                     (json:jget old "superseded-by" "store")))))
     (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
            (r (%call tools "recall" "subject-namespace" "repo"
                      "subject-key" "cl-llm" "relation" "ci-status"
@@ -93,7 +95,13 @@ of scope order (spec SS6)."
                      "subject-key" "cl-llm" "relation" "ci-status")))
       (is (equal '("new" "old")
                  (map 'list (lambda (x) (json:jget x "object" "key"))
-                      (json:jget r "records")))))))
+                      (json:jget r "records"))))
+      ;; S6b (#46): W is more trusted than P here, so P's newer belief
+      ;; does not supersede W's -- both current, nothing superseded.
+      (let ((rows (coerce (json:jget r "records") 'list)))
+        (is (every (lambda (x) (eq t (json:jget x "current"))) rows))
+        (is (every (lambda (x) (null (json:jget x "superseded-by")))
+                   rows))))))
 
 (test recall-breaks-a-genuine-cross-store-tie-by-scope-order
   "Equal validity start AND equal recorded-at: STABLE-SORT then keeps
@@ -511,3 +519,121 @@ copy -- the answer TRACE must not use")
              (ev (first (coerce (json:jget r "evidence") 'list))))
         (is (string= "memory-private" (json:jget ev "store")))
         (is (string= "resolved" (json:jget ev "state")))))))
+
+(test recall-renders-a-cross-store-successor-with-its-store
+  "S6b SS4 JSON: scope (P W) with W the write store; P more trusted and
+newer: the W row is not current and its superseded-by is an object
+naming P's cite and store."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (%belief p "ci-status" '(:verdict . "red")
+             :start "2026-09-02T08:00:00Z")
+    (let* ((tools (agent:make-agent-tools (list p w) :write-store w
+                                          :producer +p+))
+           (r (%call tools "recall" "subject-namespace" "repo"
+                     "subject-key" "cl-llm"))
+           (rows (coerce (json:jget r "records") 'list))
+           (green (find "cl-llm-memory" rows
+                        :key (lambda (x) (json:jget x "store"))
+                        :test #'string=)))
+      (is (= 2 (length rows)))
+      (is (eq nil (json:jget green "current")))
+      (is (string= "memory-private"
+                   (json:jget green "superseded-by" "store")))
+      (is (mem:cite-p (json:jget green "superseded-by" "cite"))))))
+
+(test recall-does-not-move-the-cite-cache-so-retract-still-works
+  "S6b SS6 (#48): both stores hold one cite; scope (W P), write store
+W.  After RECALL, which sees both copies, RETRACT on the cite acts on
+W's copy -- NOTE-CITE is first-wins and CITE-STORE scans first-in-scope,
+so the cache and the scan agree.  The control: retract in the reversed
+scope (P W), write store W, is refused by name because P's copy resolves
+first."
+  (with-stores (w p)
+    (let* ((cw (%belief w "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite cw)))
+      (%belief p "ci-status" '(:verdict . "green"))
+      (let* ((scope (agent:make-scope (list w p) :write-store w
+                                      :producer +p+))
+             (tools (agent:make-memory-tools scope)))
+        (%call tools "recall" "subject-namespace" "repo"
+               "subject-key" "cl-llm")
+        (is (eq w (gethash cite (agent::scope-cites scope)))
+            "the cache itself holds W")
+        (is (eq w (agent:cite-store scope cite))
+            "the cache names the first store after recall")
+        (%call tools "retract" "cite" cite)
+        (is (not (st:claim-current-p
+                  (mem:belief-record-claim
+                   (first (mem:recall w +subj+ :include-retracted t)))))
+            "W's copy is retracted")
+        (is (st:claim-current-p
+             (mem:belief-record-claim (first (mem:recall p +subj+))))
+            "P's copy is untouched"))
+      (let* ((scope (agent:make-scope (list p w) :write-store w
+                                      :producer +p+))
+             (tools (agent:make-memory-tools scope)))
+        (%call tools "recall" "subject-namespace" "repo"
+               "subject-key" "cl-llm")
+        (signals llm:llm-tool-error
+          (%call tools "retract" "cite" cite)
+          "control: P resolves first and is not writable")))))
+
+(test make-scope-refuses-what-check-scope-refuses
+  "S6b SS3: MAKE-SCOPE delegates the store-list checks; a repeated
+store is a SCOPE-ERROR whose message names it."
+  (with-stores (w p)
+    (signals agent:scope-error
+      (agent:make-scope (list w w) :producer +p+))
+    (handler-case (agent:make-scope (list w w) :producer +p+)
+      (agent:scope-error (c)
+        (is (search "appears twice" (princ-to-string c)))))
+    (is (agent:make-scope (list w p) :producer +p+) "control")))
+
+(test decisions-citing-tool-carries-the-store-and-trace-tool-finds-it
+  "S6b SS7 (#47): a decision held only by P is listed with its store
+and traced through the scope; the conclude result carries an epoch."
+  (with-stores (w p)
+    (let* ((e (%belief p "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite e))
+           (d (mem:conclude p (list :belief +subj+ "releasable"
+                                    '(:v . "yes") :standing :inferred)
+                            :producer +p+ :evidence (list e) :rule "r"))
+           (tools (agent:make-agent-tools (list w p) :producer +p+))
+           (listed (coerce (json:jget (%call tools "decisions-citing"
+                                             "cite" cite)
+                                      "decisions")
+                           'list))
+           (traced (%call tools "trace" "decision-id" (mem:decision-id d))))
+      (is (= 1 (length listed)))
+      (is (string= "memory-private" (json:jget (first listed) "store")))
+      (is (string= "memory-private" (json:jget traced "store")))
+      (is (string= "concluded" (json:jget traced "outcome")))
+      (is (integerp (json:jget traced "epoch")))
+      (let ((out (%call tools "conclude"
+                        "subject-namespace" "repo" "subject-key" "cl-llm"
+                        "relation" "shippable" "object-namespace" "v"
+                        "object-key" "yes" "rule" "r"
+                        "evidence" (vector cite))))
+        (is (integerp (json:jget out "epoch")))))))
+
+(test conclude-tool-refuses-a-higher-trust-conflict-by-name
+  "S6b SS5 (#50): through the tool, scope (P W) write W, P's prior
+governs: the result is a refusal whose refusals name the scope-conflict
+family, the cite and the store."
+  (with-stores (w p)
+    (let* ((prior (%belief p "ci-status" '(:verdict . "green")))
+           (tools (agent:make-agent-tools (list p w) :write-store w
+                                          :producer +p+))
+           (out (%call tools "conclude"
+                       "subject-namespace" "repo" "subject-key" "cl-llm"
+                       "relation" "ci-status" "object-namespace" "verdict"
+                       "object-key" "red" "rule" "r"
+                       "valid-from" "2026-09-02T08:00:00Z"))
+           (refusals (coerce (json:jget out "refusals") 'list)))
+      (is (string= "refused" (json:jget out "outcome")))
+      (is (= 1 (length refusals)))
+      (is (string= "scope-conflict" (json:jget (first refusals) "family")))
+      (is (search (mem:claim-cite prior)
+                  (json:jget (first refusals) "text")))
+      (is (search "memory-private" (json:jget (first refusals) "text"))))))

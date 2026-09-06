@@ -58,13 +58,15 @@ unrecoverable -- then interns it (SS6)."
 (defun %endpoint-json (ns key)
   (json:jobject "namespace" (%standing ns) "key" key))
 
-(defun %record-json (store record)
-  "One BELIEF-RECORD as the model reads it (SS6)."
+(defun %record-json (record)
+  "One BELIEF-RECORD as the model reads it (SS6).  STORE is the record's
+own; SUPERSEDED-BY names the successor's cite and store, which may be
+another store in scope (S6b SS4)."
   (let* ((c (mem:belief-record-claim record))
          (s (mem:belief-record-superseded-by record))
          (e (mem:belief-record-extent record)))
     (json:jobject
-     "store" (mem:store-name store)
+     "store" (mem:store-name (mem:belief-record-store record))
      "cite" (mem:claim-cite c)
      "relation" (st:claim-relation c)
      "object" (and (typep c 'mem:belief-binary)
@@ -74,7 +76,11 @@ unrecoverable -- then interns it (SS6)."
      "valid-from" (%from e)
      "valid-to" (%to e)
      "current" (%bool (mem:belief-record-current-p record))
-     "superseded-by" (and s (mem:claim-cite s)))))
+     "superseded-by"
+     (and s (json:jobject
+             "cite" (mem:claim-cite s)
+             "store" (mem:store-name
+                      (mem:belief-record-superseded-by-store record)))))))
 
 (defun %cite-record-json (record)
   "One CITE-RECORD as the model reads it.  STORE is the record's own --

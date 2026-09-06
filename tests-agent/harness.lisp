@@ -13,20 +13,36 @@
 (mem:define-memory-store :memory-private)
 
 (defun %call-with-stores (fn)
+  "Working and private stores on ONE system clock (S6b SS3).  The clock
+closes after the stores, in the outer UNWIND-PROTECT (a leaked clock
+refuses every later open in this image); the attach is asserted inside
+the fixture so a silently unattached store cannot pass vacuously."
   (let* ((stamp (format nil "~a-~a" (get-internal-real-time)
                         (random 1000000)))
          (dirs (list (format nil "/tmp/cl-llm-agent-w-~a/" stamp)
                      (format nil "/tmp/cl-llm-agent-p-~a/" stamp)))
+         (cdir (format nil "/tmp/cl-llm-agent-clock-~a/" stamp))
          (gdb:*system-directory* (format nil "/tmp/cl-llm-agent-sys-~a/"
                                          stamp))
-         (working (gdb:make-graph :cl-llm-memory (first dirs)
-                                  :buffer-pool-size 1000))
-         (private (gdb:make-graph :memory-private (second dirs)
-                                  :buffer-pool-size 1000)))
-    (unwind-protect (funcall fn working private)
-      (ignore-errors (gdb:close-graph working))
-      (ignore-errors (gdb:close-graph private))
-      (dolist (d (cons gdb:*system-directory* dirs))
+         (clock (gdb:open-system-clock cdir))
+         (working nil) (private nil))
+    (unwind-protect
+         (progn
+           (setf working (gdb:make-graph :cl-llm-memory (first dirs)
+                                         :buffer-pool-size 1000
+                                         :system-clock clock))
+           (setf private (gdb:make-graph :memory-private (second dirs)
+                                         :buffer-pool-size 1000
+                                         :system-clock clock))
+           (is (eq (gdb:graph-system-clock working) clock)
+               "fixture: both stores on one clock")
+           (is (eq (gdb:graph-system-clock private) clock)
+               "fixture: both stores on one clock")
+           (funcall fn working private))
+      (when working (ignore-errors (gdb:close-graph working)))
+      (when private (ignore-errors (gdb:close-graph private)))
+      (ignore-errors (gdb:close-system-clock clock))
+      (dolist (d (list* cdir gdb:*system-directory* dirs))
         (ignore-errors (uiop:delete-directory-tree
                         (pathname d) :validate t
                         :if-does-not-exist :ignore))))))

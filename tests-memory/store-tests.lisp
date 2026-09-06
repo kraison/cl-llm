@@ -10,21 +10,37 @@
 (mem:define-memory-store :memory-private)
 
 (defun %call-with-two-stores (fn)
+  "Two stores on ONE system clock (S6b SS3), each in scratch dirs.  The
+clock closes in the outer UNWIND-PROTECT, after the stores: a leaked
+clock refuses every later OPEN-SYSTEM-CLOCK in this image (recon C5).
+The attach is asserted inside the fixture -- a store that silently
+failed to attach would pass every epoch test for the wrong reason."
   (let* ((stamp (format nil "~a-~a" (get-internal-real-time)
                         (random 1000000)))
-         (gdb:*system-directory* (format nil "/tmp/cl-llm-mem2-sys-~a/" stamp))
-         (a (gdb:make-graph :cl-llm-memory
-                            (format nil "/tmp/cl-llm-mem2-a-~a/" stamp)
-                            :buffer-pool-size 1000))
-         (b (gdb:make-graph :memory-private
-                            (format nil "/tmp/cl-llm-mem2-b-~a/" stamp)
-                            :buffer-pool-size 1000)))
-    (unwind-protect (funcall fn a b)
-      (ignore-errors (gdb:close-graph a))
-      (ignore-errors (gdb:close-graph b))
-      (dolist (d (list (format nil "/tmp/cl-llm-mem2-a-~a/" stamp)
-                       (format nil "/tmp/cl-llm-mem2-b-~a/" stamp)
-                       gdb:*system-directory*))
+         (gdb:*system-directory*
+           (format nil "/tmp/cl-llm-mem2-sys-~a/" stamp))
+         (cdir (format nil "/tmp/cl-llm-mem2-clock-~a/" stamp))
+         (dirs (list (format nil "/tmp/cl-llm-mem2-a-~a/" stamp)
+                     (format nil "/tmp/cl-llm-mem2-b-~a/" stamp)))
+         (clock (gdb:open-system-clock cdir))
+         (a nil) (b nil))
+    (unwind-protect
+         (progn
+           (setf a (gdb:make-graph :cl-llm-memory (first dirs)
+                                   :buffer-pool-size 1000
+                                   :system-clock clock))
+           (setf b (gdb:make-graph :memory-private (second dirs)
+                                   :buffer-pool-size 1000
+                                   :system-clock clock))
+           (is (eq (gdb:graph-system-clock a) clock)
+               "fixture: both stores on one clock")
+           (is (eq (gdb:graph-system-clock b) clock)
+               "fixture: both stores on one clock")
+           (funcall fn a b))
+      (when a (ignore-errors (gdb:close-graph a)))
+      (when b (ignore-errors (gdb:close-graph b)))
+      (ignore-errors (gdb:close-system-clock clock))
+      (dolist (d (list* cdir gdb:*system-directory* dirs))
         (ignore-errors (uiop:delete-directory-tree
                         (pathname d) :validate t
                         :if-does-not-exist :ignore))))))
@@ -115,7 +131,7 @@ never silently resolved in the wrong store."
                          (first (mem:decision-record-evidence in)))))
       (is (eq :absent (mem:cite-record-state
                        (first (mem:decision-record-evidence out)))))
-      (is (equal (list (mem:decision-id d))
+      (is (equal (list (cons (mem:decision-id d) "cl-llm-memory"))
                  (mem:decisions-citing b private :scope (list a b))))
       (is (null (mem:decisions-citing b private))
           "control: B alone holds no decision"))))
