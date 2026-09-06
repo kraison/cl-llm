@@ -63,11 +63,12 @@ whole image, not just this connection.  Logs the peer and the
 condition TYPE only, never its message, which could carry a secret."
   (handler-case (%serve-connection listener socket)
     (error (c)
-      (format *error-output* "~&memory mcp: connection from ~a ended: ~a~%"
-              (%address-string (ignore-errors
-                                (usocket:get-peer-address socket)))
-              (type-of c))
-      (finish-output *error-output*))))
+      (ignore-errors            ; a broken stderr must not escape the guard
+       (format *error-output* "~&memory mcp: connection from ~a ended: ~a~%"
+               (%address-string (ignore-errors
+                                 (usocket:get-peer-address socket)))
+               (type-of c))
+       (finish-output *error-output*)))))
 
 (defun %serve-connection (listener socket)
   "Read the first line; a hello is consumed, any other line is replayed
@@ -91,8 +92,9 @@ it."
                                                listener)
                                               principals)))
              (if (eq producer :refused)
-                 (format *error-output* "~&memory mcp: refused ~a~%"
-                         (%address-string peer))
+                 (ignore-errors ; a broken stderr must not lose the refusal
+                  (format *error-output* "~&memory mcp: refused ~a~%"
+                          (%address-string peer)))
                  (let ((server (make-memory-server
                                 (listener-stores listener)
                                 :write-store (listener-write-store listener)
