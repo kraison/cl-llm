@@ -3,7 +3,8 @@
 **Issue:** kraison/cl-llm#64. **Engine prerequisites:** kraison/vivace-graph#351
 (guarded query gaps, this unit) and kraison/vivace-graph#350 (vocabulary
 index, the successor to §1's walk, not a blocker).
-**Date:** 2026-09-06. **Status:** approved in review, sections 1–5.
+**Date:** 2026-09-06. **Status:** approved; implemented on
+feat/memory-taxonomy (engine half merged as vivace-graph PR #352).
 
 ## 0. Problem
 
@@ -182,8 +183,10 @@ VOCABULARY, best match first.")
 ## 7. Testing
 
 - **memory**: `vocabulary` counts subjects/objects/relations/keys on a
-  mixed store; skips retracted by default; sees a namespace the image
-  never interned (the #61 cold-store fixture).
+  mixed store; counts every claim on a key; skips retracted by
+  default. (A cold-store test was dropped in execution: the walk reads
+  namespaces off the vertices, which interns them, so #61's
+  FIND-SYMBOL failure mode has no analogue here.)
 - **agent**: taxonomy both shapes, sort orders, `sample` cap,
   `truncated`, uncanonical namespace error, unknown-canonical empty;
   extractor tokenisation, scoring, ties, cap; `retrieve` finds
