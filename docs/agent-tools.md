@@ -56,8 +56,8 @@ a bug to chase.
 ```lisp
 (agent:make-agent-tools stores &key write-store producer sources
                                      (k 5) (max-rows 50))
-;; => 8 tools: recall trace decisions-citing conclude
-;;    conclude-absence retract retrieve plan-bounds
+;; => 9 tools: recall trace decisions-citing conclude
+;;    conclude-absence retract list-taxonomy retrieve plan-bounds
 
 (prolog:make-query-tool stores &key (max-rows 50)
                                      (max-inferences 100000)
@@ -295,6 +295,45 @@ elsewhere in scope is an error result ("not writable in this scope"),
 since retraction is a write. Among claims sharing a cite, the
 still-current one is preferred; a cite that resolves to nothing, or
 only to an already-retracted claim, is an error result.
+
+### `list-taxonomy`
+
+Parameters: optional `namespace`, `store`, `limit`.
+
+Without `namespace`, what every store in scope names, in scope order:
+
+```json
+{"stores": [
+  {"store": "cl-llm-memory",
+   "namespaces": [
+     {"name": "incident", "subjects": 5, "objects": 0, "keys": 5,
+      "sample": ["drift-b8dc70-2026", "ledger-freeze-2026-05-22"]}],
+   "relations": [{"name": "outage-root-cause", "claims": 5}]}]}
+```
+
+Namespaces sort by subject plus object claims descending, then name;
+relations by claims descending, then name. `sample` is the first keys
+alphabetically, at most `max-rows`; `keys` is the full distinct count.
+
+With `namespace`, the keys filed under it across the scope, each
+naming its store, claims descending, then key, then scope order:
+
+```json
+{"namespace": "incident",
+ "keys": [{"key": "ledger-freeze-2026-05-22", "store": "cl-llm-memory",
+           "claims": 1}],
+ "truncated": false}
+```
+
+`limit` clamps to `max-rows`; `truncated` follows `recall`'s rule. An
+uncanonical `namespace` is the #63 error; a canonical one no store
+holds returns an empty `keys` array, the store's own answer. `store`
+restricts either shape to one store; an out-of-scope name is an error.
+
+Every name here is the spelling `recall` and `retrieve` take, which
+is the point: discover the address, then read it. The walk behind
+this tool is `mem:vocabulary` (`docs/agent-memory.md`), linear in the
+store's beliefs per call (#64).
 
 ### `retrieve`
 

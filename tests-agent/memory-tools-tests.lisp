@@ -15,7 +15,7 @@
       (agent:make-agent-tools (list w p) :producer +p+ :k 0))
     (signals agent:scope-error
       (agent:make-agent-tools (list w p) :producer +p+ :max-rows 0))
-    (is (= 8 (length (agent:make-agent-tools (list w p) :producer +p+))))))
+    (is (= 9 (length (agent:make-agent-tools (list w p) :producer +p+))))))
 
 (test recall-spans-the-scope-and-names-the-store
   "SS6: reads run over every store in scope; each record says where it

@@ -22,9 +22,10 @@
                                                        :producer +p+))
            (names (mapcar #'mcp.tools:tool-name
                           (mcp.tools:list-tools (%registry server)))))
-      (is (= 8 (length names)))
+      (is (= 9 (length names)))
       (dolist (n '("recall" "trace" "decisions-citing" "conclude"
-                   "conclude-absence" "retract" "retrieve" "plan-bounds"))
+                   "conclude-absence" "retract" "list-taxonomy"
+                   "retrieve" "plan-bounds"))
         (is (member n names :test #'string=) n))
       (let ((schema (%schema-of server "recall")))
         (is (string= "object" (cdr (assoc "type" schema :test #'string=))))
