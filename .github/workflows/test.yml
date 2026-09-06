@@ -1,5 +1,6 @@
-# Offline suites in CI (see docs/ci.md): core, rag, and the claims
-# suite (which needs graph-db/spacetime from the host's ~/src pins).
+# The offline suites in CI (see docs/ci.md): core, rag, claims, memory,
+# agent, agent/prolog -- one run per push to main and per PR.  ci.yml is
+# a manual hosted fallback and no longer triggers on its own.
 name: test
 on:
   push:

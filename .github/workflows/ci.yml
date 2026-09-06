@@ -1,9 +1,11 @@
-name: CI
+# Hosted fallback only.  The suites run on every push and PR through
+# test.yml on the self-hosted runner (docs/ci.md); this workflow ran
+# the core suite a second time on every event until 2026-09-06.  Keep
+# it for a manual run when the self-hosted runner is down.
+name: CI (hosted fallback)
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   offline-tests:
