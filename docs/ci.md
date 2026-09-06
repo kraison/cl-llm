@@ -1,21 +1,23 @@
 # CI
 
 `.github/workflows/test.yml` runs the offline suites (core, rag,
-claims, memory, agent, agent/prolog) once per push to `main` and once
-per pull request, on the ma-dev self-hosted runner (per-repo runner,
-`gh-runner-cl-llm.service` under the sitrep user).  The claims suite
-needs graph-db/spacetime, refreshed each run to vivace-graph
-EXPERIMENT head (plus cl-temporal-extent master) in
-`~/ci-deps-cl-llm` -- its own dir, because the mine-action runner
-shares this user and concurrent refreshes of one checkout would
-race.  Decided 2026-09-01: the earlier host-pin floor failed against
-tests needing same-day engine work.  The tested cl-llm tree is the
-pushed tree (quicklisp `local-projects` is neutralised).  The
-agent/prolog suite additionally quickloads `graph-db/gui` and its web
-dependencies (ningle, clack, cl-json) from Quicklisp on the runner --
-the guard pipeline `cl-llm/agent/prolog` runs lives there
-(kraison/vivace-graph#322).  Verdicts land in sitrep's mirror via the
-checks leg (kraison/sitrep#42).
+claims, memory, agent, agent/prolog, agent/mcp) once per push to
+`main` and once per pull request, on the ma-dev self-hosted runner
+(per-repo runner, `gh-runner-cl-llm.service` under the sitrep user).
+The claims suite needs graph-db/spacetime, refreshed each run to
+vivace-graph EXPERIMENT head (plus cl-temporal-extent master, cl-mcp
+main and opsis main) in `~/ci-deps-cl-llm` -- its own dir, because the
+mine-action runner shares this user and concurrent refreshes of one
+checkout would race.  Decided 2026-09-01: the earlier host-pin floor
+failed against tests needing same-day engine work.  The tested cl-llm
+tree is the pushed tree (quicklisp `local-projects` is neutralised).
+The agent/prolog suite's guard runs on `graph-db/query` (#44).  The
+agent/mcp suite's process tests spawn the solo server
+(`scripts/run-memory-mcp.sh`) as a child process that builds through
+`CL_LLM_ASDF_REGISTRY`, set for the step to the four cloned trees so
+the child sees the same engine and libraries the parent image loaded.
+Verdicts land in sitrep's mirror via the checks leg
+(kraison/sitrep#42).
 
 A green run is only evidence for the suites whose summary lines
 (`Did N checks`) appear in the job log: `asdf:test-system` on a
