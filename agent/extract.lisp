@@ -40,6 +40,7 @@ SCORE counts distinct tokens equal to a key token or the whole key."
                  t))))
 
 (defun %endpoint-name (endpoint)
+  "ENDPOINT as the \"namespace:key\" string the tools speak."
   (format nil "~a:~a" (%standing (car endpoint)) (cdr endpoint)))
 
 (defun %better-match-p (a b)

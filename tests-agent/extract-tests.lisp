@@ -32,7 +32,7 @@
                  (:incident . "ledger-freeze-2026-05-22")
                  (:incident . "ledger-freeze-2026-05-22-r2"))
                (funcall x "harbor-ledger"))
-        "both tokens score the whole key; a shared token still ranks")))
+        "both tokens score the hyphenated key; a shared token still ranks")))
 
 (test the-extractor-prefers-a-named-namespace-and-caps
   (let* ((v (%vocab '(:person . "ledger") '(:project . "ledger")))

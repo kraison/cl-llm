@@ -342,9 +342,22 @@ Parameters: `query`; optional `endpoints` (a list of
 that encoding appears, because namespaces are canonical
 `[a-z0-9-]`), `from`, `to` (RFC 3339), `k`.
 
+The query string finds endpoints on its own: it is lowercased and
+split into runs of `[a-z0-9]` of three characters or more, each
+store's keys are split on `-`, and an endpoint whose key shares a
+token with the query (or equals it whole) is consulted, scored by the
+number of matching tokens, ties broken by a namespace the query
+names, then the shorter key, then `namespace:key` alphabetically.
+Explicit `endpoints` come first and are never displaced; the union is
+capped at twice `k` per store. So "why did the ledger freeze in May"
+consults `incident:ledger-freeze-2026-05-22` with no endpoints given.
+The vocabulary behind this is `mem:vocabulary`, walked once per call
+(#64).
+
 ```json
 {
   "query": "is it releasable?",
+  "endpoints": ["incident:ledger-freeze-2026-05-22"],
   "modes": ["claim"],
   "bounds": {
     "window": {
@@ -366,6 +379,15 @@ that encoding appears, because namespaces are canonical
   "truncated": false
 }
 ```
+
+`endpoints` is always present: the `"namespace:key"` strings actually
+consulted, in consultation order, each once across stores. A call
+that would consult nothing — no endpoint named, none found, and no
+operator `sources` — is an error naming the query and pointing at
+`list-taxonomy`, not an empty bundle: an empty result must mean
+"looked, found nothing", never "did not look" (#64). With operator
+sources present the fusion runs over them alone and `endpoints` is
+empty.
 
 Runs `fuse` over one belief claim source per store in scope plus any
 `sources` the operator supplied, so each evidence item names its
@@ -390,7 +412,9 @@ survives into the bundle rather than reading as an omission.
 Parameters: `query`; optional `endpoints`, `k`. Returns the `bounds`
 object alone (see `retrieve`, above), from a seed retrieval — the
 derivation as a callable on its own, for a caller that wants the
-window or region without paying for a full fetch.
+window or region without paying for a full fetch. Endpoints come from
+the query as in `retrieve`; the result carries the same `endpoints`
+array, and the same nothing-consulted error applies.
 
 ### `query` (`cl-llm/agent/prolog`)
 
