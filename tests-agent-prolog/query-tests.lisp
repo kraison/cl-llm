@@ -84,6 +84,23 @@
       (is (search ",null]]" raw))
       (is (not (search ",false]]" raw))))))
 
+(test a-keyword-cell-renders-as-its-canonical-name
+  "#63: a namespace bound to a ?variable reached the wire as the
+keyword's upcased name, which recall and retrieve then rejected; a
+keyword cell now renders lowercase, the spelling those tools take."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (let* ((tool (prolog:make-query-tool (list w p)))
+           (raw (llm:call-tool
+                 tool (%args "text"
+                             (concatenate
+                              'string "(is-a ?c belief-binary) "
+                              "(node-slot-value ?c object-namespace ?ns)"))))
+           (rows (json:jget (json:parse raw) "rows")))
+      (is (= 1 (length rows)))
+      (is (string= "verdict" (elt (elt rows 0) 1)))
+      (is (not (search "VERDICT" raw))))))
+
 (test the-inference-budget-is-the-operators
   (with-stores (w p)
     (dotimes (i 5) (%belief w (format nil "r~a" i) '(:v . "1")))

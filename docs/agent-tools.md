@@ -96,8 +96,10 @@ interned — minting it would be unrecoverable. `recall`'s own
 `subject-namespace` is resolved the same way, and deliberately: what
 was recorded under a namespace is the store's answer, not a property
 of the process asking, so a session recalls whatever any earlier
-session wrote there. Only an uncanonical name reads back as nothing
-recorded — an empty result, never an error (#61). A cite whose
+session wrote there. An uncanonical name on a read is the same error
+as on a write, naming the string — never an empty result a caller
+could mistake for nothing recorded, which is how a namespace copied
+uppercased off a `query` row once read (#63). A cite whose
 namespace is canonical but unknown likewise parses and resolves to
 nothing, since a fresh image must be able to trace a decision before
 it has read a claim under that namespace.
@@ -383,7 +385,10 @@ the cap decides `truncated`. **Row
 cells use an actual JSON `null`** for an unbound variable or an
 empty slot — the one place in this tool set that null appears rather
 than an omitted key, because a row is a fixed-width tuple, not an
-object with optional fields.
+object with optional fields. A keyword cell — a namespace, a standing
+— renders as its canonical lowercase name (`"decision"`, not
+`"DECISION"`), so a namespace read off a row can be handed straight
+to `recall` or `retrieve` (#63).
 
 Because the whitelist enumerates the store's own schema types, a
 query can walk `belief` and `trace` vertices with generic predicates

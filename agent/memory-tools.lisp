@@ -15,17 +15,16 @@ one predicate; optional at (RFC 3339) keeps only beliefs valid then."
      (relation :type string :optional t) (at :type string :optional t))
    (lambda (subject-namespace subject-key relation at)
      ;; The namespace is resolved, not looked up in this image: what
-     ;; was recorded under it is the store's answer (#61).  Only an
-     ;; uncanonical name is NIL here, and reads as an empty array.
-     (let* ((ns (%find-keyword subject-namespace))
-            (subject (and ns (cons ns subject-key)))
+     ;; was recorded under it is the store's answer (#61).  An
+     ;; uncanonical name is an error, as in retrieve, never an empty
+     ;; array a caller could mistake for nothing recorded (#63).
+     (let* ((subject (cons (%keyword subject-namespace) subject-key))
             (instant (and at (%parse-iso at)))
             ;; One RECALL over the scope: the memory layer merges and
             ;; computes supersession under the trust rule (S6b SS4).
-            (rows (and subject
-                       (mem:recall (scope-write-store scope) subject
-                                   :relation relation :at instant
-                                   :scope (scope-stores scope)))))
+            (rows (mem:recall (scope-write-store scope) subject
+                              :relation relation :at instant
+                              :scope (scope-stores scope))))
        ;; Seed the cache in SCOPE order, not row order: first-wins must
        ;; mean first-in-scope, whatever recall's tie-break put first
        ;; (S6b SS6, #48).

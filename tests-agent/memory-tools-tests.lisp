@@ -157,6 +157,28 @@ on a second run in one image."
       (is (find-symbol "TOTALLY-UNKNOWN-NAMESPACE-ZZZ" :keyword)
           "the read resolved the namespace against the store (#61)"))))
 
+(test recall-refuses-an-uncanonical-namespace
+  "#63: the Prolog query tool printed namespaces uppercased and recall
+read that spelling as an empty array -- a miss indistinguishable from
+nothing recorded.  Now recall applies the write path's rule: an
+uncanonical name is an error naming the string, as retrieve already
+did, and nothing is interned."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (let ((tools (agent:make-agent-tools (list w p) :producer +p+)))
+      (handler-case
+          (progn (%call tools "recall" "subject-namespace" "DECISION"
+                        "subject-key" "cl-llm")
+                 (fail "an uncanonical namespace must be refused"))
+        (llm:llm-tool-error (e)
+          (is (search "not a canonical namespace"
+                      (princ-to-string (llm:llm-error-underlying e))))))
+      (is (= 0 (length (json:jget (%call tools "recall"
+                                         "subject-namespace" "decision"
+                                         "subject-key" "cl-llm")
+                                  "records")))
+          "the canonical spelling still reads as nothing recorded"))))
+
 (test recall-of-a-malformed-timestamp-signals
   (with-stores (w p)
     (let ((tools (agent:make-agent-tools (list w p) :producer +p+)))
@@ -711,12 +733,7 @@ the write interned, so the read would miss for a second reason."
                                                    :producer +p+))
                     (r (%call tools "recall" "subject-namespace"
                               "cold-ns-61" "subject-key" "k"))
-                    (records (json:jget r "records"))
-                    ;; A non-canonical name is still no namespace: it
-                    ;; reads as an empty result, not an error (#61).
-                    (bad (%call tools "recall" "subject-namespace"
-                                "Not Canonical" "subject-key" "k")))
+                    (records (json:jget r "records")))
                (is (= 1 (length records)))
-               (is (= 0 (length (json:jget bad "records"))))
                (is (mem:cite-p (json:jget (elt records 0) "cite")))))
         (when cold (ignore-errors (gdb:close-graph cold)))))))

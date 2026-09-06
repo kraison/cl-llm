@@ -10,8 +10,12 @@ CL-LLM.JSON:TO-JSON emits \"null\" rather than \"false\" (src/json.lisp's
 header; jzon's WRITE-VALUE treats (EQL NIL) and (EQL NULL) as distinct
 atoms).  The runner's :DATA cells give NIL for an unbound variable and
 for an empty slot alike, so every NIL cell here is a JSON null, never
-false."
-  (or value 'null))
+false.  A keyword -- a namespace, a standing -- renders as its
+canonical lowercase name, the spelling the other tools take back
+(#63)."
+  (cond ((null value) 'null)
+        ((keywordp value) (string-downcase (symbol-name value)))
+        (t value)))
 
 (defun %guarded-rows (graph text limit max-inferences timeout)
   "TEXT through the engine's guarded runner against GRAPH; (values
