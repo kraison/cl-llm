@@ -224,7 +224,9 @@ and stays readable as "believed from t1 to t2".
 `capture-memory-dir` turns a directory of memory notes into one source
 node and one content belief per note; a second capture after an edit
 supersedes rather than overwrites. See
-[`docs/agent-memory.md`](docs/agent-memory.md).
+[`docs/agent-memory.md`](docs/agent-memory.md). The memory also serves
+any MCP client directly, with no cl-mcp-server or blackboard needed;
+see `docs/agent-memory.md`, "The memory as an MCP server".
 
 `conclude` records a **decision** — a belief written from cited evidence
 under a named rule, or a structurally recorded refusal — and `trace`

@@ -376,6 +376,7 @@ scripts/run-memory.sh   # logs to stdout; SIGTERM or Ctrl-C closes the store
 | `CL_LLM_MEMORY_SWANK_PORT` | `4008` (loopback only) |
 | `CL_LLM_MEMORY_PRODUCER` | `claude-code/<hostname>` |
 | `CL_LLM_MEMORY_BUFFER_POOL` | `2000` |
+| `CL_LLM_MEMORY_CLOCK` | `~/.cl-llm-memory/clock/` |
 
 The image refuses a store left dirty (`store-not-closed-cleanly-error`,
 exit 1) rather than open a torn one; the exit hook closes the graph on
@@ -405,6 +406,115 @@ in `~/.config/cl-mcp-server/config.sexp`, `remote-arm memory`, then
 `(mem:conclude *graph* … :producer *producer* …)` as in "Decisions and
 their trace", and `remote-disarm` when done. Every form, refusals
 included, is in `remote-ledger`.
+
+## The memory as an MCP server
+
+The agent tools reach any MCP client from this repo, without
+cl-mcp-server or the blackboard: `cl-llm/agent/mcp` registers each
+tool from `make-agent-tools` on a `cl-mcp` server, the schema converted
+to `cl-mcp`'s form, the decoded arguments converted back, a refusal
+returned as text with `isError`. The scope -- stores in trust order,
+the write store, the producer, the caps -- is configuration; no tool
+takes a store, so the model names subjects and never stores, as
+`docs/agent-tools.md` promises.
+
+### Solo: one process per session
+
+```
+claude mcp add --scope user memory -- /path/to/cl-llm/scripts/run-memory-mcp.sh
+```
+
+The client launches `scripts/memory-mcp.lisp` through the wrapper. It
+reads the memory image's variables (the table above, plus
+`CL_LLM_MEMORY_CLOCK`), opens the clock and then the store on it, and
+serves stdin/stdout; every other byte goes to stderr. A multi-store
+scope is `CL_LLM_MEMORY_SCOPE=private=/dir,working=/dir` in trust
+order with `CL_LLM_MEMORY_WRITE` naming the write store (default the
+last); `CL_LLM_MEMORY_QUERY_TOOL=1` adds the guarded Prolog tool. The
+child builds from the trees in `CL_LLM_ASDF_REGISTRY` (default: the
+checkout the script lives in). A store another process -- the memory
+image, or another session's solo server -- already holds makes it exit
+1 before any handshake: graph-db stores have one holder, and there is
+no mode that lets two processes open one. Which refusal it is depends
+on the clock: in the default configuration both share
+`~/.cl-llm-memory/clock/`, the clock opens first, so the message is
+"Another image holds the clock at that location"; the store's own
+"Another image may hold the store" appears when the two point at
+different clock directories. The test
+`a-second-solo-server-on-a-held-store-refuses` asserts both.
+
+### In the image: a listener, many sessions
+
+The memory image listens on `CL_LLM_MEMORY_MCP_PORT` at
+`CL_LLM_MEMORY_MCP_BIND`. Each connection gets its own server and its
+own producer; a listener that will not start -- a taken port, a bad
+bind, a malformed principals file -- is reported on stderr and skipped,
+the banner reads `mcp off`, and the image keeps its store and its
+SWANK.
+
+| variable | default |
+|---|---|
+| `CL_LLM_MEMORY_MCP_PORT` | `4009`; empty turns the listener off |
+| `CL_LLM_MEMORY_MCP_BIND` | `127.0.0.1` |
+| `CL_LLM_MEMORY_PRINCIPALS` | `~/.cl-llm-memory/principals.sexp` |
+| `CL_LLM_MEMORY_IDENTITY` | `secret` (or `tailscale`) |
+| `CL_LLM_MEMORY_QUERY_TOOL` | empty; `1` adds the guarded Prolog tool |
+
+A client connects through the relay:
+
+```
+claude mcp add --scope user memory -- sbcl --script \
+  /path/to/cl-llm/scripts/memory-mcp-client.lisp --port 4009 \
+  --principal claude-code/laptop
+```
+
+or through `socat STDIO TCP:127.0.0.1:4009` without a principal.
+
+**Identity.** With nothing configured, a loopback connection writes as
+the image's producer. Named principals are a file,
+`CL_LLM_MEMORY_PRINCIPALS` (default `~/.cl-llm-memory/principals.sexp`):
+
+```lisp
+(("claude-code/laptop" . "a-long-random-secret")
+ ("hermes/laptop"      . "another"))
+```
+
+The relay sends one hello line before any JSON-RPC, naming its
+principal and the secret it reads from `~/.cl-llm-memory/client.sexp`
+(same shape); a match sets the connection's producer, a mismatch closes
+the connection before the handshake, and a connection from off
+loopback with no hello is refused. Binding to any non-loopback address
+with no principals file is refused at startup. `CL_LLM_MEMORY_IDENTITY=
+tailscale` swaps the provider for the peer's tailnet node
+(`claude-code/<node>`, refused when that is not a canonical producer),
+for hosts on one tailnet; it is off by default.
+
+Loopback is not an authentication boundary on a multi-user host: any
+local process can reach the port, and SWANK on 4008 already grants such
+a process strictly more than the tool surface does. Telling one local
+caller from another is what the principals file is for.
+
+**Arguments** are the tool surface's, unchanged (`docs/agent-tools.md`),
+with one MCP-level rule: a JSON `null` for an optional argument such as
+`standing` is refused, not defaulted. The key is present and `null`
+decodes as NIL, so the tool sees NIL rather than its declared default
+and answers with the refusal as text with `isError`; omit the key to
+get the default.
+
+### Shutdown
+
+Both modes close the store on EOF, on SIGTERM (SBCL runs its exit
+hooks on SIGTERM), and on normal exit, in one idempotent `stop`: the
+listener first, then each store with `*graph*` bound and without the
+snapshot `close-graph` takes by default -- that snapshot is unbounded
+work before the `.dirty` marker clears, and a backup is a separate
+operation -- then the clock. Claude Code sends a spawned stdio server
+SIGTERM and then SIGKILL after an undocumented grace period, sends no
+MCP-level goodbye, and never respawns a crashed stdio server; whether
+concurrent sessions share a user-scoped stdio server is undocumented,
+and the solo mode assumes they do not, which is why a held store is
+refused rather than shared. SIGKILL leaves at worst a `.dirty` marker
+for the write-ahead log to recover on the next open.
 
 ## What this is not
 
