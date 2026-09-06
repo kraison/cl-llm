@@ -32,12 +32,16 @@
           (error "no secret for ~a in ~a" principal path)))))
 
 (defun %pump (from to done)
+  "Relay lines FROM to TO in a thread, then call DONE.  IGNORE-ERRORS:
+the other pump's DONE closes the socket, and a write or read on it
+racing that close must end this thread quietly, not exit 1."
   (bt:make-thread
    (lambda ()
      (unwind-protect
-          (loop for line = (read-line from nil nil)
-                while line
-                do (write-line line to) (force-output to))
+          (ignore-errors
+           (loop for line = (read-line from nil nil)
+                 while line
+                 do (write-line line to) (force-output to)))
        (funcall done)))))
 
 (let* ((host (%option "--host" "127.0.0.1"))

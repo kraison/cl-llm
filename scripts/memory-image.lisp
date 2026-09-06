@@ -129,6 +129,14 @@ engine-api-facts.md E5), so a stop from the shell or systemd leaves no
     (ignore-errors (gdb:close-system-clock *clock*))
     (setf *clock* nil)))
 
+;; Before START, not after: a failure inside START -- a listener port
+;; already in use, a non-loopback bind with no principals -- escapes
+;; with the store already open, and the unhandled-condition quit under
+;; --disable-debugger runs *EXIT-HOOKS*, so the hook clears the .dirty
+;; marker.  The two handled refusals below open nothing and keep
+;; :abort t, which skips the hooks.
+(push #'stop sb-ext:*exit-hooks*)
+
 (handler-case (start)
   (gdb:store-not-closed-cleanly-error (c)
     (format *error-output* "~&memory image: ~A~%Another image may hold ~
@@ -141,5 +149,4 @@ clock at that location.  Stop it, or point CL_LLM_MEMORY_CLOCK ~
 elsewhere.~%" c)
     (finish-output *error-output*)
     (sb-ext:exit :code 1 :abort t)))
-(push #'stop sb-ext:*exit-hooks*)
 (loop (sleep 86400))

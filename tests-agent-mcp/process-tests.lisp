@@ -152,12 +152,14 @@ initialize, and its own clean exit afterwards."
                                ("clientInfo" . (("name" . "t")
                                                 ("version" . "0")))))
                  "control: the first server answers")
+             ;; 60 s: a refused child still loads cl-llm/agent/mcp
+             ;; first, and the FASL cache may be cold.
              (let ((second (%launch-solo root)))
-               (is (eql 1 (%wait second)))
+               (is (eql 1 (%wait second :grace 60)))
                (is (search "Another image holds the clock"
                            (%stderr second))))
              (let ((third (%launch-solo root :clock (%sub root "clock2/"))))
-               (is (eql 1 (%wait third)))
+               (is (eql 1 (%wait third :grace 60)))
                (is (search "Another image may hold the store"
                            (%stderr third)))))
         (close (sb-ext:process-input first))

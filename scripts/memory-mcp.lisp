@@ -83,12 +83,20 @@ exit hook, so SIGTERM leaves no .dirty marker (SS6)."
        :query-tool (equal (mcp:env "CL_LLM_MEMORY_QUERY_TOOL") "1")))))
 
 (defun %die (control &rest args)
+  "Report on stderr and exit 1.  STOP first: the exit is :abort t, which
+skips the hooks, and the hook is not pushed yet -- a failure after
+OPEN-SCOPE returned would otherwise leave the .dirty marker behind.  A
+no-op on the two refusal paths, where nothing opened."
+  (stop)
   (apply #'format *error-output* control args)
   (finish-output *error-output*)
   (sb-ext:exit :code 1 :abort t))
 
 (let ((server
-        (handler-case (start)
+        ;; stdout carries JSON-RPC only, so the open's logging goes to
+        ;; stderr by binding, not by trusting the engine's stream.
+        (handler-case (let ((*standard-output* *error-output*))
+                        (start))
           (gdb:store-not-closed-cleanly-error (c)
             (%die "~&memory mcp: ~A~%Another image may hold the store.  ~
                    If none does, delete its .dirty marker and start ~
@@ -98,7 +106,8 @@ exit hook, so SIGTERM leaves no .dirty marker (SS6)."
                    that location.~%" c))
           (error (c)
             (%die "~&memory mcp: ~A~%" c)))))
-  ;; Only once the scope is open: a refusal above exits with no hook.
+  ;; Only once the scope is open: every failure above leaves through
+  ;; %DIE, which stops the scope itself before exiting with no hook.
   (push #'stop sb-ext:*exit-hooks*)
   (cl-mcp:run-server server :input *standard-input*
                             :output *standard-output*)
