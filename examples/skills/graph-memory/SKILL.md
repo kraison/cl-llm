@@ -1,7 +1,7 @@
 ---
 name: graph-memory
-description: Use when about to answer that something does not exist, did not happen, or is a false premise; when the user names a version, incident, project or person you cannot account for; when asked why something broke or what was concluded; or when a durable fact about a person, project, service or decision is established or corrected.
-version: 1.2.0
+description: Use when asked why something broke, what was decided, or when a name, version or incident is unfamiliar; before answering that something does not exist, did not happen or is a false premise; and when a durable fact about a person, project, service or decision is established or corrected.
+version: 1.4.0
 license: MIT
 metadata:
   hermes:
@@ -19,6 +19,50 @@ earlier session concluded, when it held, and what it rested on.
 producer, a standing, a validity window and, when it was inferred, the
 cites it rests on. Storing a bare assertion that could have carried
 evidence wastes the one thing this store offers over a text file.
+
+## Read at scan time, not mid-answer
+
+**Query the store while forming the answer, not after drafting one.**
+The triggers below are properties of the *incoming message* — a
+"why did X break" question, an unfamiliar name — and are all
+recognisable before any investigation starts. Read then.
+
+A trigger phrased as an internal state ("when about to answer that
+something does not exist") fires too late to help: that state is only
+reached after investigating and reasoning to a conclusion, by which
+point an answer is already built and the store's role degrades to
+contradicting it. Worse, the investigation feels thorough — commands
+ran, files were read, evidence was cited — and thoroughness in the
+wrong source reads as sufficiency. Match on the question, not on the
+conclusion.
+
+In a repo, a "why did X break" question also pulls hard toward
+`git log`, `grep` and the logs, because that is what a coding agent
+reaches for. Those answer *what is true now*. Run them, but run the
+store's read in the **same batch** — not as a fallback when they come
+up empty, and not only when the user pushes back.
+
+## A question's shape decides whether you reach for the store
+
+**The wording of the question, not its subject, is what pulls an agent
+toward the filesystem or the store.** A question naming a *date*
+("why did X break on 2026-05-22") invites a calendar/git/log search
+that can plausibly terminate in "nothing from that period exists" —
+a confident wrong answer built entirely from local evidence. The same
+question naming an *opaque identifier* ("why did incident drift-b8dc70
+fail") matches nothing on disk, so querying the store is the only
+sensible move.
+
+Measured across five models on identical stored facts: date-shaped
+phrasing produced 1/4 retrieval, identifier-shaped produced 4/4. The
+models and the skill were unchanged; only the phrasing moved.
+
+The lesson is not about phrasing your own queries — it is that a
+date-shaped or otherwise "searchable-looking" question is exactly where
+this skill's triggers are most likely to be missed, and where a local
+investigation feels most sufficient. Treat a question that *invites*
+grep as a reason to read the store in the same batch, not a reason to
+skip it.
 
 ## Before you answer "no"
 
@@ -77,9 +121,9 @@ stored. A store full of noise is the token-heavy file you were avoiding.
 
 | Situation | Tool |
 |---|---|
+| Unfamiliar name, unsure of the namespace or key | `list-taxonomy` first — it prints what the store names — then `recall` or `retrieve` |
 | Known subject: namespace + key | `recall` |
-| Fishing; subject uncertain; want ranked evidence | `retrieve` |
-| Unfamiliar name, unsure of the namespace | `query` or `retrieve` — cast wide before concluding nothing is there |
+| Fishing; subject uncertain; want ranked evidence | `retrieve` with the question as the query — it finds endpoints by key token |
 | Have a decision id; want its reasoning and evidence | `trace` |
 | Have a cite; want what rests on it | `decisions-citing` |
 | Want the window/region evidence implies, without fetching | `plan-bounds` |
@@ -89,8 +133,21 @@ stored. A store full of noise is the token-heavy file you were avoiding.
 fuzzy and ranked, and its items carry the cites you pass to `conclude`.
 A `recall` miss is **not** proof of absence: it is exact on
 (namespace, key), so a subject filed under a namespace you guessed
-wrong reads as empty. Widen with `retrieve` or `query` before
-reporting that nothing is recorded.
+wrong reads as empty. Call `list-taxonomy` to see the namespaces and
+keys the store actually holds, or `retrieve` with the question as the
+query, before reporting that nothing is recorded.
+
+`retrieve` finds its own endpoints: the query is split into tokens and
+matched against every key the store holds, so "why did the ledger
+freeze in May" reaches `incident:ledger-freeze-2026-05-22` with no
+endpoints given. Its result lists `endpoints`, what was actually
+consulted. A query that names nothing the store holds is an **error**
+pointing at `list-taxonomy`, never an empty bundle — an empty
+`evidence` array means "looked, found nothing".
+
+**Namespaces are lowercase.** Every tool prints them that way,
+`query` included, and an uncanonical spelling (`DECISION`) is an
+error naming the string, not a silent miss.
 
 ## Standing: say how you know
 
@@ -151,6 +208,20 @@ source told you, or `inferred` with the cites you reasoned from.
 - **Superseded** — a newer belief on the same **(producer, subject,
   relation)** closes the old one automatically. Just `conclude` the new
   fact; do not retract first.
+- **A generic relation silently eats parallel facts.** Supersession
+  keys on (producer, subject, relation) and does *not* look at the
+  object. Writing three different rules about one subject under one
+  broad relation — `style-rule`, `governed-by`, `has-property` — leaves
+  only the last one `current`; the earlier two are closed within
+  milliseconds, each `superseded-by` an unrelated fact. Nothing is
+  refused and every write returns `concluded`, so a bulk load looks
+  clean while most of it is already historical.
+
+  When a subject has several coexisting facts of the same kind, give
+  each its own specific relation (`indentation-rule`, `line-length-rule`,
+  `comment-style-rule`), not one umbrella. Reserve a broad relation for
+  a genuinely single-valued property, where a new value *should* replace
+  the old.
 - **Supersession is producer-scoped.** Concluding the same subject and
   relation under a *different* producer does not supersede: both
   beliefs stay `current`, each attributed to its own client. That is
@@ -165,20 +236,43 @@ source told you, or `inferred` with the cites you reasoned from.
   traceable. Retraction is not deletion, and only works on a belief in
   the writable store.
 
+## Verify a bulk load, do not trust the receipts
+
+**`outcome: "concluded"` means the write committed, not that the belief
+is current.** After loading more than a handful of facts, `recall` a
+subject you wrote several times and count how many come back
+`current: true`. Silent supersession (above) is invisible in the write
+receipts and shows up only on read.
+
+`retrieve` is the sharper check: it returns only what a later session
+would actually surface. A subject you wrote three facts about that
+comes back with one is the signature of a relation collision.
+
+`list-taxonomy` after a load is the cheapest check of all: the
+namespaces, relations and key counts it prints are what actually
+landed.
+
 ## Common mistakes
 
 | Mistake | Consequence |
 |---|---|
+| Reading the store only after drafting an answer from logs | The conclusion is already built; the store gets used to contradict it rather than to form it. Read at scan time |
+| Waiting for the user to ask "did you check the graph?" | The prompt should never be needed; the question itself was the trigger |
 | Answering "that doesn't exist" from local inspection alone | The filesystem records current state, not past events. The store may hold exactly what you just denied |
 | Treating an unfamiliar name as a false premise | Unfamiliarity is the reason to search, not grounds to dismiss |
-| Treating a `recall` miss as proof of absence | `recall` is exact on (namespace, key); widen with `retrieve`/`query` first |
+| Treating a `recall` miss as proof of absence | `recall` is exact on (namespace, key); `list-taxonomy` shows what is there, `retrieve` finds it from the question |
 | Passing JSON `null` for an optional argument | Refused, not defaulted — **omit the key** instead |
 | Omitting `standing` on `conclude-absence` | Missing-argument error; it is required there |
 | Treating empty `records` as an absence | Empty means *nothing recorded*; an absence is a record with a standing |
 | Editing or reconstructing a cite | Resolves nowhere; the write errors |
-| Inventing a new namespace per session | Recall silently misses what earlier sessions wrote |
+| Several coexisting facts under one broad relation | Supersession ignores the object; only the last stays `current`. Use one specific relation per fact |
+| Treating `concluded` receipts as a verified load | Receipts confirm the commit, not currency. `recall` and count `current: true` |
+| Putting a producer name in an object slot | `producer` is validated against `canonical-producer-p` and the write is refused; record it as `principal`/`client` instead |
+| Inventing a new namespace per session | Recall silently misses what earlier sessions wrote; `list-taxonomy` shows the ones in use |
+| Assuming the MCP listener serves the production store | One host can run several memory images on different ports over different store dirs. Confirm `CL_LLM_MEMORY_STORE` in the listener's environ before trusting a load or an absence |
 | Writing `inferred` with no `evidence` | Loses the chain this store exists for |
 | Writing `observed` for a causal claim with no evidence | Overclaims how you know; use `asserted` or `inferred` |
+| Confusing Hermes's `memory` tool with this store | `memory` edits MEMORY.md and has NO read action — `action='recall'` errors with "Use: add, replace, remove". Reaching for it to *read* invites an accidental `add`, which then reads back as if it were a recorded fact |
 | Retracting to "fix" an outdated fact | Use supersession — `conclude` the new value |
 | Re-concluding to fix another client's belief | Supersession is producer-scoped; both stay `current`. Retract the original cite first |
 
@@ -195,8 +289,8 @@ source told you, or `inferred` with the cites you reasoned from.
 ## Setup
 
 Tools appear as `recall`, `trace`, `decisions-citing`, `conclude`,
-`conclude-absence`, `retract`, `retrieve`, `plan-bounds`, and `query`
-(when enabled). Two deployments:
+`conclude-absence`, `retract`, `list-taxonomy`, `retrieve`,
+`plan-bounds`, and `query` (when enabled). Two deployments:
 
 - **Solo** — the client spawns `scripts/run-memory-mcp.sh`; one process
   per session. A graph-db store has exactly one holder, so a second
