@@ -185,7 +185,9 @@ a decision recorded before the engine stamped one. `axis` says which
 axis the cites were resolved on: `"epoch"` — every cite resolved at
 the decision's own commit epoch, the case under a clocked scope — or
 `"instant"`, its recorded wall-clock instant, for a decision with no
-epoch or on a store with no system clock. `confidence` is
+epoch or on a store with no system clock. Under `"instant"` the
+`epoch` shown is the store's own counter and is not comparable with
+another store's. `confidence` is
 present when the decision that made the claim gave one (omitted
 otherwise). Each evidence cite resolves in the store its evidence
 claim names, when that store is in scope, and the item's `store` is
@@ -194,7 +196,8 @@ by two stores still reports the half this decision cited. A cite
 naming a store the tool set was not built with reports
 `state: "absent"` and carries **no `store` key at all** — never
 falling back to the decision's own store, which would falsely suggest
-it was found. An evidence item's `changed-since` is `superseded` when a
+it was found. An evidence item's, or the conclusion's, `changed-since`
+is `superseded` when a
 belief in another store in scope has superseded the cited one under
 the trust rule (`docs/agent-memory.md`); it then carries
 `superseded-by`, an object `{"cite", "store"}` naming the successor
