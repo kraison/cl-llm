@@ -1,8 +1,8 @@
 # CI
 
 `.github/workflows/test.yml` runs the offline suites (core, rag,
-claims, memory, agent, agent/prolog) on every push to `main` and on
-pull requests, on the ma-dev self-hosted runner (per-repo runner,
+claims, memory, agent, agent/prolog) once per push to `main` and once
+per pull request, on the ma-dev self-hosted runner (per-repo runner,
 `gh-runner-cl-llm.service` under the sitrep user).  The claims suite
 needs graph-db/spacetime, refreshed each run to vivace-graph
 EXPERIMENT head (plus cl-temporal-extent master) in
@@ -22,6 +22,15 @@ A green run is only evidence for the suites whose summary lines
 system with no `:in-order-to` test-op is a silent no-op, and the
 claims step was exactly that from 2026-08-31 to 2026-09-01 (#26).
 Read the log once when a step is added, not just the verdict.
+
+## The hosted workflow is a manual fallback
+
+`.github/workflows/ci.yml` (GitHub-hosted, core suite only, fresh
+SBCL and Quicklisp each run) triggered on the same pushes and pull
+requests until 2026-09-06, so the core suite ran twice per event.  It
+now runs only on `workflow_dispatch`: use it from the Actions tab when
+the self-hosted runner is down and a verdict is needed on the core
+suite alone.
 
 ## The live suites are not run here
 
