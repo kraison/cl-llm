@@ -73,6 +73,13 @@ child at the developer's real store."
     (sb-ext:process-wait process)
     (sb-ext:process-exit-code process)))
 
+(defun %reap (process)
+  "SIGTERM PROCESS and wait, when it is still alive: a scratch store is
+never deleted under a live holder."
+  (when (sb-ext:process-alive-p process)
+    (sb-ext:process-kill process sb-unix:sigterm)
+    (%wait process)))
+
 (defun %stderr (process)
   (let ((s (sb-ext:process-error process)))
     (with-output-to-string (o)
@@ -155,16 +162,23 @@ initialize, and its own clean exit afterwards."
              ;; 60 s: a refused child still loads cl-llm/agent/mcp
              ;; first, and the FASL cache may be cold.
              (let ((second (%launch-solo root)))
-               (is (eql 1 (%wait second :grace 60)))
-               (is (search "Another image holds the clock"
-                           (%stderr second))))
+               (unwind-protect
+                    (progn
+                      (is (eql 1 (%wait second :grace 60)))
+                      (is (search "Another image holds the clock"
+                                  (%stderr second))))
+                 (%reap second)))
              (let ((third (%launch-solo root :clock (%sub root "clock2/"))))
-               (is (eql 1 (%wait third :grace 60)))
-               (is (search "Another image may hold the store"
-                           (%stderr third)))))
+               (unwind-protect
+                    (progn
+                      (is (eql 1 (%wait third :grace 60)))
+                      (is (search "Another image may hold the store"
+                                  (%stderr third))))
+                 (%reap third))))
         (close (sb-ext:process-input first))
         (is (eql 0 (%wait first)))
-        (is (not (%dirty-p (%sub root "store/"))))))))
+        (is (not (%dirty-p (%sub root "store/"))))
+        (%reap first)))))
 
 (test sigterm-leaves-the-store-clean
   "SS6 (recon E5): SIGTERM to the solo server mid-session runs the exit
@@ -172,15 +186,19 @@ hook; the store has no .dirty marker and reopens.  The control is the
 marker's presence while the server runs."
   (with-scratch-root (root)
     (let ((process (%launch-solo root)))
-      (%child-rpc process "initialize"
-                  '(("protocolVersion" . "2025-06-18")
-                    ("clientInfo" . (("name" . "t") ("version" . "0")))))
-      (is (%dirty-p (%sub root "store/")) "control: dirty while held")
-      (sb-ext:process-kill process sb-unix:sigterm)
-      (is (eql 0 (%wait process)))
-      (is (not (%dirty-p (%sub root "store/"))))
-      (let* ((gdb:*system-directory* (%sub root "sys/"))
-             (g (gdb:open-graph :cl-llm-memory (%sub root "store/")
-                                :buffer-pool-size 1000)))
-        (is (gdb::graph-open-p g))
-        (let ((gdb:*graph* g)) (gdb:close-graph g :snapshot-p nil))))))
+      (unwind-protect
+           (progn
+             (%child-rpc process "initialize"
+                         '(("protocolVersion" . "2025-06-18")
+                           ("clientInfo" . (("name" . "t")
+                                            ("version" . "0")))))
+             (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+             (sb-ext:process-kill process sb-unix:sigterm)
+             (is (eql 0 (%wait process)))
+             (is (not (%dirty-p (%sub root "store/"))))
+             (let* ((gdb:*system-directory* (%sub root "sys/"))
+                    (g (gdb:open-graph :cl-llm-memory (%sub root "store/")
+                                       :buffer-pool-size 1000)))
+               (is (gdb::graph-open-p g))
+               (let ((gdb:*graph* g)) (gdb:close-graph g :snapshot-p nil))))
+        (%reap process)))))

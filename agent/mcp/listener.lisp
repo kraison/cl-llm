@@ -22,11 +22,18 @@ non-loopback BIND without principals (SS5)."
                                   :provider provider
                                   :principals-path principals-path
                                   :default-producer default-producer
-                                  :query-tool query-tool)))
-    (setf (listener-thread listener)
-          (bt:make-thread (lambda () (%accept-loop listener))
-                          :name "cl-llm memory mcp listener"))
-    listener))
+                                  :query-tool query-tool))
+         (ok nil))
+    ;; BT:MAKE-THREAD signals on thread exhaustion; the listening socket
+    ;; would leak.  Success flag, as in OPEN-SCOPE.
+    (unwind-protect
+         (progn
+           (setf (listener-thread listener)
+                 (bt:make-thread (lambda () (%accept-loop listener))
+                                 :name "cl-llm memory mcp listener"))
+           (setf ok t)
+           listener)
+      (unless ok (ignore-errors (usocket:socket-close socket))))))
 
 (defun stop-listener (listener)
   "Set STOPPING, join the accept thread, then close the socket: a parked
@@ -43,17 +50,29 @@ connections are not drained (SS9).  Idempotent; never signals."
   listener)
 
 (defun %accept-loop (listener)
+  "Accept until STOPPING.  The body is guarded: the image runs with the
+debugger disabled, so a condition escaping here -- fd exhaustion,
+BT:MAKE-THREAD out of threads -- would end the whole image, not the
+loop.  A ready socket that accepts NIL sleeps, so an exhausted fd table
+does not spin the loop hot.  Logs the condition TYPE only."
   (loop until (listener-stopping listener)
-        do (when (usocket:wait-for-input (listener-socket listener)
-                                         :timeout 0.5 :ready-only t)
-             (let ((socket (ignore-errors
-                            (usocket:socket-accept
-                             (listener-socket listener)
-                             :element-type 'character))))
-               (when socket
-                 (bt:make-thread
-                  (lambda () (%serve-guarded listener socket))
-                  :name "cl-llm memory mcp connection"))))))
+        do (handler-case
+               (when (usocket:wait-for-input (listener-socket listener)
+                                             :timeout 0.5 :ready-only t)
+                 (let ((socket (ignore-errors
+                                (usocket:socket-accept
+                                 (listener-socket listener)
+                                 :element-type 'character))))
+                   (if socket
+                       (bt:make-thread
+                        (lambda () (%serve-guarded listener socket))
+                        :name "cl-llm memory mcp connection")
+                       (sleep 0.1))))
+             (error (c)
+               (ignore-errors      ; a broken stderr must not escape it
+                (format *error-output* "~&memory mcp: accept: ~a~%"
+                        (type-of c))
+                (finish-output *error-output*))))))
 
 (defun %serve-guarded (listener socket)
   "Run %SERVE-CONNECTION; the image runs with the debugger disabled, so

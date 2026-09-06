@@ -50,6 +50,8 @@ here -- including an unmatched WRITE, discovered only after every
 store is already open -- closes whatever opened via CLOSE-SCOPE before
 re-signalling, so a partial open never leaks a store into the image's
 global id registry (GDB:STORE-ID-COLLISION-ERROR)."
+  ;; Global and not restored: in CI's single image the memory and agent
+  ;; suites run before this one, and nothing after reads the old value.
   (setf gdb:*system-directory* (%dir system-dir))
   (declare-store-schemas (mapcar #'car spec))
   (let (clock stores ok)

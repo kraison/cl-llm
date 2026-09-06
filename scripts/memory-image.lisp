@@ -58,9 +58,11 @@ on disk: a store reopened without it silently resumes its own counter
 
 (defun start ()
   "Open the store (make it when absent), bind it as the current graph,
-start the MCP listener unless CL_LLM_MEMORY_MCP_PORT is empty, start
-SWANK, return the graph.  Lets GDB:STORE-NOT-CLOSED-CLEANLY-ERROR
-through rather than open a store another image left dirty."
+start SWANK, then the MCP listener unless CL_LLM_MEMORY_MCP_PORT is
+empty, return the graph.  A listener that will not start is reported
+and skipped; the store's own refusals are not: it lets
+GDB:STORE-NOT-CLOSED-CLEANLY-ERROR through rather than open a store
+another image left dirty."
   (let* ((store (%dir (%env "CL_LLM_MEMORY_STORE"
                             (%home ".cl-llm-memory/working/"))))
          (system (%dir (%env "CL_LLM_MEMORY_SYSTEM"
@@ -86,21 +88,34 @@ through rather than open a store another image left dirty."
     (setf gdb:*graph* *graph*)
     (let ((mcp-port (%env "CL_LLM_MEMORY_MCP_PORT" "4009"))
           (mcp-bind (%env "CL_LLM_MEMORY_MCP_BIND" "127.0.0.1")))
-      (when (plusp (length mcp-port))
-        (setf *listener*
-              (mcp:start-listener
-               :bind mcp-bind
-               :port (parse-integer mcp-port)
-               :stores (list *graph*) :write-store *graph*
-               :provider (intern (string-upcase
-                                  (%env "CL_LLM_MEMORY_IDENTITY" "secret"))
-                                 :keyword)
-               :principals-path
-               (%env "CL_LLM_MEMORY_PRINCIPALS"
-                     (%home ".cl-llm-memory/principals.sexp"))
-               :default-producer *producer*
-               :query-tool (equal (%env "CL_LLM_MEMORY_QUERY_TOOL") "1"))))
       (swank:create-server :port port :dont-close t :interface "127.0.0.1")
+      ;; SWANK first, and the listener guarded: a taken port, a bad
+      ;; bind, an unparsable port or a malformed principals file must
+      ;; cost the image its listener, not its REPL (the banner then
+      ;; reads "mcp off").
+      (when (plusp (length mcp-port))
+        (handler-case
+            (setf *listener*
+                  (mcp:start-listener
+                   :bind mcp-bind
+                   :port (parse-integer mcp-port)
+                   :stores (list *graph*) :write-store *graph*
+                   :provider (intern
+                              (string-upcase
+                               (%env "CL_LLM_MEMORY_IDENTITY" "secret"))
+                              :keyword)
+                   :principals-path
+                   (%env "CL_LLM_MEMORY_PRINCIPALS"
+                         (%home ".cl-llm-memory/principals.sexp"))
+                   :default-producer *producer*
+                   :query-tool (equal (%env "CL_LLM_MEMORY_QUERY_TOOL")
+                                      "1")))
+          (error (c)
+            (ignore-errors
+             (format *error-output*
+                     "~&memory image: mcp listener disabled: ~a~%"
+                     (type-of c)))
+            (setf *listener* nil))))
       (format t "~&memory image: ~(~S~) at ~A as ~A; clock ~A; ~
 swank 127.0.0.1:~D; ~A~%"
               name store *producer* clock-dir port
@@ -129,12 +144,12 @@ engine-api-facts.md E5), so a stop from the shell or systemd leaves no
     (ignore-errors (gdb:close-system-clock *clock*))
     (setf *clock* nil)))
 
-;; Before START, not after: a failure inside START -- a listener port
-;; already in use, a non-loopback bind with no principals -- escapes
+;; Before START, not after: an unhandled failure inside START escapes
 ;; with the store already open, and the unhandled-condition quit under
 ;; --disable-debugger runs *EXIT-HOOKS*, so the hook clears the .dirty
 ;; marker.  The two handled refusals below open nothing and keep
-;; :abort t, which skips the hooks.
+;; :abort t, which skips the hooks.  The listener's own failures never
+;; reach here: START reports and skips it.
 (push #'stop sb-ext:*exit-hooks*)
 
 (handler-case (start)

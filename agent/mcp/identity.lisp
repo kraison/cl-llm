@@ -4,14 +4,21 @@
 
 (defun read-principals (path)
   "((producer . secret) ...) from PATH, each producer canonical; NIL
-when PATH does not exist; signals on a malformed entry."
+when PATH does not exist.  Signals on a malformed entry, naming it by
+its producer or its 1-based position -- never the pair or the cdr,
+either of which carries a secret."
   (when (probe-file path)
     (let ((entries (with-open-file (s path)
                      (let ((*read-eval* nil)) (read s nil nil)))))
-      (dolist (e entries entries)
-        (unless (and (consp e) (stringp (car e)) (stringp (cdr e))
-                     (st:canonical-producer-p (car e)))
-          (error "malformed principals entry ~s" e))))))
+      (loop for e in entries
+            for i from 1
+            unless (and (consp e) (stringp (car e)) (stringp (cdr e))
+                        (st:canonical-producer-p (car e)))
+              do (error "malformed principals entry ~a"
+                        (if (and (consp e) (stringp (car e)))
+                            (car e)
+                            (format nil "#~d" i))))
+      entries)))
 
 (defun %address-string (address)
   (if (stringp address)
@@ -58,7 +65,9 @@ listener with the default identity cannot exist."
               (cdr (assoc "secret" hello :test #'string=))))))
 
 (defun %tailscale-node (peer)
-  ;; claude-code/<node> from `tailscale whois`; NIL when it cannot say.
+  ;; claude-code/<node> from `tailscale whois`; NIL when it cannot say,
+  ;; or when the node name does not make a canonical producer (a
+  ;; non-canonical one is refused here, not at the first write).
   (ignore-errors
    (let* ((json (uiop:run-program
                  (list "tailscale" "whois" "--json" (%address-string peer))
@@ -66,8 +75,9 @@ listener with the default identity cannot exist."
           (node (cdr (assoc "Node" (yason:parse json :object-as :alist)
                             :test #'string=)))
           (name (cdr (assoc "ComputedName" node :test #'string=))))
-     (and (stringp name) (plusp (length name))
-          (format nil "claude-code/~(~a~)" name)))))
+     (when (and (stringp name) (plusp (length name)))
+       (let ((producer (format nil "claude-code/~(~a~)" name)))
+         (and (st:canonical-producer-p producer) producer))))))
 
 (defun resolve-identity (provider line peer default principals)
   "The producer for a connection, or :REFUSED (SS5).  :SECRET -- a hello

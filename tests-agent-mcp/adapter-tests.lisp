@@ -5,8 +5,8 @@
 (in-suite :cl-llm-agent-mcp)
 
 (defun %registry (server)
-  ;; The registry slot is internal to cl-mcp; the tests read it.
-  (cl-mcp::mcp-server-tools server))
+  ;; The server's tool registry; MCP-SERVER-TOOLS is exported.
+  (cl-mcp:mcp-server-tools server))
 
 (defun %text (content)
   "The text of the first content block."
