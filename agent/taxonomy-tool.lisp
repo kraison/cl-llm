@@ -10,7 +10,7 @@ store name) alone -- under the scope snapshot."
   (let ((stores (if store
                     (list (find-store scope store))
                     (scope-stores scope))))
-    (mem:with-scope-snapshots ((scope-stores scope))
+    (mem:with-scope-snapshots (stores)
       (mapcar (lambda (g) (cons g (mem:vocabulary g))) stores))))
 
 (defun %namespace-total (entry)
