@@ -31,6 +31,8 @@ every distinct (namespace-keyword . key) in either role."
   endpoints)
 
 (defun %note-endpoint (v namespace key role seen)
+  "Count NAMESPACE/KEY under ROLE (:SUBJECT or :OBJECT) in V and record
+the endpoint once; SEEN is the dedup table."
   (let* ((name (string-downcase (symbol-name namespace)))
          (entry (or (gethash name (vocabulary-namespaces v))
                     (setf (gethash name (vocabulary-namespaces v))

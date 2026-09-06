@@ -106,12 +106,13 @@ it has read a claim under that namespace.
 
 ## The tools
 
-Every JSON key below is hyphenated, matching the parameter names.
-**A field whose value is absent is omitted from the object entirely
-— never rendered as JSON `null`** — with two exceptions: `truncated`
-and `current`, which are always present booleans. The `query` tool's
-row cells are the one place an actual JSON `null` appears (for an
-unbound Prolog variable or an empty slot).
+Every JSON key below is hyphenated, matching the parameter names. **A
+field whose value is absent is omitted from the object entirely —
+never rendered as JSON `null`** — with three exceptions: `truncated`
+and `current`, always-present booleans, and `retrieve`/`plan-bounds`'
+`endpoints`, an always-present array. The `query` tool's row cells are
+the one place an actual JSON `null` appears (for an unbound Prolog
+variable or an empty slot).
 
 ### `recall`
 
@@ -313,7 +314,8 @@ Without `namespace`, what every store in scope names, in scope order:
 
 Namespaces sort by subject plus object claims descending, then name;
 relations by claims descending, then name. `sample` is the first keys
-alphabetically, at most `max-rows`; `keys` is the full distinct count.
+alphabetically, at most `limit`, itself clamped to `max-rows`; `keys`
+is the full distinct count.
 
 With `namespace`, the keys filed under it across the scope, each
 naming its store, claims descending, then key, then scope order:
@@ -349,10 +351,11 @@ token with the query (or equals it whole) is consulted, scored by the
 number of matching tokens, ties broken by a namespace the query
 names, then the shorter key, then `namespace:key` alphabetically.
 Explicit `endpoints` come first and are never displaced; the union is
-capped at twice `k` per store. So "why did the ledger freeze in May"
-consults `incident:ledger-freeze-2026-05-22` with no endpoints given.
-The vocabulary behind this is `mem:vocabulary`, walked once per call
-(#64).
+capped at twice the operator's `k` per store (the cap fixed at
+construction, not the call's `k`). So "why did the ledger freeze in
+May" consults `incident:ledger-freeze-2026-05-22` with no endpoints
+given. The vocabulary behind this is `mem:vocabulary`, walked once
+per call (#64).
 
 ```json
 {
@@ -385,9 +388,9 @@ consulted, in consultation order, each once across stores. A call
 that would consult nothing — no endpoint named, none found, and no
 operator `sources` — is an error naming the query and pointing at
 `list-taxonomy`, not an empty bundle: an empty result must mean
-"looked, found nothing", never "did not look" (#64). With operator
-sources present the fusion runs over them alone and `endpoints` is
-empty.
+"looked, found nothing", never "did not look" (#64). When the union is
+empty but operator sources are configured, the fusion runs over them
+alone and `endpoints` is empty; with both present, both are fused.
 
 Runs `fuse` over one belief claim source per store in scope plus any
 `sources` the operator supplied, so each evidence item names its

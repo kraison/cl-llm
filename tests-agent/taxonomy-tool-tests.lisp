@@ -62,7 +62,16 @@
       (let ((k (%call tools "list-taxonomy" "namespace" "incident"
                       "limit" 50)))
         (is (= 1 (length (json:jget k "keys"))))
-        (is (json:jget k "truncated"))))))
+        (is (json:jget k "truncated"))))
+    (let* ((tools2 (agent:make-agent-tools (list w p) :producer +p+
+                                                       :max-rows 50))
+           (r2 (%call tools2 "list-taxonomy" "store" "cl-llm-memory"
+                      "limit" 1))
+           (stores2 (coerce (json:jget r2 "stores") 'list))
+           (incident2 (%named (json:jget (first stores2) "namespaces")
+                              "incident")))
+      (is (= 1 (length (json:jget incident2 "sample"))))
+      (is (= 2 (json:jget incident2 "keys"))))))
 
 (test list-taxonomy-lists-keys-under-a-namespace-across-the-scope
   (with-stores (w p)

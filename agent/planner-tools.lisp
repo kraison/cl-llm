@@ -166,7 +166,9 @@ truncated is true when more evidence existed past k, as in recall."
    "Derive the validity window and region the evidence for a query
 implies, without retrieving inside it: the planner's bound as a
 callable, each half with its own standing.  Endpoints come from the
-query as in retrieve, and endpoints in the result lists them."
+query as in retrieve, and endpoints in the result lists them.  A query
+that names nothing and lists nothing is the same error as in retrieve,
+and list-taxonomy shows what to name."
    '((query :type string)
      (endpoints :type (list string) :optional t)
      (k :type integer :optional t))

@@ -101,18 +101,20 @@ With namespace: the keys under it across the memory in scope, each
 naming its store, most-cited first.  Every name is the canonical
 lowercase spelling recall and retrieve take.  Never conclude absence
 from a guessed key: look here first.  store restricts to one store;
-limit caps keys (clamped to the operator's max-rows; truncated says
-more existed)."
+limit caps keys under a namespace and the key sample per namespace
+(clamped to the operator's max-rows; truncated says more keys
+existed)."
    '((namespace :type string :optional t)
      (store :type string :optional t)
      (limit :type integer :optional t))
    (lambda (namespace store limit)
      (if namespace
          (%namespace-keys-json scope namespace store limit)
-         (json:to-json
-          (json:jobject
-           "stores" (map 'vector
-                         (lambda (pair)
-                           (%store-taxonomy-json (car pair) (cdr pair)
-                                                 (scope-max-rows scope)))
-                         (%scope-vocabularies scope store))))))))
+         (let ((cap (clamp limit (scope-max-rows scope))))
+           (json:to-json
+            (json:jobject
+             "stores" (map 'vector
+                           (lambda (pair)
+                             (%store-taxonomy-json (car pair) (cdr pair)
+                                                   cap))
+                           (%scope-vocabularies scope store)))))))))

@@ -34,6 +34,22 @@
       (is (null (mcp.tools:get-tool (%registry server) "query"))
           "control: no query tool unless asked"))))
 
+(test list-taxonomy-answers-with-no-required-parameters-over-the-adapter
+  "SS3: list-taxonomy is the first agent tool with no required
+parameter, so an empty argument alist must reach it -- validate-tool-args
+must not mistake 'nothing required' for 'nothing allowed'."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green"))
+    (let* ((server (mcp:make-memory-server (list w p) :write-store w
+                                                       :producer +p+))
+           (registry (%registry server)))
+      (multiple-value-bind (content error-p)
+          (mcp.tools:call-tool registry "list-taxonomy" nil)
+        (is (null error-p))
+        (let ((r (json:parse (%text content))))
+          (is (vectorp (json:jget r "stores")))
+          (is (= 2 (length (json:jget r "stores")))))))))
+
 (test a-required-list-validates-and-a-vector-does-not
   "recon C1: the registered schema carries REQUIRED as a list, so
 cl-mcp's validator accepts a complete call; the same schema with
