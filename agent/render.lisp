@@ -35,21 +35,12 @@ set's error; MEMORY/CITE.LISP calls the exported predicate directly."
                     (char= ch #\-)))
               string)))
 
-(defun %find-keyword (string)
-  "STRING as a KEYWORD for reads (SS6): a canonical name is interned
-and returned -- a canonical keyword is exactly what a store may hold
--- and any other string is NIL, so an uncanonical namespace still
-reads as an empty result, not an error.  The trap: whether anything
-was recorded under a namespace is the store's answer, never this
-image's; a keyword being absent from the keyword package says nothing
-about the data (#61)."
-  (and (%canonical-name-p string)
-       (intern (string-upcase string) :keyword)))
-
 (defun %keyword (string)
-  "STRING as a KEYWORD, for writes: signals unless STRING is a
-canonical namespace name -- minting an uncanonical one would be
-unrecoverable -- then interns it (SS6)."
+  "STRING as a KEYWORD, reads and writes alike: signals unless STRING
+is a canonical namespace name -- minting an uncanonical one would be
+unrecoverable, and reading one as empty hides a misspelling as
+nothing recorded (#63) -- then interns it (SS6).  Whether anything
+was recorded under it is the store's answer, never this image's (#61)."
   (unless (%canonical-name-p string)
     (error "not a canonical namespace: ~s" string))
   (intern (string-upcase string) :keyword))
