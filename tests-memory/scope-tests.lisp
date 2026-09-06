@@ -413,3 +413,125 @@ apply and the write proceeds under any scope."
                                    :standing :searched-empty)
                            :producer +p+ :rule "r" :scope (list p w))))
       (is (eq :concluded (mem:decision-outcome d))))))
+
+;;; #53 (SS7): the epoch axis.  Under a clocked scope a decision's
+;;; cites resolve at its commit epoch, and the scope's trust rule
+;;; reaches CHANGED-SINCE.
+
+(test trace-resolves-evidence-at-the-decisions-epoch
+  "SS7 (#53): under a clocked scope TRACE resolves every cite on the
+epoch axis and says which axis it used.  P's cited claim is updated in
+place after the decision -- CONFIDENCE, which the identity key does not
+cover, so the cite still resolves -- and the trace still reports the
+version live at the decision's epoch, flagged :UPDATED.  Controls: the
+same trace before the update reports no change, and an :EPOCH read past
+the update sees the new version, so the epoch is load-bearing."
+  (with-two-stores (w p)
+    (let* ((e (gdb:with-transaction (:graph p)
+                (mem:record-belief
+                 p +ss+ "ci-status" '(:verdict . "green")
+                 :producer +p+ :standing :observed :confidence 0.9
+                 :extent (%open-from (%ts "2026-01-01T00:00:00Z")))))
+           (cite (mem:claim-cite e))
+           (d (mem:conclude w (list :belief +ss+ "releasable"
+                                    '(:v . "yes") :standing :inferred)
+                            :producer +p+ :evidence (list e) :rule "r"
+                            :scope (list w p)))
+           (before (mem:trace w (mem:decision-id d) :scope (list w p))))
+      (is (eq :epoch (mem:decision-record-axis before)))
+      (is (null (mem:cite-record-changed-since
+                 (first (mem:decision-record-evidence before))))
+          "control: nothing has changed yet")
+      ;; A new version of the cited claim, and so a later epoch.
+      (gdb:with-transaction (:graph p)
+        (let ((c (gdb:copy e)))
+          (setf (st:claim-confidence c) 0.5)
+          (gdb:save c)))
+      (let* ((rec (mem:trace w (mem:decision-id d) :scope (list w p)))
+             (ev (first (mem:decision-record-evidence rec))))
+        (is (eq :epoch (mem:decision-record-axis rec)))
+        (is (string= cite (mem:cite-record-cite ev)))
+        (is (eq :updated (mem:cite-record-changed-since ev)))
+        (is (= 0.9 (st:claim-confidence (mem:cite-record-claim ev)))
+            "the version live at the decision's epoch, not today's"))
+      (is (= 0.5 (st:claim-confidence
+                  (mem:cite-record-claim
+                   (mem:resolve-cite p cite nil
+                                     :epoch (+ 1000000
+                                               (mem:decision-epoch d))))))
+          "control: a later epoch sees the update"))))
+
+(test trace-reports-a-cross-store-supersession-of-evidence
+  "SS7 (#53): W's cited belief is still open in W, so the single-store
+%CHANGED-SINCE sees nothing; a newer belief in the MORE trusted P
+supersedes it over the scope, and the evidence record says :SUPERSEDED
+and names the successor's cite and store.  The evidence still resolves
+in the store the decision named.  Control: the reversed scope, where P
+is less trusted and may not supersede."
+  (with-two-stores (w p)
+    (let* ((green (%belief-in w "ci-status" '(:verdict . "green")))
+           (d (mem:conclude w (list :belief +ss+ "releasable"
+                                    '(:v . "yes") :standing :inferred)
+                            :producer +p+ :evidence (list green)
+                            :rule "r"))
+           (red (gdb:with-transaction (:graph p)
+                  (mem:record-belief
+                   p +ss+ "ci-status" '(:verdict . "red")
+                   :producer +p+ :standing :observed
+                   :extent (%open-from
+                            (%ts "2026-09-02T08:00:00Z"))))))
+      (let* ((rec (mem:trace w (mem:decision-id d) :scope (list p w)))
+             (ev (first (mem:decision-record-evidence rec))))
+        (is (string= (mem:claim-cite green) (mem:cite-record-cite ev)))
+        (is (eq :superseded (mem:cite-record-changed-since ev)))
+        (is (equal (cons (mem:claim-cite red) "memory-private")
+                   (mem:cite-record-superseded-by ev)))
+        (is (string= "cl-llm-memory" (mem:cite-record-store ev))
+            "resolved in the store the evidence named, not P"))
+      (let* ((rec (mem:trace w (mem:decision-id d) :scope (list w p)))
+             (ev (first (mem:decision-record-evidence rec))))
+        (is (null (mem:cite-record-changed-since ev))
+            "control: P is less trusted; it may not supersede")
+        (is (null (mem:cite-record-superseded-by ev)))))))
+
+(test trace-on-a-clockless-store-uses-the-instant-axis
+  "SS7 (#53): a store with no system clock still numbers its
+transactions, but those epochs are a private counter -- the engine
+refuses to read on that axis -- so TRACE resolves at the outcome's
+recorded instant and reports :INSTANT."
+  (with-memory-graph (g)
+    (is (null (gdb:graph-system-clock g)) "control: no clock")
+    (let* ((e (%belief-in g "ci-status" '(:verdict . "green")))
+           (d (mem:conclude g (list :belief +ss+ "releasable"
+                                    '(:v . "yes") :standing :inferred)
+                            :producer +p+ :evidence (list e) :rule "r"))
+           (rec (mem:trace g (mem:decision-id d))))
+      (is (eq :instant (mem:decision-record-axis rec)))
+      (is (integerp (mem:decision-record-epoch rec))
+          "an epoch exists; the clock, not the epoch, is the test")
+      (is (eq :resolved (mem:cite-record-state
+                         (first (mem:decision-record-evidence rec)))))
+      (is (eq :resolved (mem:cite-record-state
+                         (mem:decision-record-conclusion rec))))
+      (signals st:epoch-axis-unavailable
+        (mem:resolve-cite g (mem:claim-cite e) nil :epoch 1)))))
+
+(test resolve-cite-refuses-both-or-neither-axis
+  "SS7 (#53): exactly one axis.  Neither and both are
+BELIEF-ARGUMENT-ERRORs; either alone resolves (the control)."
+  (with-two-stores (w p)
+    (declare (ignore p))
+    (let* ((c (%belief-in w "ci-status" '(:verdict . "green")))
+           (cite (mem:claim-cite c))
+           (now (progn (sleep 0.01) (local-time:now)))
+           (epoch (st:claim-commit-epoch
+                   (mem:cite-record-claim
+                    (mem:resolve-cite w cite now)))))
+      (is (integerp epoch) "control: the store stamps an epoch")
+      (signals mem:belief-argument-error (mem:resolve-cite w cite nil))
+      (signals mem:belief-argument-error
+        (mem:resolve-cite w cite now :epoch epoch))
+      (is (eq :resolved (mem:cite-record-state
+                         (mem:resolve-cite w cite now))))
+      (is (eq :resolved (mem:cite-record-state
+                         (mem:resolve-cite w cite nil :epoch epoch)))))))

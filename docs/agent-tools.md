@@ -152,6 +152,7 @@ Parameters: `decision-id`.
   "id": "9f8e...",
   "store": "cl-llm-memory",
   "epoch": 42,
+  "axis": "epoch",
   "producer": "claude-code/agent",
   "at": "2026-09-03T10:00:00.000000Z",
   "rule": "owner-says",
@@ -180,7 +181,13 @@ Parameters: `decision-id`.
 
 Found in whichever store of the scope holds it — decision ids are
 random and unique. `epoch` (integer) is the commit epoch; omitted for
-a decision recorded before the engine stamped one. `confidence` is
+a decision recorded before the engine stamped one. `axis` says which
+axis the cites were resolved on: `"epoch"` — every cite resolved at
+the decision's own commit epoch, the case under a clocked scope — or
+`"instant"`, its recorded wall-clock instant, for a decision with no
+epoch or on a store with no system clock. Under `"instant"` the
+`epoch` shown is the store's own counter and is not comparable with
+another store's. `confidence` is
 present when the decision that made the claim gave one (omitted
 otherwise). Each evidence cite resolves in the store its evidence
 claim names, when that store is in scope, and the item's `store` is
@@ -189,7 +196,12 @@ by two stores still reports the half this decision cited. A cite
 naming a store the tool set was not built with reports
 `state: "absent"` and carries **no `store` key at all** — never
 falling back to the decision's own store, which would falsely suggest
-it was found. A refused decision has no `conclusion` and no
+it was found. An evidence item's, or the conclusion's, `changed-since`
+is `superseded` when a
+belief in another store in scope has superseded the cited one under
+the trust rule (`docs/agent-memory.md`); it then carries
+`superseded-by`, an object `{"cite", "store"}` naming the successor
+and the store it lives in. A refused decision has no `conclusion` and no
 `rule`/`rule-version`/`confidence` (omitted); `refusals` is
 `[{"family": ..., "text": ...}]`, one per constraint family that
 objected.
@@ -507,8 +519,10 @@ It depends on `cl-llm/agent/tests` for the two-store on-disk harness
 ## What this is not
 
 - **No cross-store consistent instant.** Recall, supersession and
-  `current` are computed over the whole scope under the trust rule;
-  as-of reads remain wall-clock until vivace-graph#347 is consumed.
+  `current` are computed over the whole scope under the trust rule.
+  A trace's as-of reads run on the shared clock's epoch axis
+  (vivace-graph#347); a scope's snapshots are still composed per
+  store, with no single instant across them.
 - **No web stack anywhere.** `cl-llm/agent/prolog` depends on
   `graph-db/query`, the guard's web-free home since
   kraison/vivace-graph#322; nothing here loads ningle, clack or
