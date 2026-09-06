@@ -44,7 +44,7 @@
    #:cite-record #:cite-record-cite #:cite-record-family
    #:cite-record-state #:cite-record-claim #:cite-record-standing
    #:cite-record-extent #:cite-record-changed-since
-   #:cite-record-store
+   #:cite-record-store #:cite-record-superseded-by
    ;; trace
    #:conclude #:decision #:decision-id #:decision-outcome
    #:decision-claim #:decision-report #:decision-at #:decision-epoch
@@ -54,4 +54,5 @@
    #:decision-record-rule-version #:decision-record-confidence
    #:decision-record-outcome #:decision-record-conclusion
    #:decision-record-evidence #:decision-record-refusals
-   #:decision-record-store #:decision-record-epoch))
+   #:decision-record-store #:decision-record-epoch
+   #:decision-record-axis))

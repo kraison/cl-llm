@@ -85,12 +85,17 @@ another store in scope (S6b SS4)."
 (defun %cite-record-json (record)
   "One CITE-RECORD as the model reads it.  STORE is the record's own --
 the store MEM:TRACE resolved the cite against, not a cache's guess
-(#14 unit 2 final review)."
-  (json:jobject
-   "store" (mem:cite-record-store record)
-   "cite" (mem:cite-record-cite record)
-   "state" (%standing (mem:cite-record-state record))
-   "changed-since" (%standing (mem:cite-record-changed-since record))
-   "standing" (%standing (mem:cite-record-standing record))
-   "valid-from" (%from (mem:cite-record-extent record))
-   "valid-to" (%to (mem:cite-record-extent record))))
+(#14 unit 2 final review).  SUPERSEDED-BY names the successor's cite
+and the store it lives in, present only when CHANGED-SINCE is
+\"superseded\" across the scope (#53)."
+  (let ((s (mem:cite-record-superseded-by record)))
+    (json:jobject
+     "store" (mem:cite-record-store record)
+     "cite" (mem:cite-record-cite record)
+     "state" (%standing (mem:cite-record-state record))
+     "changed-since" (%standing (mem:cite-record-changed-since record))
+     "standing" (%standing (mem:cite-record-standing record))
+     "valid-from" (%from (mem:cite-record-extent record))
+     "valid-to" (%to (mem:cite-record-extent record))
+     "superseded-by" (and s (json:jobject "cite" (car s)
+                                          "store" (cdr s))))))

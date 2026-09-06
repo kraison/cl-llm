@@ -44,9 +44,9 @@ one predicate; optional at (RFC 3339) keeps only beliefs valid then."
 (defun %trace-tool (scope)
   (llm:make-tool
    "trace"
-   "Reconstruct a decision as of the instant it was made: its rule,
-outcome, the conclusion, every evidence cite resolved to the version
-believed then with what has changed since, and any refusals."
+   "Reconstruct a decision as of when it was made: its rule, outcome,
+the conclusion, every evidence cite resolved to the version believed
+then with what has changed since, and any refusals."
    '((decision-id :type string))
    (lambda (decision-id)
      ;; No NOTE-CITE here: each record already carries the store
@@ -61,6 +61,8 @@ believed then with what has changed since, and any refusals."
          "id" decision-id
          "store" (mem:decision-record-store rec)
          "epoch" (mem:decision-record-epoch rec)
+         ;; Which axis the cites were resolved on (#53).
+         "axis" (%standing (mem:decision-record-axis rec))
          "producer" (mem:decision-record-producer rec)
          "at" (%iso (mem:decision-record-at rec))
          "rule" (mem:decision-record-rule rec)

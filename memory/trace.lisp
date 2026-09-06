@@ -259,9 +259,10 @@ backstops its own store."
 list of CITE-RECORDs in cite order; REFUSALS (family . text)
 in family order.  STORE names the store the decision was found in;
 EPOCH is the outcome claim's commit epoch, NIL for a claim written
-before the engine stamped one (S6b SS7)."
+before the engine stamped one (S6b SS7).  AXIS is :EPOCH or :INSTANT,
+which axis the cites were resolved on (#53)."
   id producer at rule rule-version confidence outcome
-  conclusion evidence refusals store epoch)
+  conclusion evidence refusals store epoch axis)
 
 (defun %decision-claims (graph id)
   (st:claims-touching graph 'trace :decision id :role :subject))
@@ -276,27 +277,42 @@ before the engine stamped one (S6b SS7)."
 (defun %store-in-scope (name scope)
   (find name scope :key #'store-name :test #'string=))
 
-(defun %resolve-in (cite store-name graph scope at)
+(defun %epoch-axis (outcome graph)
+  "The commit epoch to resolve this decision's cites at, or NIL for its
+recorded instant (#53, S6b SS7).  Both an integer epoch -- a decision
+written before the engine stamped one has none -- and a store on a
+system clock, whose epochs are comparable; a clockless store's are a
+private counter the engine refuses to read on.  CHECK-SCOPE forces one
+clock across a scope, so one trace never mixes axes."
+  (let ((epoch (st:claim-commit-epoch outcome)))
+    (and (integerp epoch) (gdb:graph-system-clock graph) epoch)))
+
+(defun %resolve-in (cite store-name graph scope at epoch)
   "CITE resolved in the store its evidence claim named, when that store
 is in SCOPE; unit-1 evidence (no store) resolves in GRAPH; a store out
 of scope is :ABSENT (SS4.3).  The record's STORE is the store actually
 resolved against, so a cite held by two stores reports the one this
 decision named -- not whichever a cache saw first (#14 unit 2 final
-review)."
+review).  With EPOCH the resolution is on the epoch axis and AT is
+unused (#53).  RESOLVE-CITE is given that store alone for the same
+reason -- a wider scope would resolve against another store's copy --
+so the cross-store supersession is applied here instead."
   (let ((g (if store-name (%store-in-scope store-name scope) graph)))
     (if g
-        (let ((r (resolve-cite g cite at)))
+        (let ((r (resolve-cite g cite (unless epoch at) :epoch epoch)))
           ;; Load-bearing on the :ABSENT branch: RESOLVE-CITE leaves
           ;; that store NIL.
           (setf (cite-record-store r) (store-name g))
-          r)
+          (%note-supersession r g scope))
         (make-cite-record :cite cite :state :absent))))
 
 (defun trace (graph decision-id &key (scope (list graph)))
-  "The decision DECISION-ID reconstructed as of its own instant (SS5),
+  "The decision DECISION-ID reconstructed as of when it was made (SS5),
 found in the first store of SCOPE holding it, or NIL when no store
 does.  Each evidence cite resolves in the store it names, when that
-store is in SCOPE (SS4.3).  Runs under the scope's snapshots (S6b)."
+store is in SCOPE (SS4.3), at the decision's commit epoch under a
+clocked scope and at its recorded instant otherwise; the record's AXIS
+says which (#53).  Runs under the scope's snapshots (S6b)."
   ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
   (check-scope scope :write-store graph)
   (with-scope-snapshots (scope)
@@ -310,6 +326,7 @@ store is in SCOPE (SS4.3).  Runs under the scope's snapshots (S6b)."
                              claims)))
       (when outcome
         (let* ((at (%recorded-instant outcome))
+               (epoch (%epoch-axis outcome g))
                (concluded (and (string= "concluded"
                                         (st:claim-relation outcome))
                                outcome))
@@ -344,14 +361,15 @@ store is in SCOPE (SS4.3).  Runs under the scope's snapshots (S6b)."
            ;; so it resolves in G -- %RESOLVE-IN with no named store.
            :conclusion (and concluded
                             (%resolve-in (st:claim-object-key concluded)
-                                         nil g scope at))
+                                         nil g scope at epoch))
            :evidence (mapcar (lambda (pair)
                                (%resolve-in (car pair) (cdr pair)
-                                            g scope at))
+                                            g scope at epoch))
                              evidence)
            :refusals refusals
            :store (store-name g)
-           :epoch (st:claim-commit-epoch outcome)))))))
+           :epoch (st:claim-commit-epoch outcome)
+           :axis (if epoch :epoch :instant)))))))
 
 (defun trace-listing (graph decision-ids &key (scope (list graph)))
   "The deterministic shape capture-and-diff compares (SS7): one row per

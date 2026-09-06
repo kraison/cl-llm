@@ -637,3 +637,39 @@ family, the cite and the store."
       (is (search (mem:claim-cite prior)
                   (json:jget (first refusals) "text")))
       (is (search "memory-private" (json:jget (first refusals) "text"))))))
+
+(test trace-tool-names-its-axis-and-a-cross-store-supersession
+  "S6b SS7 (#53): through the tool, a clocked scope resolves the
+decision's cites at its commit epoch -- \"axis\" is \"epoch\" -- and
+evidence superseded from a more trusted store reads
+\"changed-since\": \"superseded\" with \"superseded-by\" naming the
+successor's cite and store.  Control: the reversed scope, where the
+successor is the less trusted store and may not supersede."
+  (with-stores (w p)
+    (let* ((green (%belief w "ci-status" '(:verdict . "green")))
+           (d (mem:conclude w (list :belief +subj+ "releasable"
+                                    '(:v . "yes") :standing :inferred)
+                            :producer +p+ :evidence (list green)
+                            :rule "r"))
+           (red (%belief p "ci-status" '(:verdict . "red")
+                         :start "2026-09-02T08:00:00Z"))
+           (pw (agent:make-agent-tools (list p w) :write-store w
+                                       :producer +p+))
+           (wp (agent:make-agent-tools (list w p) :producer +p+))
+           (r (%call pw "trace" "decision-id" (mem:decision-id d)))
+           (ev (first (coerce (json:jget r "evidence") 'list))))
+      (is (string= "epoch" (json:jget r "axis")))
+      (is (string= "cl-llm-memory" (json:jget ev "store")))
+      (is (string= "superseded" (json:jget ev "changed-since")))
+      (is (string= (mem:claim-cite red)
+                   (json:jget ev "superseded-by" "cite")))
+      (is (string= "memory-private"
+                   (json:jget ev "superseded-by" "store")))
+      (let ((ev2 (first (coerce (json:jget
+                                 (%call wp "trace" "decision-id"
+                                        (mem:decision-id d))
+                                 "evidence")
+                                'list))))
+        (is (null (json:jget ev2 "changed-since"))
+            "control: P is less trusted; it may not supersede")
+        (is (null (json:jget ev2 "superseded-by")))))))

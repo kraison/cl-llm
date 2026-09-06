@@ -252,9 +252,17 @@ The memory image opens one clock (`CL_LLM_MEMORY_CLOCK`, default
 `~/.cl-llm-memory/clock/`) before its stores, passes it on every open,
 and closes it last. Every decision records its commit epoch
 (`decision-epoch`, `decision-record-epoch`); the number is comparable
-across stores only for decisions recorded under the shared clock. As-of
-reads still use wall clock; they move to the epoch axis when
-vivace-graph#347 is consumed.
+across stores only for decisions recorded under the shared clock. Under
+a clocked scope, `trace` resolves every cite at the decision's commit
+epoch; a decision recorded before the engine stamped one, or read on a
+clockless single store, resolves at its recorded instant, and the
+record says which (`decision-record-axis`, `:epoch` or `:instant`).
+`resolve-cite` takes the axis directly — the positional `at` or
+`:epoch`, exactly one of them; an `:epoch` read of a store with no
+system clock is the engine's `epoch-axis-unavailable`, a caller error.
+`changed-since` reports a supersession from another store under the
+trust rule: `:superseded`, with `cite-record-superseded-by` holding
+the successor's `(cite . store-name)`.
 
 ## Banners
 
