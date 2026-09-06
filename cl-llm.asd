@@ -303,9 +303,10 @@ retrieval planner (#14 unit 2)."
 (defsystem "cl-llm/agent/mcp"
   :description "The agent memory as its own MCP server (#57)."
   :license "MIT"
-  ;; cl-mcp brings yason, bordeaux-threads and opsis/conditions; none
-  ;; is in the Quicklisp dist (docs/ci.md).
-  :depends-on ("cl-llm/agent" "cl-mcp" "usocket")
+  ;; cl-mcp and opsis/conditions are not in the Quicklisp dist
+  ;; (docs/ci.md); yason and bordeaux-threads are used here directly.
+  :depends-on ("cl-llm/agent" "cl-mcp" "usocket" "bordeaux-threads"
+               "yason")
   :serial t
   :pathname "agent/mcp/"
   :components ((:file "packages")

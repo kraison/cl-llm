@@ -432,17 +432,35 @@ scope is `CL_LLM_MEMORY_SCOPE=private=/dir,working=/dir` in trust
 order with `CL_LLM_MEMORY_WRITE` naming the write store (default the
 last); `CL_LLM_MEMORY_QUERY_TOOL=1` adds the guarded Prolog tool. The
 child builds from the trees in `CL_LLM_ASDF_REGISTRY` (default: the
-checkout the script lives in). A store the memory image, or another
-session's solo server, already holds makes it exit 1 with "Another
-image may hold the store" before any handshake: graph-db stores have
-one holder, and there is no mode that lets two processes open one.
+checkout the script lives in). A store another process -- the memory
+image, or another session's solo server -- already holds makes it exit
+1 before any handshake: graph-db stores have one holder, and there is
+no mode that lets two processes open one. Which refusal it is depends
+on the clock: in the default configuration both share
+`~/.cl-llm-memory/clock/`, the clock opens first, so the message is
+"Another image holds the clock at that location"; the store's own
+"Another image may hold the store" appears when the two point at
+different clock directories. The test
+`a-second-solo-server-on-a-held-store-refuses` asserts both.
 
 ### In the image: a listener, many sessions
 
-The memory image listens on `CL_LLM_MEMORY_MCP_PORT` (default 4009,
-empty to disable) at `CL_LLM_MEMORY_MCP_BIND` (default loopback). Each
-connection gets its own server and its own producer. A client connects
-through the relay:
+The memory image listens on `CL_LLM_MEMORY_MCP_PORT` at
+`CL_LLM_MEMORY_MCP_BIND`. Each connection gets its own server and its
+own producer; a listener that will not start -- a taken port, a bad
+bind, a malformed principals file -- is reported on stderr and skipped,
+the banner reads `mcp off`, and the image keeps its store and its
+SWANK.
+
+| variable | default |
+|---|---|
+| `CL_LLM_MEMORY_MCP_PORT` | `4009`; empty turns the listener off |
+| `CL_LLM_MEMORY_MCP_BIND` | `127.0.0.1` |
+| `CL_LLM_MEMORY_PRINCIPALS` | `~/.cl-llm-memory/principals.sexp` |
+| `CL_LLM_MEMORY_IDENTITY` | `secret` (or `tailscale`) |
+| `CL_LLM_MEMORY_QUERY_TOOL` | empty; `1` adds the guarded Prolog tool |
+
+A client connects through the relay:
 
 ```
 claude mcp add --scope user memory -- sbcl --script \
@@ -468,7 +486,20 @@ the connection before the handshake, and a connection from off
 loopback with no hello is refused. Binding to any non-loopback address
 with no principals file is refused at startup. `CL_LLM_MEMORY_IDENTITY=
 tailscale` swaps the provider for the peer's tailnet node
-(`claude-code/<node>`), for hosts on one tailnet; it is off by default.
+(`claude-code/<node>`, refused when that is not a canonical producer),
+for hosts on one tailnet; it is off by default.
+
+Loopback is not an authentication boundary on a multi-user host: any
+local process can reach the port, and SWANK on 4008 already grants such
+a process strictly more than the tool surface does. Telling one local
+caller from another is what the principals file is for.
+
+**Arguments** are the tool surface's, unchanged (`docs/agent-tools.md`),
+with one MCP-level rule: a JSON `null` for an optional argument such as
+`standing` is refused, not defaulted. The key is present and `null`
+decodes as NIL, so the tool sees NIL rather than its declared default
+and answers with the refusal as text with `isError`; omit the key to
+get the default.
 
 ### Shutdown
 

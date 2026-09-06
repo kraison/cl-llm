@@ -39,8 +39,6 @@ jobs:
             echo "$2 @ $(git -C ~/ci-deps-cl-llm/$2 rev-parse --short HEAD)"
           done
       - name: core + rag + claims
-        env:
-          CL_LLM_ASDF_REGISTRY: $PWD/:$HOME/ci-deps-cl-llm/vivace-graph/:$HOME/ci-deps-cl-llm/cl-temporal-extent/:$HOME/ci-deps-cl-llm/cl-mcp/:$HOME/ci-deps-cl-llm/opsis/
         run: |
           sbcl --dynamic-space-size 4096 --non-interactive \
             --load "$HOME/quicklisp/setup.lisp" \

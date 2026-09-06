@@ -13,9 +13,9 @@ failed against tests needing same-day engine work.  The tested cl-llm
 tree is the pushed tree (quicklisp `local-projects` is neutralised).
 The agent/prolog suite's guard runs on `graph-db/query` (#44).  The
 agent/mcp suite's process tests spawn the solo server
-(`scripts/run-memory-mcp.sh`) as a child process that builds through
-`CL_LLM_ASDF_REGISTRY`, set for the step to the four cloned trees so
-the child sees the same engine and libraries the parent image loaded.
+(`scripts/run-memory-mcp.sh`) as a child SBCL; the tests build its
+`CL_LLM_ASDF_REGISTRY` from the trees the parent image loaded, so the
+child sees the same engine and libraries in CI and locally.
 Verdicts land in sitrep's mirror via the checks leg
 (kraison/sitrep#42).
 
