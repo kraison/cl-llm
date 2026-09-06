@@ -18,6 +18,8 @@
 ;;;;   CL_LLM_MEMORY_PRINCIPALS   principals file for the hello
 ;;;;   CL_LLM_MEMORY_IDENTITY     identity provider: secret or tailscale
 ;;;;   CL_LLM_MEMORY_QUERY_TOOL   1 adds the guarded Prolog tool
+;;;;   CL_LLM_MEMORY_K            retrieval cap for MCP connections
+;;;;   CL_LLM_MEMORY_MAX_ROWS     row cap for MCP connections
 
 (require :asdf)
 (ql:quickload '(:cl-llm/agent/mcp :swank) :silent t)
@@ -90,8 +92,8 @@ another image left dirty."
           (mcp-bind (%env "CL_LLM_MEMORY_MCP_BIND" "127.0.0.1")))
       (swank:create-server :port port :dont-close t :interface "127.0.0.1")
       ;; SWANK first, and the listener guarded: a taken port, a bad
-      ;; bind, an unparsable port or a malformed principals file must
-      ;; cost the image its listener, not its REPL (the banner then
+      ;; bind, an unparsable port or cap, or a malformed principals file
+      ;; must cost the image its listener, not its REPL (the banner then
       ;; reads "mcp off").
       (when (plusp (length mcp-port))
         (handler-case
@@ -109,7 +111,11 @@ another image left dirty."
                          (%home ".cl-llm-memory/principals.sexp"))
                    :default-producer *producer*
                    :query-tool (equal (%env "CL_LLM_MEMORY_QUERY_TOOL")
-                                      "1")))
+                                      "1")
+                   ;; The connection's caps are the image's (#58).
+                   :k (parse-integer (%env "CL_LLM_MEMORY_K" "5"))
+                   :max-rows (parse-integer
+                              (%env "CL_LLM_MEMORY_MAX_ROWS" "50"))))
           (error (c)
             (ignore-errors
              (format *error-output*
