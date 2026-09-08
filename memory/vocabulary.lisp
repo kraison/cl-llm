@@ -1,8 +1,7 @@
 ;;;; memory/vocabulary.lisp -- what a store's beliefs name: namespaces,
-;;;; relations, keys and endpoints (#64 SS2).  Two paths fill the same
-;;;; struct, chosen by INCLUDE-RETRACTED: the belief walk for the
-;;;; :current default, the engine's claim vocabulary API for the rest
-;;;; (#68, kraison/vivace-graph#350; cost in vivace-graph#358).
+;;;; relations, keys and endpoints (#64 SS2), from the engine's claim
+;;;; vocabulary API on both paths: names and counts come from the
+;;;; family's count indexes (#68 -> #70, kraison/vivace-graph#350/#361).
 
 (in-package #:cl-llm.memory)
 
@@ -33,7 +32,7 @@ every distinct (namespace-keyword . key) in either role."
 
 (defun %vocabulary-entry (v namespace)
   "The NAMESPACE-ENTRY for keyword NAMESPACE in V, made on first sight
-under its canonical lowercase name.  Both paths make entries here."
+under its canonical lowercase name."
   (let ((name (string-downcase (symbol-name namespace))))
     (or (gethash name (vocabulary-namespaces v))
         (setf (gethash name (vocabulary-namespaces v))
@@ -42,7 +41,7 @@ under its canonical lowercase name.  Both paths make entries here."
 (defun %note-endpoint (v namespace key seen)
   "Record (NAMESPACE . KEY) on V once -- SEEN is the dedup table --
 and return NAMESPACE's entry.  Endpoints come out in first-sight
-order, whichever path filled them (#68)."
+order (#68)."
   (let ((entry (%vocabulary-entry v namespace))
         (pair (cons namespace key)))
     (unless (gethash pair seen)
@@ -50,33 +49,11 @@ order, whichever path filled them (#68)."
       (push pair (vocabulary-endpoints v)))
     entry))
 
-(defun %vocabulary-by-walk (v graph current seen)
-  "Fill V by walking GRAPH's belief vertices, both arities: one node
-resolution per claim, counting claims rather than values.  CURRENT
-skips retracted claims."
-  (dolist (class '(belief-unary belief-binary))
-    (gdb:map-vertices
-     (lambda (c)
-       (when (or (not current) (st:claim-current-p c))
-         (let ((key (st:claim-subject-key c)))
-           (let ((e (%note-endpoint v (st:claim-subject-namespace c)
-                                    key seen)))
-             (incf (namespace-entry-subjects e))
-             (incf (gethash key (namespace-entry-keys e) 0))))
-         (incf (gethash (st:claim-relation c) (vocabulary-relations v) 0))
-         (when (typep c 'belief-binary)
-           (let ((key (st:claim-object-key c)))
-             (let ((e (%note-endpoint v (st:claim-object-namespace c)
-                                      key seen)))
-               (incf (namespace-entry-objects e))
-               (incf (gethash key (namespace-entry-keys e) 0)))))))
-     graph :vertex-type class)))
-
 (defun %vocabulary-from-engine (v graph current seen)
   "Fill V from the engine's claim vocabulary API (vivace-graph#350):
-names and counts from index ranges, one resolution per name.  The
-engine merges the roles and sums, which is what the walk's per-role
-INCF produces."
+names and counts from the family's count indexes (vivace-graph#361).
+Queried per role, so a namespace in both roles gets its subject and
+object counts separately."
   (let ((order '()))
     (dolist (role '(:subject :object))
       (loop for (ns . n) in (st:claim-namespaces graph 'belief
@@ -105,19 +82,15 @@ count each, the keys under every namespace, and every distinct
 snapshot.  Retracted claims are skipped unless INCLUDE-RETRACTED
 (RECALL's default).  Returns a VOCABULARY; nothing is cached.
 
-Which path runs, and why.  The default walks the belief vertices:
-telling current from retracted needs the node anyway, and the walk
-resolves each claim exactly once, where the engine under :CURRENT
-resolves it once per index range it appears in -- five, for a binary
-belief (vivace-graph#358).  INCLUDE-RETRACTED takes the engine's claim
-vocabulary API instead (vivace-graph#350): names and counts come from
-index ranges with one resolution per name, so that path is sub-linear
-in the store's claims where the walk is linear (#68)."
+Cost: names and counts come from the family's count indexes on both
+paths (vivace-graph#361), sub-linear in the store's claims and
+resolving no node -- once the engine has built the maps, which a fresh
+graph's first count query does by one scan (#70).  Trap: inside a
+GDB:WITH-AS-OF extent the counters have no history, so the engine
+falls back to a walk that resolves nodes (vivace-graph#350)."
   (let ((v (%make-vocabulary graph))
         (seen (make-hash-table :test 'equal)))
-    (if include-retracted
-        (%vocabulary-from-engine v graph nil seen)
-        (%vocabulary-by-walk v graph t seen))
+    (%vocabulary-from-engine v graph (not include-retracted) seen)
     (setf (vocabulary-endpoints v) (nreverse (vocabulary-endpoints v)))
     v))
 

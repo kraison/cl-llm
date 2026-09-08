@@ -115,14 +115,12 @@ series needs strictly increasing starts -- RECORD-BELIEF supersedes."
      :extent (%open-from
               (%ts (format nil "2026-09-01T08:~2,'0D:00Z" minute))))))
 
-(test vocabulary-with-retracted-included-does-not-resolve-every-claim
-  "cl-llm#68: with INCLUDE-RETRACTED the names and counts come from the
-engine's index ranges (vivace-graph#350), so a store of N beliefs is
-answered with fewer than N node resolutions.  Control: the default
-(:current) path must resolve at least N, since telling current from
-retracted needs the node -- and at most N plus a little, which pins it
-to the walk: the engine costs one resolution per index range a claim
-sits in, five for a binary belief (vivace-graph#358)."
+(test vocabulary-resolves-no-node-outside-an-as-of-extent
+  "cl-llm#70: both paths answer from the family's count indexes
+\(vivace-graph#361), so a store of N beliefs is answered with no node
+resolution at all.  Control: inside a WITH-AS-OF extent the engine
+takes #350's walk instead -- the counters have no history -- and
+resolves at least N, with the same answer at the latest epoch."
   (with-memory-graph (g)
     (let ((n 40))
       ;; 5 subject keys x 8 object keys, one claim each: N claims over
@@ -131,27 +129,53 @@ sits in, five for a binary belief (vivace-graph#358)."
         (%vbelief-at g (cons :incident (format nil "i~D" (mod i 5)))
                      "outage-root-cause"
                      (cons :cause (format nil "c~D" (mod i 8))) i))
-      (mem:with-scope-snapshots ((list g))
-        (let ((fast (%count-resolutions
-                     (lambda () (mem:vocabulary g :include-retracted t))))
-              (slow (%count-resolutions
-                     (lambda () (mem:vocabulary g)))))
-          (is (>= slow n)
-              "control: the :current path resolved ~D for ~D claims"
-              slow n)
-          ;; Measured exactly N; the slack is for CLAIM-CURRENT-P
-          ;; resolving a neighbour on a retracted or cross-store
-          ;; series, which this fixture has none of.
-          (is (<= slow (+ n 8))
-              "the :current path must walk: ~D resolutions for ~D ~
-claims -- the engine path costs about 5N"
-              slow n)
-          (is (< fast n)
-              "include-retracted: ~D resolutions for ~D claims -- ~
-names should come from index ranges, not a walk"
-              fast n)
+      (let ((e (gdb:latest-epoch g)))
+        ;; A fresh graph's count maps are built by the first count
+        ;; query, one scan resolving every claim per index (vivace-
+        ;; graph#361, general-index-design SS6b); pay it before
+        ;; measuring.  The :include-retracted path reaches the engine
+        ;; on every version of VOCABULARY, so this warms the maps even
+        ;; when the default path still walks.
+        (mem:vocabulary g :include-retracted t)
+        (mem:with-scope-snapshots ((list g))
+          (let ((default (%count-resolutions
+                          (lambda () (mem:vocabulary g))))
+                (all (%count-resolutions
+                      (lambda () (mem:vocabulary g :include-retracted t))))
+                (v (mem:vocabulary g)))
+            (is (< default n)
+                "default: ~D resolutions for ~D claims -- counts should ~
+come from the count indexes, not a walk" default n)
+            (is (= 0 default)
+                "default: ~D resolutions -- a count lookup resolves none"
+                default)
+            (is (< all n)
+                "include-retracted: ~D resolutions for ~D claims" all n)
+            (is (= 0 all)
+                "include-retracted: ~D resolutions -- a count lookup ~
+resolves none" all)
+            (let* ((ns (mem:vocabulary-namespaces v))
+                   (inc (gethash "incident" ns))
+                   (cause (gethash "cause" ns)))
+              (is (= n (mem:namespace-entry-subjects inc)))
+              (is (= n (mem:namespace-entry-objects cause)))
+              (is (= 5 (hash-table-count (mem:namespace-entry-keys inc))))
+              (is (= 8 (hash-table-count
+                        (mem:namespace-entry-keys cause))))
+              (is (= n (gethash "outage-root-cause"
+                                (mem:vocabulary-relations v))))
+              (is (= 13 (length (mem:vocabulary-endpoints v)))))))
+        ;; CONTROL, outside WITH-SCOPE-SNAPSHOTS: an as-of snapshot is
+        ;; refused inside a plain snapshot of the same graph
+        ;; (CALL-WITH-READ-SNAPSHOT, :snapshot-active).
+        (let* ((at nil)
+               (as-of (%count-resolutions
+                       (lambda ()
+                         (gdb:with-as-of ((g) e)
+                           (setf at (mem:vocabulary g)))))))
+          (is (>= as-of n)
+              "control: the as-of walk resolved ~D for ~D claims -- ~
+the probe or the control is wrong" as-of n)
           (is (= n (mem:namespace-entry-subjects
-                    (gethash "incident"
-                             (mem:vocabulary-namespaces
-                              (mem:vocabulary g :include-retracted t)))))
-              "and the counts are still right"))))))
+                    (gethash "incident" (mem:vocabulary-namespaces at))))
+              "the as-of answer at the latest epoch equals the live one"))))))
