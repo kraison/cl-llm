@@ -106,15 +106,24 @@ descending, then object key. A reordering is a regression.
 ;;                  :endpoints ((:repo . "cl-llm") (:verdict . "green")))
 ```
 
-`vocabulary` is one walk of a store's belief vertices under the
-caller's snapshot: every namespace with its subject and object claim
-counts and the keys filed under it, every relation with its count,
-and every distinct endpoint. Retracted claims are skipped unless
-`:include-retracted`. It is linear in the store's beliefs and caches
-nothing, which is the right trade at hundreds to low thousands of
-beliefs; the engine-side index that replaces the walk behind the same
-function is kraison/vivace-graph#350. The agent's `list-taxonomy` and
-the key extractor behind `retrieve` are its two consumers (#64).
+`vocabulary` answers under the caller's snapshot: every namespace with
+its subject and object claim counts and the keys filed under it, every
+relation with its count, and every distinct endpoint. Retracted claims
+are skipped unless `:include-retracted`. The agent's `list-taxonomy`
+and the key extractor behind `retrieve` are its two consumers (#64).
+
+Two paths fill that struct and the keyword picks the cheaper one (#68).
+The default walks the store's belief vertices: telling current from
+retracted needs the node anyway, and the walk resolves each claim
+exactly once — linear in the store's beliefs, which is the right trade
+at hundreds to low thousands of them. `:include-retracted` goes to the
+engine's claim vocabulary API (kraison/vivace-graph#350) instead: names
+and counts come from ranges of the family's own indexes with one
+resolution per name, so that path is sub-linear in claims. The engine's
+`:current` mode is not the cheaper one today — it resolves a claim once
+per index range it sits in, five for a binary belief
+(kraison/vivace-graph#358) — which is why the walk stays. Nothing is
+cached either way.
 
 ## Capturing a memory directory
 
