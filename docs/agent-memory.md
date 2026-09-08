@@ -106,15 +106,21 @@ descending, then object key. A reordering is a regression.
 ;;                  :endpoints ((:repo . "cl-llm") (:verdict . "green")))
 ```
 
-`vocabulary` is one walk of a store's belief vertices under the
-caller's snapshot: every namespace with its subject and object claim
-counts and the keys filed under it, every relation with its count,
-and every distinct endpoint. Retracted claims are skipped unless
-`:include-retracted`. It is linear in the store's beliefs and caches
-nothing, which is the right trade at hundreds to low thousands of
-beliefs; the engine-side index that replaces the walk behind the same
-function is kraison/vivace-graph#350. The agent's `list-taxonomy` and
-the key extractor behind `retrieve` are its two consumers (#64).
+`vocabulary` answers from the engine's claim vocabulary API
+(kraison/vivace-graph#350) under the caller's snapshot: every namespace
+with its subject and object claim counts and the keys filed under it,
+every relation with its count, and every distinct endpoint. Retracted
+claims are skipped unless `:include-retracted`. The agent's
+`list-taxonomy` and the key extractor behind `retrieve` are its two
+consumers (#64).
+
+The names come from ranges of the family's own indexes rather than a
+walk of its belief vertices (#68). Under the default the engine
+resolves every claim in a name's range — telling current from retracted
+needs the node — so that path stays linear in the store's beliefs; with
+`:include-retracted` the names and counts come from the index ranges
+themselves and only one node per name is resolved, which is sub-linear
+in claims. Nothing is cached either way.
 
 ## Capturing a memory directory
 

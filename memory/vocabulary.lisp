@@ -1,7 +1,6 @@
 ;;;; memory/vocabulary.lisp -- what a store's beliefs name: namespaces,
-;;;; relations, keys and endpoints, from one walk per call (#64 SS2).
-;;;; kraison/vivace-graph#350 is the engine index that replaces the
-;;;; walk behind VOCABULARY's signature.
+;;;; relations, keys and endpoints (#64 SS2).  The walk moved onto the
+;;;; engine's claim vocabulary API (#68, kraison/vivace-graph#350).
 
 (in-package #:cl-llm.memory)
 
@@ -30,40 +29,46 @@ every distinct (namespace-keyword . key) in either role."
   relations
   endpoints)
 
-(defun %note-endpoint (v namespace key role seen)
-  "Count NAMESPACE/KEY under ROLE (:SUBJECT or :OBJECT) in V and record
-the endpoint once; SEEN is the dedup table."
-  (let* ((name (string-downcase (symbol-name namespace)))
-         (entry (or (gethash name (vocabulary-namespaces v))
-                    (setf (gethash name (vocabulary-namespaces v))
-                          (%make-namespace-entry name)))))
-    (if (eq role :subject)
-        (incf (namespace-entry-subjects entry))
-        (incf (namespace-entry-objects entry)))
-    (incf (gethash key (namespace-entry-keys entry) 0))
-    (let ((pair (cons namespace key)))
-      (unless (gethash pair seen)
-        (setf (gethash pair seen) t)
-        (push pair (vocabulary-endpoints v))))))
-
 (defun vocabulary (graph &key include-retracted)
-  "One walk of GRAPH's belief vertices, both arities, under the
-caller's read snapshot.  Retracted claims are skipped unless
-INCLUDE-RETRACTED (RECALL's default).  Linear in the store's beliefs;
-nothing is cached.  Returns a VOCABULARY."
+  "What GRAPH's beliefs name -- namespaces and relations with a claim
+count each, the keys under every namespace, and every distinct
+\(namespace-keyword . key) endpoint -- from the engine's claim
+vocabulary API (vivace-graph#350), under the caller's read snapshot.
+Retracted claims are skipped unless INCLUDE-RETRACTED (RECALL's
+default).  Returns a VOCABULARY; nothing is cached.  Trap, the cost:
+the default resolves every claim in each name's index range, so it is
+linear in the store's claims; INCLUDE-RETRACTED takes names and counts
+from index ranges instead, one resolution per name, so it is
+sub-linear in claims."
   (let ((v (%make-vocabulary graph))
-        (seen (make-hash-table :test 'equal)))
-    (dolist (class '(belief-unary belief-binary))
-      (gdb:map-vertices
-       (lambda (c)
-         (when (or include-retracted (st:claim-current-p c))
-           (%note-endpoint v (st:claim-subject-namespace c)
-                           (st:claim-subject-key c) :subject seen)
-           (incf (gethash (st:claim-relation c) (vocabulary-relations v) 0))
-           (when (typep c 'belief-binary)
-             (%note-endpoint v (st:claim-object-namespace c)
-                             (st:claim-object-key c) :object seen))))
-       graph :vertex-type class))
+        (cur (not include-retracted))
+        (order '()))
+    (flet ((entry (ns)
+             (let ((name (string-downcase (symbol-name ns))))
+               (or (gethash name (vocabulary-namespaces v))
+                   (progn
+                     (push ns order)
+                     (setf (gethash name (vocabulary-namespaces v))
+                           (%make-namespace-entry name)))))))
+      (dolist (role '(:subject :object))
+        (loop for (ns . n) in (st:claim-namespaces graph 'belief
+                                                   :role role :counts t
+                                                   :current cur)
+              for e = (entry ns)
+              do (if (eq role :subject)
+                     (setf (namespace-entry-subjects e) n)
+                     (setf (namespace-entry-objects e) n))))
+      ;; Namespaces in first-sight order, keys in index order: the
+      ;; endpoint list stays stable across calls (#68).
+      (dolist (ns (reverse order))
+        (let ((e (entry ns)))
+          (loop for (key . n) in (st:claim-keys graph 'belief ns
+                                                :counts t :current cur)
+                do (setf (gethash key (namespace-entry-keys e)) n)
+                   (push (cons ns key) (vocabulary-endpoints v))))))
+    (loop for (rel . n) in (st:claim-relations graph 'belief
+                                               :counts t :current cur)
+          do (setf (gethash rel (vocabulary-relations v)) n))
     (setf (vocabulary-endpoints v) (nreverse (vocabulary-endpoints v)))
     v))
 
