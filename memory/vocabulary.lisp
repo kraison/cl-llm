@@ -32,7 +32,7 @@ every distinct (namespace-keyword . key) in either role."
 
 (defun %vocabulary-entry (v namespace)
   "The NAMESPACE-ENTRY for keyword NAMESPACE in V, made on first sight
-under its canonical lowercase name.  Both paths make entries here."
+under its canonical lowercase name."
   (let ((name (string-downcase (symbol-name namespace))))
     (or (gethash name (vocabulary-namespaces v))
         (setf (gethash name (vocabulary-namespaces v))
@@ -41,7 +41,7 @@ under its canonical lowercase name.  Both paths make entries here."
 (defun %note-endpoint (v namespace key seen)
   "Record (NAMESPACE . KEY) on V once -- SEEN is the dedup table --
 and return NAMESPACE's entry.  Endpoints come out in first-sight
-order, whichever path filled them (#68)."
+order (#68)."
   (let ((entry (%vocabulary-entry v namespace))
         (pair (cons namespace key)))
     (unless (gethash pair seen)
