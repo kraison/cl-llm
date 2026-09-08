@@ -106,21 +106,24 @@ descending, then object key. A reordering is a regression.
 ;;                  :endpoints ((:repo . "cl-llm") (:verdict . "green")))
 ```
 
-`vocabulary` answers from the engine's claim vocabulary API
-(kraison/vivace-graph#350) under the caller's snapshot: every namespace
-with its subject and object claim counts and the keys filed under it,
-every relation with its count, and every distinct endpoint. Retracted
-claims are skipped unless `:include-retracted`. The agent's
-`list-taxonomy` and the key extractor behind `retrieve` are its two
-consumers (#64).
+`vocabulary` answers under the caller's snapshot: every namespace with
+its subject and object claim counts and the keys filed under it, every
+relation with its count, and every distinct endpoint. Retracted claims
+are skipped unless `:include-retracted`. The agent's `list-taxonomy`
+and the key extractor behind `retrieve` are its two consumers (#64).
 
-The names come from ranges of the family's own indexes rather than a
-walk of its belief vertices (#68). Under the default the engine
-resolves every claim in a name's range — telling current from retracted
-needs the node — so that path stays linear in the store's beliefs; with
-`:include-retracted` the names and counts come from the index ranges
-themselves and only one node per name is resolved, which is sub-linear
-in claims. Nothing is cached either way.
+Two paths fill that struct and the keyword picks the cheaper one (#68).
+The default walks the store's belief vertices: telling current from
+retracted needs the node anyway, and the walk resolves each claim
+exactly once — linear in the store's beliefs, which is the right trade
+at hundreds to low thousands of them. `:include-retracted` goes to the
+engine's claim vocabulary API (kraison/vivace-graph#350) instead: names
+and counts come from ranges of the family's own indexes with one
+resolution per name, so that path is sub-linear in claims. The engine's
+`:current` mode is not the cheaper one today — it resolves a claim once
+per index range it sits in, five for a binary belief
+(kraison/vivace-graph#358) — which is why the walk stays. Nothing is
+cached either way.
 
 ## Capturing a memory directory
 

@@ -120,7 +120,9 @@ series needs strictly increasing starts -- RECORD-BELIEF supersedes."
 engine's index ranges (vivace-graph#350), so a store of N beliefs is
 answered with fewer than N node resolutions.  Control: the default
 (:current) path must resolve at least N, since telling current from
-retracted needs the node."
+retracted needs the node -- and at most N plus a little, which pins it
+to the walk: the engine costs one resolution per index range a claim
+sits in, five for a binary belief (vivace-graph#358)."
   (with-memory-graph (g)
     (let ((n 40))
       ;; 5 subject keys x 8 object keys, one claim each: N claims over
@@ -136,6 +138,13 @@ retracted needs the node."
                      (lambda () (mem:vocabulary g)))))
           (is (>= slow n)
               "control: the :current path resolved ~D for ~D claims"
+              slow n)
+          ;; Measured exactly N; the slack is for CLAIM-CURRENT-P
+          ;; resolving a neighbour on a retracted or cross-store
+          ;; series, which this fixture has none of.
+          (is (<= slow (+ n 8))
+              "the :current path must walk: ~D resolutions for ~D ~
+claims -- the engine path costs about 5N"
               slow n)
           (is (< fast n)
               "include-retracted: ~D resolutions for ~D claims -- ~
