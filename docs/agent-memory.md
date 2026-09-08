@@ -112,18 +112,15 @@ relation with its count, and every distinct endpoint. Retracted claims
 are skipped unless `:include-retracted`. The agent's `list-taxonomy`
 and the key extractor behind `retrieve` are its two consumers (#64).
 
-Two paths fill that struct and the keyword picks the cheaper one (#68).
-The default walks the store's belief vertices: telling current from
-retracted needs the node anyway, and the walk resolves each claim
-exactly once — linear in the store's beliefs, which is the right trade
-at hundreds to low thousands of them. `:include-retracted` goes to the
-engine's claim vocabulary API (kraison/vivace-graph#350) instead: names
-and counts come from ranges of the family's own indexes with one
-resolution per name, so that path is sub-linear in claims. The engine's
-`:current` mode is not the cheaper one today — it resolves a claim once
-per index range it sits in, five for a binary belief
-(kraison/vivace-graph#358) — which is why the walk stays. Nothing is
-cached either way.
+One path fills that struct: the engine's claim vocabulary API
+(kraison/vivace-graph#350) over the family's own count indexes
+(kraison/vivace-graph#361). Names and counts are index lookups on both
+paths, `:include-retracted` or not, so `vocabulary` is sub-linear in
+the store's claims and resolves no node outside an as-of extent — once
+the engine has built the count maps, which a fresh graph's first count
+query does by one scan (#70). Inside a `with-as-of` extent the counters
+have no history, so the engine falls back to a walk that resolves
+nodes. Nothing is cached either way.
 
 ## Capturing a memory directory
 
