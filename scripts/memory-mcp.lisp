@@ -19,14 +19,8 @@
 
 (let ((*standard-output* *error-output*)
       (*trace-output* *error-output*))
-  ;; CL_LLM_ASDF_REGISTRY: colon-separated trees, first on the registry,
-  ;; so the child builds what its launcher built (plan ruling 1).
-  (let ((registry (uiop:getenv "CL_LLM_ASDF_REGISTRY")))
-    (when (and registry (plusp (length registry)))
-      (dolist (dir (reverse (uiop:split-string registry :separator ":")))
-        (when (plusp (length dir))
-          (push (uiop:ensure-directory-pathname dir)
-                asdf:*central-registry*)))))
+  ;; CL_LLM_ASDF_REGISTRY (#72): scripts/registry.lisp.
+  (load (merge-pathnames "registry.lisp" *load-truename*))
   (funcall (intern "QUICKLOAD" "QL") :cl-llm/agent/mcp :silent t)
   (when (equal (uiop:getenv "CL_LLM_MEMORY_QUERY_TOOL") "1")
     (funcall (intern "QUICKLOAD" "QL") :cl-llm/agent/prolog :silent t)))

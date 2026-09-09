@@ -403,6 +403,13 @@ scripts/run-memory.sh   # logs to stdout; SIGTERM or Ctrl-C closes the store
 | `CL_LLM_MEMORY_PRODUCER` | `claude-code/<hostname>` |
 | `CL_LLM_MEMORY_BUFFER_POOL` | `2000` |
 | `CL_LLM_MEMORY_CLOCK` | `~/.cl-llm-memory/clock/` |
+| `CL_LLM_ASDF_REGISTRY` | the checkout the script lives in |
+
+The image builds from the trees in `CL_LLM_ASDF_REGISTRY`
+(colon-separated, ahead of Quicklisp's own search), the same variable
+the solo server reads, and its banner ends with `graph-db <dir>`
+naming the engine it resolved -- a mismatched checkout shows there,
+not at the first missing symbol (#72).
 
 The image refuses a store left dirty (`store-not-closed-cleanly-error`,
 exit 1) rather than open a torn one; the exit hook closes the graph on
@@ -458,15 +465,15 @@ scope is `CL_LLM_MEMORY_SCOPE=private=/dir,working=/dir` in trust
 order with `CL_LLM_MEMORY_WRITE` naming the write store (default the
 last); `CL_LLM_MEMORY_QUERY_TOOL=1` adds the guarded Prolog tool. The
 child builds from the trees in `CL_LLM_ASDF_REGISTRY` (default: the
-checkout the script lives in). A store another process -- the memory
-image, or another session's solo server -- already holds makes it exit
-1 before any handshake: graph-db stores have one holder, and there is
-no mode that lets two processes open one. Which refusal it is depends
-on the clock: in the default configuration both share
-`~/.cl-llm-memory/clock/`, the clock opens first, so the message is
-"Another image holds the clock at that location"; the store's own
-"Another image may hold the store" appears when the two point at
-different clock directories. The test
+checkout the script lives in), as the image does (#72). A store
+another process -- the memory image, or another session's solo server
+-- already holds makes it exit 1 before any handshake: graph-db stores
+have one holder, and there is no mode that lets two processes open
+one. Which refusal it is depends on the clock: in the default
+configuration both share `~/.cl-llm-memory/clock/`, the clock opens
+first, so the message is "Another image holds the clock at that
+location"; the store's own "Another image may hold the store" appears
+when the two point at different clock directories. The test
 `a-second-solo-server-on-a-held-store-refuses` asserts both.
 
 ### In the image: a listener, many sessions
