@@ -93,7 +93,9 @@ another image left dirty."
               (gdb:make-graph name store :buffer-pool-size pool
                               :system-clock *clock*)))
     (setf gdb:*graph* *graph*)
-    (let ((mcp-port (%env "CL_LLM_MEMORY_MCP_PORT" "4009"))
+    ;; Raw, not %ENV: empty means off, only unset defaults (#75).
+    (let ((mcp-port (or (sb-ext:posix-getenv "CL_LLM_MEMORY_MCP_PORT")
+                        "4009"))
           (mcp-bind (%env "CL_LLM_MEMORY_MCP_BIND" "127.0.0.1")))
       (swank:create-server :port port :dont-close t :interface "127.0.0.1")
       ;; SWANK first, and the listener guarded: a taken port, a bad
