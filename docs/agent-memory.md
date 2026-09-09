@@ -521,10 +521,16 @@ the image's producer. Named principals are a file,
 ```
 
 The relay sends one hello line before any JSON-RPC, naming its
-principal and the secret it reads from `~/.cl-llm-memory/client.sexp`
-(same shape); a match sets the connection's producer, a mismatch closes
+principal and the secret it reads from `--secret-file PATH`, else
+`CL_LLM_MEMORY_CLIENT`, else `~/.cl-llm-memory/client.sexp` (same
+shape; #73); a match sets the connection's producer, a mismatch closes
 the connection before the handshake, and a connection from off
-loopback with no hello is refused. Binding to any non-loopback address
+loopback with no hello is refused. The relay exits 0 when the session
+ends -- EOF on its stdin half-closes the socket, and every reply still
+coming is written to stdout before it exits (#74) -- 2 when a hello
+was sent and the listener closed without answering, with one stderr
+line naming the principal and the secret's path (#73), and 1 on
+anything else (a missing secret file names its path). Binding to any non-loopback address
 with no principals file is refused at startup. `CL_LLM_MEMORY_IDENTITY=
 tailscale` swaps the provider for the peer's tailnet node
 (`claude-code/<node>`, refused when that is not a canonical producer),
