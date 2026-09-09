@@ -403,6 +403,13 @@ scripts/run-memory.sh   # logs to stdout; SIGTERM or Ctrl-C closes the store
 | `CL_LLM_MEMORY_PRODUCER` | `claude-code/<hostname>` |
 | `CL_LLM_MEMORY_BUFFER_POOL` | `2000` |
 | `CL_LLM_MEMORY_CLOCK` | `~/.cl-llm-memory/clock/` |
+| `CL_LLM_ASDF_REGISTRY` | the checkout the script lives in |
+
+The image builds from the trees in `CL_LLM_ASDF_REGISTRY`
+(colon-separated, ahead of Quicklisp's own search), the same variable
+the solo server reads, and its banner ends with `graph-db <dir>`
+naming the engine it resolved -- a mismatched checkout shows there,
+not at the first missing symbol (#72).
 
 The image refuses a store left dirty (`store-not-closed-cleanly-error`,
 exit 1) rather than open a torn one; the exit hook closes the graph on
@@ -458,15 +465,15 @@ scope is `CL_LLM_MEMORY_SCOPE=private=/dir,working=/dir` in trust
 order with `CL_LLM_MEMORY_WRITE` naming the write store (default the
 last); `CL_LLM_MEMORY_QUERY_TOOL=1` adds the guarded Prolog tool. The
 child builds from the trees in `CL_LLM_ASDF_REGISTRY` (default: the
-checkout the script lives in). A store another process -- the memory
-image, or another session's solo server -- already holds makes it exit
-1 before any handshake: graph-db stores have one holder, and there is
-no mode that lets two processes open one. Which refusal it is depends
-on the clock: in the default configuration both share
-`~/.cl-llm-memory/clock/`, the clock opens first, so the message is
-"Another image holds the clock at that location"; the store's own
-"Another image may hold the store" appears when the two point at
-different clock directories. The test
+checkout the script lives in), as the image does (#72). A store
+another process -- the memory image, or another session's solo server
+-- already holds makes it exit 1 before any handshake: graph-db stores
+have one holder, and there is no mode that lets two processes open
+one. Which refusal it is depends on the clock: in the default
+configuration both share `~/.cl-llm-memory/clock/`, the clock opens
+first, so the message is "Another image holds the clock at that
+location"; the store's own "Another image may hold the store" appears
+when the two point at different clock directories. The test
 `a-second-solo-server-on-a-held-store-refuses` asserts both.
 
 ### In the image: a listener, many sessions
@@ -514,13 +521,22 @@ the image's producer. Named principals are a file,
 ```
 
 The relay sends one hello line before any JSON-RPC, naming its
-principal and the secret it reads from `~/.cl-llm-memory/client.sexp`
-(same shape); a match sets the connection's producer, a mismatch closes
+principal and the secret it reads from `--secret-file PATH`, else
+`CL_LLM_MEMORY_CLIENT`, else `~/.cl-llm-memory/client.sexp` (same
+shape; #73); a match sets the connection's producer, a mismatch closes
 the connection before the handshake, and a connection from off
-loopback with no hello is refused. Binding to any non-loopback address
-with no principals file is refused at startup. `CL_LLM_MEMORY_IDENTITY=
-tailscale` swaps the provider for the peer's tailnet node
-(`claude-code/<node>`, refused when that is not a canonical producer),
+loopback with no hello is refused. The relay exits 0 when the session
+ends -- EOF on its stdin half-closes the socket, and every reply still
+coming is written to stdout before it exits (#74) -- 2 when a hello
+was sent and the listener closed without answering, with one stderr
+line naming the principal and the secret's path (#73), and 1 on
+anything else (a missing secret file names its path). The relay cannot
+tell a refusal from a session that sent no request at all, so a
+principal with an empty stdin also exits 2. Binding to any
+non-loopback address with no principals file is refused at startup.
+`CL_LLM_MEMORY_IDENTITY=tailscale` swaps the provider for the peer's
+tailnet node (`claude-code/<node>`, refused when that is not a
+canonical producer),
 for hosts on one tailnet; it is off by default.
 
 Loopback is not an authentication boundary on a multi-user host: any

@@ -20,8 +20,13 @@
 ;;;;   CL_LLM_MEMORY_QUERY_TOOL   1 adds the guarded Prolog tool
 ;;;;   CL_LLM_MEMORY_K            retrieval cap for MCP connections
 ;;;;   CL_LLM_MEMORY_MAX_ROWS     row cap for MCP connections
+;;;;   CL_LLM_ASDF_REGISTRY       colon-separated trees ahead of
+;;;;                              Quicklisp's search; the banner names
+;;;;                              the graph-db it resolved (#72)
 
 (require :asdf)
+;; Before the quickload, so the engine is the one asked for (#72).
+(load (merge-pathnames "registry.lisp" *load-truename*))
 (ql:quickload '(:cl-llm/agent/mcp :swank) :silent t)
 ;; Loaded only when asked for: the query tool pulls in graph-db/query
 ;; (#44), which nothing else in the image needs.
@@ -122,13 +127,17 @@ another image left dirty."
                      "~&memory image: mcp listener disabled: ~a~%"
                      (type-of c)))
             (setf *listener* nil))))
+      ;; graph-db's source directory: a mismatched engine shows here,
+      ;; not at the first missing symbol (#72).
       (format t "~&memory image: ~(~S~) at ~A as ~A; clock ~A; ~
-swank 127.0.0.1:~D; ~A~%"
+swank 127.0.0.1:~D; ~A; graph-db ~A~%"
               name store *producer* clock-dir port
               (if *listener*
                   (format nil "mcp ~A:~A" mcp-bind
                           (mcp:listener-port *listener*))
-                  "mcp off")))
+                  "mcp off")
+              (asdf:system-source-directory
+               (asdf:find-system :graph-db))))
     (finish-output)
     *graph*))
 
