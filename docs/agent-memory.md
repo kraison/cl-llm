@@ -530,10 +530,13 @@ ends -- EOF on its stdin half-closes the socket, and every reply still
 coming is written to stdout before it exits (#74) -- 2 when a hello
 was sent and the listener closed without answering, with one stderr
 line naming the principal and the secret's path (#73), and 1 on
-anything else (a missing secret file names its path). Binding to any non-loopback address
-with no principals file is refused at startup. `CL_LLM_MEMORY_IDENTITY=
-tailscale` swaps the provider for the peer's tailnet node
-(`claude-code/<node>`, refused when that is not a canonical producer),
+anything else (a missing secret file names its path). The relay cannot
+tell a refusal from a session that sent no request at all, so a
+principal with an empty stdin also exits 2. Binding to any
+non-loopback address with no principals file is refused at startup.
+`CL_LLM_MEMORY_IDENTITY=tailscale` swaps the provider for the peer's
+tailnet node (`claude-code/<node>`, refused when that is not a
+canonical producer),
 for hosts on one tailnet; it is off by default.
 
 Loopback is not an authentication boundary on a multi-user host: any

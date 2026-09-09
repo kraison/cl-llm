@@ -7,8 +7,8 @@
 ;;;; command line carries none (#73).  stdin EOF half-closes the
 ;;;; socket and the replies still coming drain to stdout; the process
 ;;;; exits when the listener closes (#74): 0, or 2 when a hello was
-;;;; sent and nothing came back -- refused (#73).  Anything else is 1.
-;;;; docs/agent-memory.md.
+;;;; sent and nothing came back -- refused (#73; a session that asked
+;;;; nothing reads the same).  Anything else is 1.  docs/agent-memory.md.
 
 (let ((*standard-output* *error-output*))
   (require :asdf)
