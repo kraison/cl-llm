@@ -216,3 +216,51 @@ marker's presence while the server runs."
                (is (gdb::graph-open-p g))
                (let ((gdb:*graph* g)) (gdb:close-graph g :snapshot-p nil))))
         (%reap process)))))
+
+(defun %launch-image (root &rest assignments)
+  "The memory image (run-memory.sh) as a child under ROOT with
+ASSIGNMENTS ahead of the solo variables; SWANK on an ephemeral port."
+  (sb-ext:run-program (%script "run-memory.sh") '()
+                      :environment (%child-environment
+                                    (append assignments
+                                            '("CL_LLM_MEMORY_SWANK_PORT=0")
+                                            (%solo-env root)))
+                      :input nil :output :stream :error :stream
+                      :wait nil))
+
+(defun %banner (process &key (grace 120))
+  "The image's banner line, or NIL when none arrives within GRACE
+seconds (the child builds from FASLs; a cold cache is slow)."
+  (let ((out (sb-ext:process-output process))
+        (deadline (+ (get-universal-time) grace)))
+    (loop while (< (get-universal-time) deadline)
+          do (if (listen out)
+                 (let ((line (read-line out nil nil)))
+                   (cond ((null line) (return nil))
+                         ((search "memory image:" line) (return line))))
+                 (if (sb-ext:process-alive-p process)
+                     (sleep 0.2)
+                     (return nil))))))
+
+(test an-empty-mcp-port-turns-the-listener-off
+  "#75: CL_LLM_MEMORY_MCP_PORT set but EMPTY runs the image without the
+listener -- the banner reads `mcp off` -- where the old wrapper and
+%ENV both substituted 4009 for an empty value.  Control: the variable
+unset yields a listener (on an ephemeral port here, so nothing on 4009
+is touched)."
+  (with-scratch-root (root)
+    (let ((process (%launch-image root "CL_LLM_MEMORY_MCP_PORT=")))
+      (unwind-protect
+           (let ((banner (%banner process)))
+             (is (stringp banner) "no banner: ~a" (%stderr process))
+             (is (search "mcp off" (or banner ""))
+                 "expected mcp off: ~a" banner))
+        (%reap process))))
+  (with-scratch-root (root)
+    (let ((process (%launch-image root "CL_LLM_MEMORY_MCP_PORT=0")))
+      (unwind-protect
+           (let ((banner (%banner process)))
+             (is (stringp banner) "no banner: ~a" (%stderr process))
+             (is (search "mcp 127.0.0.1:" (or banner ""))
+                 "control, a listener: ~a" banner))
+        (%reap process)))))

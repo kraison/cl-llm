@@ -487,7 +487,7 @@ SWANK.
 
 | variable | default |
 |---|---|
-| `CL_LLM_MEMORY_MCP_PORT` | `4009`; empty turns the listener off |
+| `CL_LLM_MEMORY_MCP_PORT` | `4009`; set but empty turns the listener off (#75) |
 | `CL_LLM_MEMORY_MCP_BIND` | `127.0.0.1` |
 | `CL_LLM_MEMORY_PRINCIPALS` | `~/.cl-llm-memory/principals.sexp` |
 | `CL_LLM_MEMORY_IDENTITY` | `secret` (or `tailscale`) |
