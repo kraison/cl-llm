@@ -249,10 +249,11 @@ One thread per process that has an embedder, started by
    a deadline (SDD Task 3 fix round 1): a notify does not shorten it,
    only a stop does, since the write path notifies per write and an
    import against a down embedder would otherwise make one failing
-   round trip per write. Recovery -- clearing the outage and resetting
-   the backoff -- is claimed only by a drain that embedded at least
-   one endpoint, so an empty drain mid-outage does not read as the
-   embedder returning.
+   round trip per write. Any error-free drain ends the outage state
+   (so a later failure logs as its own outage), but only one that
+   embedded at least one endpoint announces the recovery: an empty
+   drain proves nothing about the embedder and clears the state
+   silently.
 4. **Model change**: a vector whose `ev-model` differs from the
    configured model is dirty and re-embedded by the ordinary drain. A
    *dimension* change cannot be handled by the worker: an empty segment

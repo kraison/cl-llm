@@ -214,10 +214,14 @@ once per attempt, and retried after a backoff that doubles from the
 does, and past it the worker drains whether or not one arrived. The
 write path notifies on every write, so without that an import against
 a down embedder would buy one failing round trip -- plus a full
-materialise and dirty sweep -- per write. Recovery is claimed only by
-a drain that actually embedded something: an empty drain during an
-outage is not the embedder coming back, and does not log or reset the
-backoff.
+materialise and dirty sweep -- per write. The log goes to the
+`*error-output*` in force when `start-endpoint-indexer` was called, not
+the global one a new thread would otherwise see.
+
+Any error-free drain ends the outage state, so a *later* failure is
+logged as its own outage rather than swallowed. But only a drain that
+actually embedded something announces the recovery: an empty drain
+proves nothing about the embedder, so it clears the state silently.
 
 The worker calls itself idle only when a drain finished with no notify
 outstanding **and** no store has a dirty endpoint left. An endpoint

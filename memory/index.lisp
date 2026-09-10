@@ -295,9 +295,11 @@ that wait is a deadline no notify may cancel.  IDLE is set only when
 the drain left every store clean and no notify arrived: an endpoint
 whose profile outran *EMBED-PASSES* stays dirty and is retried after
 the backoff, so WAIT-ENDPOINT-INDEXER cannot read idle over it.
-Recovery is claimed only by a drain that actually embedded something,
-so an empty drain mid-outage does not read as the embedder returning.
-Every log line is printed after the lock is released (SS4.3)."
+An error-free drain ends the outage state, but only one that actually
+embedded something claims RECOVERY out loud: an empty drain proves
+nothing about the embedder, so it clears FAILING silently -- which is
+what lets a later outage log again -- and prints no line.  Every log
+line is printed after the lock is released (SS4.3)."
   (let ((lines '()) (delay nil) (hard nil))
     (handler-case
         (multiple-value-bind (n unsettled)
@@ -308,13 +310,12 @@ Every log line is printed after the lock is released (SS4.3)."
           (let ((dirty (%indexer-dirty-p w)))
             (bt:with-lock-held ((endpoint-indexer-lock w))
               (incf (endpoint-indexer-embedded w) n)
-              (when (plusp n)
-                (setf (endpoint-indexer-backoff w)
-                      (endpoint-indexer-initial-backoff w))
-                (when (endpoint-indexer-failing w)
-                  (setf (endpoint-indexer-failing w) nil)
-                  (push (list "~&endpoint indexer: embedder back~%")
-                        lines)))
+              (setf (endpoint-indexer-backoff w)
+                    (endpoint-indexer-initial-backoff w))
+              (when (and (endpoint-indexer-failing w) (plusp n))
+                (push (list "~&endpoint indexer: embedder back~%")
+                      lines))
+              (setf (endpoint-indexer-failing w) nil)
               ;; A notify outranks both: drain again at once.
               (cond ((endpoint-indexer-pending w))
                     (dirty (setf delay
@@ -350,14 +351,21 @@ embedder error is logged once per outage and retried with a doubling
 BACKOFF (seconds, capped at 60) that no notify can cut short.  => the
 ENDPOINT-INDEXER, also set as *ENDPOINT-INDEXER*.  A worker already in
 *ENDPOINT-INDEXER* is stopped and joined first, so a re-entered start
-never orphans one.  Trap: stop it before closing the stores."
+never orphans one.  It logs to the *ERROR-OUTPUT* of this call, which
+a new thread would not otherwise see: BT:*DEFAULT-SPECIAL-BINDINGS* is
+NIL, so it would get the global stream.  Trap: stop it before closing
+the stores."
   (when *endpoint-indexer*
     (stop-endpoint-indexer *endpoint-indexer*))
   (let ((w (%make-endpoint-indexer :stores stores :embed embed
                                    :model model :backoff backoff
-                                   :initial-backoff backoff)))
+                                   :initial-backoff backoff))
+        (err *error-output*))
     (setf (endpoint-indexer-thread w)
-          (bt:make-thread (lambda () (%indexer-loop w)) :name name))
+          (bt:make-thread (lambda ()
+                            (let ((*error-output* err))
+                              (%indexer-loop w)))
+                          :name name))
     (setf *endpoint-indexer* w)))
 
 (defun notify-endpoint-indexer (&optional (indexer *endpoint-indexer*))

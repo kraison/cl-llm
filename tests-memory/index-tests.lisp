@@ -466,3 +466,53 @@ leaves the endpoint dirty -- the bounded-pass fallout (SS4.3 step 2)."
              (is (mem:wait-endpoint-indexer w2 :timeout 10)
                  "and the new one drains"))
         (mem:stop-endpoint-indexer mem:*endpoint-indexer*)))))
+
+(defun %count-substring (needle haystack)
+  "How many non-overlapping NEEDLEs HAYSTACK contains."
+  (let ((n 0) (start 0))
+    (loop (let ((hit (search needle haystack :start2 start)))
+            (unless hit (return n))
+            (incf n)
+            (setf start (+ hit (length needle)))))))
+
+(test a-quiet-drain-lets-a-later-outage-report-itself
+  (with-memory-graph (g)
+    (let ((b (%pbelief g '(:repo . "cl-llm") "ci-status"
+                       '(:verdict . "green"))))
+      (multiple-value-bind (embed counter)
+          (%counting-embed 4 :fail-times 1000)
+        (let* ((log (make-string-output-stream))
+               (*error-output* log)
+               (w (mem:start-endpoint-indexer (list g) :embed embed
+                                              :model "m" :backoff 0.5)))
+          (unwind-protect
+               (progn
+                 (loop repeat 300 until (plusp (car counter))
+                       do (sleep 0.01))
+                 (is (= 1 (car counter)) "control: the sweep failed once")
+                 ;; Retracting the only belief leaves both endpoints
+                 ;; with nothing current, so the drain at the end of
+                 ;; the backoff finds nothing and calls no embedder.
+                 (gdb:with-transaction (:graph g) (mem:retract-belief b))
+                 (is (null (mem:dirty-endpoints g "m"))
+                     "control: nothing is dirty any more")
+                 (is (mem:wait-endpoint-indexer w :timeout 10)
+                     "the empty drain finished and went idle")
+                 (is (= 1 (car counter)) "and called nothing")
+                 ;; A second outage: it proved nothing about the
+                 ;; embedder, so this must be announced too.
+                 (%pbelief g '(:repo . "cl-llm") "owner"
+                           '(:person . "kevin") "2026-08-31T08:00:00Z")
+                 (mem:notify-endpoint-indexer w)
+                 (loop repeat 300 until (< 1 (car counter))
+                       do (sleep 0.01))
+                 (is (= 2 (car counter)) "the second outage was tried")
+                 (sleep 0.1)
+                 (let ((text (get-output-stream-string log)))
+                   (is (= 2 (%count-substring "embedder failed" text))
+                       "both outages were logged, not just the first: ~s"
+                       text)
+                   (is (= 0 (%count-substring "embedder back" text))
+                       "and no empty drain claimed the embedder back: ~s"
+                       text)))
+            (mem:stop-endpoint-indexer w)))))))
