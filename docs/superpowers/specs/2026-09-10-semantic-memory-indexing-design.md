@@ -162,20 +162,27 @@ empty result and no operator source → "no endpoint recognised"
 ### 3.2 Constructor
 
 ```lisp
-(defun make-hybrid-key-extractor (graph vocabulary embedder
-                                  &key (cap 10) floor)
-  "A function of a query string returning up to CAP endpoints of
-GRAPH as (namespace-keyword . key): the lexical matches of VOCABULARY
-first, in MAKE-KEY-EXTRACTOR's order, then the endpoints whose
-profile embeds nearest the query at cosine >= FLOOR (default the
-embedder's floor), best first.  EMBEDDER NIL is MAKE-KEY-EXTRACTOR.
-Trap: an endpoint without a vector -- touched by a write and not yet
-re-embedded -- is reachable lexically only.")
+(defun make-hybrid-key-extractor (graph vocabulary endpoint-embedder
+                                  &key (cap 10) query-vector)
+  "A function of a query string returning up to CAP endpoints of GRAPH
+as (namespace-keyword . key): VOCABULARY's lexical matches first, in
+MAKE-KEY-EXTRACTOR's order, then the endpoints whose profile embeds
+nearest the query at cosine >= the embedder's floor, best first.
+QUERY-VECTOR is a function of the query returning its embedding, so a
+caller can memoise it across the stores in scope; the default embeds
+on every call.  ENDPOINT-EMBEDDER NIL is MAKE-KEY-EXTRACTOR itself.
+Traps: an endpoint a write touched and the indexer has not re-embedded
+is reachable lexically only (§4.1); and the vector search runs when
+the returned function is called, not under whatever snapshot
+VOCABULARY was read in.")
 ```
 
-`%claim-sources` (`agent/planner-tools.lisp`) builds one per store in
-scope, as it builds the lexical extractor today, passing the scope's
-embedder.
+There is no `floor` key: the floor is the endpoint embedder's, so one
+scope cannot answer two queries at two floors. `%claim-sources`
+(`agent/planner-tools.lisp`) builds one extractor per store in scope,
+as it builds the lexical extractor today, passing the scope's embedder
+and one memoised `query-vector` closure so a query is embedded once
+per `retrieve`, not once per store.
 
 ### 3.3 Cost
 
@@ -243,17 +250,31 @@ One thread per process that has an embedder, started by
    retry re-renders to the same effect. An endpoint with no current
    belief gets no vector; one still changing after four passes stays
    dirty for the next drain.
-3. **Failure**: an embedder error is logged once per outage on stderr,
-   the endpoint stays dirty, and the worker backs off (1 s doubling to
-   60 s) before retrying the queue. Nothing is dropped. The backoff is
-   a deadline (SDD Task 3 fix round 1): a notify does not shorten it,
-   only a stop does, since the write path notifies per write and an
-   import against a down embedder would otherwise make one failing
-   round trip per write. Any error-free drain ends the outage state
+3. **Failure**: a failed drain is logged once per outage on stderr
+   (`drain failed: ...` -- the guard covers the dirty sweep as well as
+   the embedder, and an engine error is not an outage), the endpoint
+   stays dirty, and the worker backs off (1 s doubling to 60 s) before
+   retrying the queue. The guard is `serious-condition`, not `error`:
+   a `storage-condition` escaping the thread body would take the whole
+   process under `--script`, not just the worker. Nothing is dropped.
+   The backoff is a deadline (SDD Task 3 fix round 1): a notify does
+   not shorten it, only a stop does, since the write path notifies per
+   write and an import against a down embedder would otherwise make
+   one failing round trip per write. Any error-free drain ends the outage state
    (so a later failure logs as its own outage), but only one that
    embedded at least one endpoint announces the recovery: an empty
    drain proves nothing about the embedder and clears the state
-   silently.
+   silently. **The stop is bounded** (final review, I2):
+   `stop-endpoint-indexer (indexer &key (timeout 35))` sets the flag,
+   wakes the thread, then polls `bt:thread-alive-p` against a deadline
+   (bordeaux-threads 0.9.4's `join-thread` takes no `:timeout`) and
+   joins when it is dead; past the deadline it logs `stop timed out
+   after N s; abandoning the worker` and answers NIL. The drain itself
+   observes the flag between endpoints, so one stop waits for at most
+   one embedding. Both entry points pass 35 = the 30 s embedder bound
+   plus a margin. An abandoned worker still writes, which is bad; a
+   join that never returns holds SIGTERM until the supervisor's
+   SIGKILL and parks the store's `.dirty` marker, which is worse.
 4. **Model change**: a vector whose `ev-model` differs from the
    configured model is dirty and re-embedded by the ordinary drain. A
    *dimension* change cannot be handled by the worker: an empty segment
@@ -279,11 +300,16 @@ One thread per process that has an embedder, started by
 
 ### 4.4 Synchronous drain
 
-`drain-endpoint-vectors (stores embedder)` runs the sweep and the drain
-in the calling thread and returns the number of endpoints embedded. It
-serves the tests (no sleeping on a worker) and an operator who wants a
-rebuild finished before a scripted session; `rebuild-endpoint-vectors`
-is the same call with every vector first treated as absent.
+`drain-endpoint-vectors (stores &key embed model stop-p)` runs the
+sweep and the drain in the calling thread and returns **two values**:
+the number of endpoints embedded, and the endpoints whose profile
+outran `*embed-passes*` and are still dirty. It serves the tests (no
+sleeping on a worker) and an operator who wants a rebuild finished
+before a scripted session; `rebuild-endpoint-vectors` is the same call
+with every vector first treated as absent, and passes both values
+through. `stop-p`, when given, is called between endpoints and ends
+the drain there — it is how the worker's stop stays bounded (§4.3
+step 3).
 
 ### 4.5 The solo server and the image
 
@@ -319,11 +345,13 @@ Empty URL means the feature is inert: no worker, no embedding at
 retrieve, `retrieve` is today's lexical route, the class sits unused.
 That is the state every existing suite runs in.
 
-The floor is documented with a calibration recipe: run a few paraphrase
-queries and a few out-of-domain queries through
-`nearest-endpoints (graph embedder query &key k)`, which returns
-`(endpoint . cosine)` pairs unfiltered, and set the floor between the
-two bands.
+The floor is documented with a calibration recipe. The memory layer's
+search takes a vector, not an embedder — `nearest-endpoints (graph
+query-vector &key k model)`, returning `((namespace . key) . cosine)`
+pairs unfiltered — so embed each query first with `rag:embed` on the
+endpoint embedder's own embedder (`endpoint-embedder-embedder`), run a
+few paraphrase queries and a few out-of-domain ones through it, and set
+the floor between the two bands.
 
 The endpoint need not be on the memory host: a GPU box on the tailnet
 serving an OpenAI-compatible route makes the round trip small, and the
@@ -413,10 +441,11 @@ resolved in the amendments above.
 
 ---
 
-## 9. Relation to the blackboard
+## 9. Relation to a multi-agent successor
 
-The blackboard's stores are memory stores, so one `endpoint-vector` set
-per store and the same lexical-first route apply unchanged; profiles
-carry the producer, so a routed endpoint's provenance across principals
-is visible before any traversal. The worker is a per-process thread the
-blackboard service hosts the way the image does.
+A multi-agent successor built on these stores inherits this unchanged:
+its stores are memory stores, so one `endpoint-vector` set per store
+and the same lexical-first route apply as they stand; profiles carry
+the producer, so a routed endpoint's provenance across principals is
+visible before any traversal. The worker is a per-process thread such a
+service hosts the way the image does.

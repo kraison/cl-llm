@@ -44,7 +44,8 @@ b787516 (`graph-db/spacetime`, vector segments); `cl-llm/rag` embedders;
   time, foreground, timeout ≥ 5 min; never `pkill`, `pgrep -f`, `kill`;
   never touch ports 4007–4029, `~/.cl-llm-memory*`, `~/work/cl-llm`
   (main) or `~/work/vg-c3` (the engine clone, read-only).
-  Registry: `/home/raison/work/vg-c3-notes/registry-78.lisp` (exists).
+  Suites load through a source registry naming this worktree and the
+  engine checkout, plus `:inherit-configuration` for quicklisp.
 - Docs travel with the code: every task that adds behaviour touches
   `docs/agent-memory.md` or `docs/agent-tools.md` in the same commit.
 - Commit trailers:
@@ -54,14 +55,14 @@ b787516 (`graph-db/spacetime`, vector segments); `cl-llm/rag` embedders;
 Running a suite (SYS one of `memory`, `agent`, `agent/mcp`):
 
 ```bash
-N=/home/raison/work/vg-c3-notes
-cd /home/raison/work/cl-llm/.worktrees/semantic-index
+R=<a source registry naming the engine checkout>   # see above
+cd <repo>
 SYS=memory; L=$(echo $SYS | tr / -)
 sbcl --dynamic-space-size 4096 --non-interactive \
-  --load "$HOME/quicklisp/setup.lisp" --load "$N/registry-78.lisp" \
+  --load "$HOME/quicklisp/setup.lisp" --load "$R" \
   --eval "(ql:quickload :cl-llm/$SYS/tests :silent t)" \
-  --eval "(asdf:test-system :cl-llm/$SYS)" > "$N/suite-78-$L.log" 2>&1
-echo "exit=$?"; grep -E "^ *Did [0-9]+ checks|^ *Fail:" "$N/suite-78-$L.log"
+  --eval "(asdf:test-system :cl-llm/$SYS)" > "suite-78-$L.log" 2>&1
+echo "exit=$?"; grep -E "^ *Did [0-9]+ checks|^ *Fail:" "suite-78-$L.log"
 ```
 
 One test: same preamble, then
