@@ -26,6 +26,12 @@ export CL_LLM_MEMORY_IDENTITY="${CL_LLM_MEMORY_IDENTITY:-secret}"
 export CL_LLM_MEMORY_QUERY_TOOL="${CL_LLM_MEMORY_QUERY_TOOL:-}"
 export CL_LLM_MEMORY_K="${CL_LLM_MEMORY_K:-5}"
 export CL_LLM_MEMORY_MAX_ROWS="${CL_LLM_MEMORY_MAX_ROWS:-50}"
+# The semantic endpoint index (#78): an empty URL leaves it off; the
+# model and the floor are required with one, the key only if it is.
+export CL_LLM_MEMORY_EMBED_URL="${CL_LLM_MEMORY_EMBED_URL:-}"
+export CL_LLM_MEMORY_EMBED_MODEL="${CL_LLM_MEMORY_EMBED_MODEL:-}"
+export CL_LLM_MEMORY_EMBED_KEY="${CL_LLM_MEMORY_EMBED_KEY:-}"
+export CL_LLM_MEMORY_EMBED_FLOOR="${CL_LLM_MEMORY_EMBED_FLOOR:-}"
 # The tested tree is this checkout unless the caller names others.
 export CL_LLM_ASDF_REGISTRY="${CL_LLM_ASDF_REGISTRY:-$REPO/}"
 export LC_ALL="${LC_ALL:-C.UTF-8}"

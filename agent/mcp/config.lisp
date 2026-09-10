@@ -83,3 +83,40 @@ snapshot -- unbounded work before the .dirty marker clears (recon C2)
   (when clock
     (ignore-errors (gdb:close-system-clock clock)))
   nil)
+
+;;;; The semantic endpoint index's embedder (#78 SS5)
+
+(defun %embed-floor (string)
+  "STRING as the cosine floor: read with *READ-EVAL* NIL, so a value
+from the environment cannot evaluate, and under WITH-STANDARD-IO-SYNTAX,
+which makes \"0.42\" a single-float.  => the real; signals naming the
+offending text otherwise."
+  (let ((v (handler-case (with-standard-io-syntax
+                           (let ((*read-eval* nil))
+                             (read-from-string string)))
+             (error () nil))))
+    (unless (realp v)
+      (error "CL_LLM_MEMORY_EMBED_FLOOR must be a real in [0, 1], not ~s"
+             string))
+    v))
+
+(defun embedder-from-env ()
+  "The semantic index's embedder from CL_LLM_MEMORY_EMBED_URL / _MODEL /
+_KEY / _FLOOR (#78 SS5), or NIL when the URL is empty -- the feature is
+then inert.  A URL without a model or a floor is an error, as is a floor
+outside [0, 1] (MAKE-ENDPOINT-EMBEDDER's own check).  Trap: nothing is
+embedded here, so a URL nothing answers on is found only at the first
+round trip -- the entry points probe once and report."
+  (let ((url (env "CL_LLM_MEMORY_EMBED_URL")))
+    (when url
+      (let ((model (env "CL_LLM_MEMORY_EMBED_MODEL"))
+            (floor (env "CL_LLM_MEMORY_EMBED_FLOOR")))
+        (unless model
+          (error "CL_LLM_MEMORY_EMBED_MODEL is required with a URL"))
+        (unless floor
+          (error "CL_LLM_MEMORY_EMBED_FLOOR is required with a URL"))
+        (agent:make-endpoint-embedder
+         (rag:make-openai-compatible-embedder
+          :base-url url :model model
+          :api-key (env "CL_LLM_MEMORY_EMBED_KEY"))
+         :floor (%embed-floor floor))))))

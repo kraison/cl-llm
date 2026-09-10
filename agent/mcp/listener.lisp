@@ -6,17 +6,20 @@
 (defstruct listener
   socket thread (stopping nil) port stores write-store
   (provider :secret) principals-path default-producer query-tool
-  ;; The caps every connection's tools get (#58).
-  (k 5) (max-rows 50) sources)
+  ;; The caps every connection's tools get (#58), and the semantic
+  ;; index's embedder, shared by every connection (#78).
+  (k 5) (max-rows 50) sources embedder)
 
 (defun start-listener (&key (bind "127.0.0.1") (port 0) stores write-store
                             (provider :secret) principals-path
                             default-producer query-tool
-                            (k 5) (max-rows 50) sources)
+                            (k 5) (max-rows 50) sources embedder)
   "Listen on BIND:PORT (0 for an ephemeral port; LISTENER-PORT reads it
 back) and serve each connection its own server over STORES, with caps K
-and MAX-ROWS and planner SOURCES (MAKE-MEMORY-SERVER's).  Refuses a
-non-loopback BIND without principals (SS5)."
+and MAX-ROWS, planner SOURCES and the semantic index's EMBEDDER
+(MAKE-MEMORY-SERVER's).  Refuses a non-loopback BIND without principals
+(SS5).  Trap: the segment reset EMBEDDER's dimension needs must already
+have run -- no connection may search before it (#78 SS4.3 step 4)."
   (check-bind bind (and principals-path (read-principals principals-path)))
   (let* ((socket (usocket:socket-listen bind port :reuse-address t
                                                   :element-type 'character))
@@ -28,7 +31,8 @@ non-loopback BIND without principals (SS5)."
                                   :default-producer default-producer
                                   :query-tool query-tool
                                   :k k :max-rows max-rows
-                                  :sources sources))
+                                  :sources sources
+                                  :embedder embedder))
          (ok nil))
     ;; BT:MAKE-THREAD signals on thread exhaustion; the listening socket
     ;; would leak.  Success flag, as in OPEN-SCOPE.
@@ -138,7 +142,8 @@ it."
                                 :query-tool (listener-query-tool listener)
                                 :k (listener-k listener)
                                 :max-rows (listener-max-rows listener)
-                                :sources (listener-sources listener)))
+                                :sources (listener-sources listener)
+                                :embedder (listener-embedder listener)))
                        (input (if hello-p
                                   stream
                                   (make-concatenated-stream

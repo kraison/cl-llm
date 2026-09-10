@@ -18,6 +18,12 @@ export CL_LLM_MEMORY_BUFFER_POOL="${CL_LLM_MEMORY_BUFFER_POOL:-2000}"
 export CL_LLM_MEMORY_SCOPE="${CL_LLM_MEMORY_SCOPE:-}"
 export CL_LLM_MEMORY_WRITE="${CL_LLM_MEMORY_WRITE:-}"
 export CL_LLM_MEMORY_QUERY_TOOL="${CL_LLM_MEMORY_QUERY_TOOL:-}"
+# The semantic endpoint index (#78): an empty URL leaves it off; the
+# model and the floor are required with one, the key only if it is.
+export CL_LLM_MEMORY_EMBED_URL="${CL_LLM_MEMORY_EMBED_URL:-}"
+export CL_LLM_MEMORY_EMBED_MODEL="${CL_LLM_MEMORY_EMBED_MODEL:-}"
+export CL_LLM_MEMORY_EMBED_KEY="${CL_LLM_MEMORY_EMBED_KEY:-}"
+export CL_LLM_MEMORY_EMBED_FLOOR="${CL_LLM_MEMORY_EMBED_FLOOR:-}"
 # The tested tree is this checkout unless the caller names others.
 export CL_LLM_ASDF_REGISTRY="${CL_LLM_ASDF_REGISTRY:-$REPO/}"
 export LC_ALL="${LC_ALL:-C.UTF-8}"

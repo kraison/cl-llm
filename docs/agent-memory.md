@@ -533,13 +533,25 @@ scripts/run-memory.sh   # logs to stdout; SIGTERM or Ctrl-C closes the store
 | `CL_LLM_MEMORY_PRODUCER` | `claude-code/<hostname>` |
 | `CL_LLM_MEMORY_BUFFER_POOL` | `2000` |
 | `CL_LLM_MEMORY_CLOCK` | `~/.cl-llm-memory/clock/` |
+| `CL_LLM_MEMORY_EMBED_URL` | empty; embeddings base URL; turns the index on |
+| `CL_LLM_MEMORY_EMBED_MODEL` | empty; required with a URL |
+| `CL_LLM_MEMORY_EMBED_KEY` | empty; a bearer token, when one is wanted |
+| `CL_LLM_MEMORY_EMBED_FLOOR` | empty; required with a URL: the cosine floor |
 | `CL_LLM_ASDF_REGISTRY` | the checkout the script lives in |
 
 The image builds from the trees in `CL_LLM_ASDF_REGISTRY`
 (colon-separated, ahead of Quicklisp's own search), the same variable
 the solo server reads, and its banner ends with `graph-db <dir>`
 naming the engine it resolved -- a mismatched checkout shows there,
-not at the first missing symbol (#72).
+not at the first missing symbol (#72). The segment before it reads
+`index <model>` or `index off`, the semantic index's state for this run
+("Semantic routing" below):
+
+```
+memory image: :cl-llm-memory at /tmp/x78/working/ as claude-code/odm; \
+clock /tmp/x78/clock/; swank 127.0.0.1:4108; mcp off; index off; \
+graph-db /home/raison/work/vg-c3/
+```
 
 The image refuses a store left dirty (`store-not-closed-cleanly-error`,
 exit 1) rather than open a torn one; the exit hook closes the graph on
@@ -681,6 +693,82 @@ decodes as NIL, so the tool sees NIL rather than its declared default
 and answers with the refusal as text with `isError`; omit the key to
 get the default.
 
+### Semantic routing
+
+`retrieve` and `plan-bounds` find endpoints by *token* -- the
+vocabulary of names in the store. A paraphrase that shares no token
+with any name finds nothing, and the tool refuses rather than answer
+from the model's own memory. The semantic endpoint index closes that
+gap: each endpoint's profile (its current beliefs, rendered) is
+embedded, and a query the vocabulary misses is matched against those
+vectors, above a cosine floor ("Endpoint profiles", #78).
+
+It is **off unless configured**, in both modes. Set an
+OpenAI-compatible embeddings endpoint and the two required companions:
+
+```sh
+export CL_LLM_MEMORY_EMBED_URL=http://127.0.0.1:11434/v1
+export CL_LLM_MEMORY_EMBED_MODEL=nomic-embed-text
+export CL_LLM_MEMORY_EMBED_FLOOR=0.55
+export CL_LLM_MEMORY_EMBED_KEY=            # only if the endpoint wants one
+```
+
+An empty (or unset) URL leaves the tools exactly as they were, lexical
+only. A URL without a model or a floor is a configuration error, and so
+is a floor that is not a real in [0, 1]. The endpoint need not be on
+the memory host: it is an HTTP round trip, so a GPU box elsewhere on
+the tailnet serves both modes.
+
+**The worker.** Each process runs one endpoint indexer (the memory
+image, or each solo server). It sweeps at start, then drains after
+every `conclude` and `retract`; the write itself never waits on the
+embedder, and a query never embeds a profile -- only the query string.
+An embedder outage is one stderr line per outage and a doubling
+backoff, and the tools stay lexical meanwhile: an endpoint the worker
+has not re-embedded is still reachable by name. The worker is stopped
+and joined before the store closes.
+
+**The floor** is the one number worth calibrating, and it is
+per-embedder: too low and `retrieve` answers about whatever was
+nearest instead of refusing, which is the failure the refusal exists to
+prevent. Measure it against the store rather than guess -- in the
+image's REPL, over SWANK:
+
+```lisp
+(let ((ee (agent:make-endpoint-embedder
+           (cl-llm.rag:make-openai-compatible-embedder
+            :base-url "http://127.0.0.1:11434/v1"
+            :model "nomic-embed-text")
+           :floor 0.0)))            ; unused here; the constructor wants one
+  ;; RAG:EMBED is what ENDPOINT-EMBEDDER-EMBED wraps; every score is
+  ;; returned, so the floor is chosen from the numbers, not guessed.
+  (mem:nearest-endpoints
+   *graph*
+   (cl-llm.rag:embed (agent:endpoint-embedder-embedder ee)
+                     "why did the ledger roll back")
+   :k 20 :model (agent:endpoint-embedder-model ee)))
+;; => (((:INCIDENT . "ledger-rollback-2026-08-30") . 0.71) ...)
+```
+
+Run a handful of real queries -- ones that should hit and ones that
+should not -- and put the floor in the gap between them.
+
+**A model change re-embeds.** Every vector records the model that made
+it, and `nearest-endpoints` ignores another model's. Point
+`CL_LLM_MEMORY_EMBED_MODEL` at a different model and the whole store is
+re-embedded in the background over the next drains; the tools serve
+lexically until it catches up, and no query blocks.
+
+**A dimension change resets.** The vector segment holds one dimension.
+Each entry point embeds a single probe string at start, and resets the
+segment when the dimension differs -- before the listener accepts a
+connection and before the worker starts, because the engine's segment
+rebuild is unsafe against a concurrent search. Every vector is dropped
+and re-made from scratch. An embedder that will not answer that probe
+is reported once on stderr and leaves the index off for that run: the
+image still serves its store and its SWANK, and the solo server still
+completes the handshake.
+
 ### Telling an agent to use it
 
 Configuring the server makes the tools *reachable*; it does not make an
@@ -703,16 +791,18 @@ to adapt.
 
 Both modes close the store on EOF, on SIGTERM (SBCL runs its exit
 hooks on SIGTERM), and on normal exit, in one idempotent `stop`: the
-listener first, then each store with `*graph*` bound and without the
-snapshot `close-graph` takes by default -- that snapshot is unbounded
-work before the `.dirty` marker clears, and a backup is a separate
-operation -- then the clock. Claude Code sends a spawned stdio server
-SIGTERM and then SIGKILL after an undocumented grace period, sends no
-MCP-level goodbye, and never respawns a crashed stdio server; whether
-concurrent sessions share a user-scoped stdio server is undocumented,
-and the solo mode assumes they do not, which is why a held store is
-refused rather than shared. SIGKILL leaves at worst a `.dirty` marker
-for the write-ahead log to recover on the next open.
+endpoint indexer first (it writes to the stores, so it is joined before
+anything closes them), then the listener, then each store with
+`*graph*` bound and without the snapshot `close-graph` takes by
+default -- that snapshot is unbounded work before the `.dirty` marker
+clears, and a backup is a separate operation -- then the clock. Claude
+Code sends a spawned stdio server SIGTERM and then SIGKILL after an
+undocumented grace period, sends no MCP-level goodbye, and never
+respawns a crashed stdio server; whether concurrent sessions share a
+user-scoped stdio server is undocumented, and the solo mode assumes
+they do not, which is why a held store is refused rather than shared.
+SIGKILL leaves at worst a `.dirty` marker for the write-ahead log to
+recover on the next open.
 
 ## What this is not
 

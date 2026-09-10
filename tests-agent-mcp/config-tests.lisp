@@ -67,3 +67,38 @@ while the stores are open.  Idempotent: a second CLOSE-SCOPE is a no-op."
         (declare (ignore write))
         (is (= 2 (length stores)) "reopens clean")
         (mcp:close-scope stores clock)))))
+
+(test the-embedder-comes-from-the-environment-or-is-absent
+  "SS5: the semantic index's embedder is the four CL_LLM_MEMORY_EMBED_*
+variables.  An empty (or unset) URL is inert; with a URL the model and
+the floor are required, and the floor must read as a real in [0, 1]."
+  (let ((saved (mapcar (lambda (n) (cons n (uiop:getenv n)))
+                       '("CL_LLM_MEMORY_EMBED_URL"
+                         "CL_LLM_MEMORY_EMBED_MODEL"
+                         "CL_LLM_MEMORY_EMBED_KEY"
+                         "CL_LLM_MEMORY_EMBED_FLOOR"))))
+    (unwind-protect
+         (progn
+           (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_URL") "")
+           (is (null (mcp:embedder-from-env)) "empty URL: inert")
+           (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_URL")
+                 "http://127.0.0.1:1/v1"
+                 (uiop:getenv "CL_LLM_MEMORY_EMBED_MODEL") "m"
+                 (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR") "0.42")
+           (let ((ee (mcp:embedder-from-env)))
+             (is (agent:endpoint-embedder-p ee))
+             (is (string= "m" (agent:endpoint-embedder-model ee)))
+             (is (= 0.42 (agent:endpoint-embedder-floor ee))))
+           ;; No round trip is made here: the URL is a closed port.
+           (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR") "not-a-number")
+           (signals (error "a floor that is not a number")
+             (mcp:embedder-from-env))
+           (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR") "1.5")
+           (signals (error "a floor outside [0, 1]")
+             (mcp:embedder-from-env))
+           (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR") "")
+           (signals (error "a URL needs a floor") (mcp:embedder-from-env))
+           (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR") "0.5"
+                 (uiop:getenv "CL_LLM_MEMORY_EMBED_MODEL") "")
+           (signals (error "and a model") (mcp:embedder-from-env)))
+      (dolist (p saved) (setf (uiop:getenv (car p)) (or (cdr p) ""))))))

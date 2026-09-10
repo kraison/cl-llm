@@ -71,20 +71,24 @@ Other conditions propagate to RUN-SERVER's loop (SS7)."
 
 (defun make-memory-server (stores &key write-store producer sources
                                        (k 5) (max-rows 50) query-tool
+                                       embedder
                                        (name "cl-llm-memory")
                                        (version "0.1"))
   "A cl-mcp server with one MCP tool per agent tool over STORES (trust
 order) writing to WRITE-STORE as PRODUCER, caps K and MAX-ROWS, SOURCES
 added to the planner -- MAKE-AGENT-TOOLS' arguments, so every bound is
-fixed here and the model chooses arguments only.  QUERY-TOOL adds the
-guarded Prolog tool over the store list (scope-blind, recon C9).  One
-server per connection: cl-mcp keeps the output stream in it (recon
+fixed here and the model chooses arguments only.  EMBEDDER, an
+ENDPOINT-EMBEDDER, routes retrieval through the semantic endpoint index
+as well as the vocabulary (#78); NIL is lexical only.  QUERY-TOOL adds
+the guarded Prolog tool over the store list (scope-blind, recon C9).
+One server per connection: cl-mcp keeps the output stream in it (recon
 C10)."
   (let ((server (mcp:make-server :name name :version version)))
     (dolist (tool (agent:make-agent-tools stores :write-store write-store
                                                  :producer producer
                                                  :sources sources
-                                                 :k k :max-rows max-rows))
+                                                 :k k :max-rows max-rows
+                                                 :embedder embedder))
       (register-llm-tool server tool))
     (when query-tool
       (register-llm-tool server (%query-tool stores max-rows)))

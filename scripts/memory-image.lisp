@@ -20,6 +20,11 @@
 ;;;;   CL_LLM_MEMORY_QUERY_TOOL   1 adds the guarded Prolog tool
 ;;;;   CL_LLM_MEMORY_K            retrieval cap for MCP connections
 ;;;;   CL_LLM_MEMORY_MAX_ROWS     row cap for MCP connections
+;;;;   CL_LLM_MEMORY_EMBED_URL    semantic index: OpenAI-compatible
+;;;;                              embeddings base URL; empty is off
+;;;;   CL_LLM_MEMORY_EMBED_MODEL  its model, required with a URL
+;;;;   CL_LLM_MEMORY_EMBED_KEY    its API key, when it needs one
+;;;;   CL_LLM_MEMORY_EMBED_FLOOR  cosine floor, required with a URL
 ;;;;   CL_LLM_ASDF_REGISTRY       colon-separated trees ahead of
 ;;;;                              Quicklisp's search; the banner names
 ;;;;                              the graph-db it resolved (#72)
@@ -52,6 +57,11 @@ on disk: a store reopened without it silently resumes its own counter
 (S6b recon C1), so every open here passes it.")
 (defvar *listener* nil
   "The MCP listener, or NIL when CL_LLM_MEMORY_MCP_PORT is empty.")
+(defvar *embedder* nil
+  "The semantic index's embedder, or NIL when the index is off for this
+run -- unconfigured, misconfigured, or the probe failed (#78 SS5).")
+(defvar *indexer* nil
+  "The endpoint indexer worker; NIL whenever *EMBEDDER* is.")
 
 (defun %env (name &optional default)
   (let ((v (sb-ext:posix-getenv name)))
@@ -65,11 +75,13 @@ on disk: a store reopened without it silently resumes its own counter
 
 (defun start ()
   "Open the store (make it when absent), bind it as the current graph,
-start SWANK, then the MCP listener unless CL_LLM_MEMORY_MCP_PORT is
-empty, return the graph.  A listener that will not start is reported
-and skipped; the store's own refusals are not: it lets
-GDB:STORE-NOT-CLOSED-CLEANLY-ERROR through rather than open a store
-another image left dirty."
+reset the semantic index's vector segment, start SWANK, then the MCP
+listener unless CL_LLM_MEMORY_MCP_PORT is empty, then the endpoint
+indexer; return the graph.  A listener that will not start is reported
+and skipped, and so is an embedder that will not answer (the banner
+reads \"mcp off\" / \"index off\"); the store's own refusals are not:
+it lets GDB:STORE-NOT-CLOSED-CLEANLY-ERROR through rather than open a
+store another image left dirty."
   (let* ((store (%dir (%env "CL_LLM_MEMORY_STORE"
                             (%home ".cl-llm-memory/working/"))))
          (system (%dir (%env "CL_LLM_MEMORY_SYSTEM"
@@ -93,6 +105,24 @@ another image left dirty."
               (gdb:make-graph name store :buffer-pool-size pool
                               :system-clock *clock*)))
     (setf gdb:*graph* *graph*)
+    ;; Before the listener and the worker: the dimension is known only
+    ;; from an embedding, and the engine's segment rebuild is unsafe
+    ;; against a concurrent search (#78 SS4.3 step 4).  Guarded like the
+    ;; listener below -- a down or misconfigured embedder costs this run
+    ;; its index, never the image's store or its REPL.
+    (handler-case
+        (let ((ee (mcp:embedder-from-env)))
+          (when ee
+            (mem:reset-endpoint-segment
+             *graph*
+             (length (funcall (agent:endpoint-embedder-embed ee) "probe")))
+            (setf *embedder* ee)))
+      (error (c)
+        (ignore-errors
+         (format *error-output*
+                 "~&memory image: semantic index off: ~a~%" c)
+         (finish-output *error-output*))
+        (setf *embedder* nil)))
     ;; Raw, not %ENV: empty means off, only unset defaults (#75).
     (let ((mcp-port (or (sb-ext:posix-getenv "CL_LLM_MEMORY_MCP_PORT")
                         "4009"))
@@ -122,34 +152,51 @@ another image left dirty."
                    ;; The connection's caps are the image's (#58).
                    :k (parse-integer (%env "CL_LLM_MEMORY_K" "5"))
                    :max-rows (parse-integer
-                              (%env "CL_LLM_MEMORY_MAX_ROWS" "50"))))
+                              (%env "CL_LLM_MEMORY_MAX_ROWS" "50"))
+                   :embedder *embedder*))
           (error (c)
             (ignore-errors
              (format *error-output*
                      "~&memory image: mcp listener disabled: ~a~%"
                      (type-of c)))
             (setf *listener* nil))))
+      ;; One worker per image, logging to this call's *ERROR-OUTPUT*
+      ;; (stderr here) -- a new thread sees only the global stream.
+      (when *embedder*
+        (setf *indexer*
+              (mem:start-endpoint-indexer
+               (list *graph*)
+               :embed (agent:endpoint-embedder-embed *embedder*)
+               :model (agent:endpoint-embedder-model *embedder*))))
       ;; graph-db's source directory: a mismatched engine shows here,
       ;; not at the first missing symbol (#72).
       (format t "~&memory image: ~(~S~) at ~A as ~A; clock ~A; ~
-swank 127.0.0.1:~D; ~A; graph-db ~A~%"
+swank 127.0.0.1:~D; ~A; ~A; graph-db ~A~%"
               name store *producer* clock-dir port
               (if *listener*
                   (format nil "mcp ~A:~A" mcp-bind
                           (mcp:listener-port *listener*))
                   "mcp off")
+              (if *embedder*
+                  (format nil "index ~A"
+                          (agent:endpoint-embedder-model *embedder*))
+                  "index off")
               (asdf:system-source-directory
                (asdf:find-system :graph-db))))
     (finish-output)
     *graph*))
 
 (defun stop ()
-  "Stop the listener, close the store without a snapshot (unbounded work
-before the .dirty marker clears; a backup is a separate operation), then
-the clock; never signals.  The exit hook: SBCL runs *EXIT-HOOKS* on
-SIGTERM (measured in docs/superpowers/notes/2026-09-06-memory-mcp-
-engine-api-facts.md E5), so a stop from the shell or systemd leaves no
-.dirty marker."
+  "Stop the indexer, then the listener, then close the store without a
+snapshot (unbounded work before the .dirty marker clears; a backup is a
+separate operation), then the clock; never signals.  The worker writes
+to the store, so it is joined first.  The exit hook: SBCL runs
+*EXIT-HOOKS* on SIGTERM (measured in docs/superpowers/notes/
+2026-09-06-memory-mcp-engine-api-facts.md E5), so a stop from the shell
+or systemd leaves no .dirty marker."
+  (when *indexer*
+    (mem:stop-endpoint-indexer *indexer*)
+    (setf *indexer* nil))
   (when *listener*
     (mcp:stop-listener *listener*)
     (setf *listener* nil))
