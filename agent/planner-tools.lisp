@@ -14,15 +14,26 @@ colon (namespaces are canonical [a-z0-9-])."
 (defun %claim-sources (scope endpoints)
   "One claim source per store in scope.  Each recognises ENDPOINTS
 first, never displaced, then what its own vocabulary finds in the
-query, the union capped at twice the scope's k (SS4.2, #64).  The
-vocabularies are walked once here, under the scope snapshot; the
-store rides on the source object for rendering."
+query and -- with an embedder on the scope -- what its semantic index
+puts nearest it, the union capped at twice the scope's k (SS4.2, #64;
+#78 R2).  The vocabularies are read once here, under the scope
+snapshot; the store rides on the source object for rendering.  The
+query is embedded at most once per call, however many stores are in
+scope and however often each extractor runs (#78 R7)."
   (let* ((cap (* 2 (scope-k scope)))
          (stores (scope-stores scope))
+         (ee (scope-embedder scope))
+         (cache (make-hash-table :test 'equal))
+         (qv (and ee (lambda (q)
+                       (or (gethash q cache)
+                           (setf (gethash q cache)
+                                 (funcall (endpoint-embedder-embed ee)
+                                          q))))))
          (extractors (mem:with-scope-snapshots (stores)
                        (mapcar (lambda (g)
-                                 (make-key-extractor (mem:vocabulary g)
-                                                     :cap cap))
+                                 (make-hybrid-key-extractor
+                                  g (mem:vocabulary g) ee
+                                  :cap cap :query-vector qv))
                                stores))))
     (mapcar (lambda (g extract)
               (claims:make-claim-source

@@ -260,10 +260,11 @@ retrieval planner (#14 unit 2)."
   :depends-on ("cl-llm" "cl-llm/memory" "cl-llm/rag/claims")
   :serial t
   :pathname "agent/"
+  ;; EXTRACT before SCOPE: MAKE-SCOPE checks ENDPOINT-EMBEDDER-P (#78).
   :components ((:file "packages")
-               (:file "scope")
                (:file "render")
                (:file "extract")
+               (:file "scope")
                (:file "memory-tools")
                (:file "taxonomy-tool")
                (:file "planner-tools")

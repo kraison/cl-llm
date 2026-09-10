@@ -207,6 +207,17 @@ mid-drain sets it again and is picked up by the next pass rather than
 lost: `drain-endpoint-vectors` takes each store's dirty set once, and
 one pass is not promised to empty it.
 
+**Who notifies.** `record-belief` and `retract-belief` do not: they know
+nothing of a worker, and a memory image with no indexer must not pay
+for one. The agent tools do -- `conclude` and `retract` call
+`notify-endpoint-indexer` once their transaction has committed, and
+`conclude-absence` does not, because an absence touches no endpoint. A
+program that writes through `record-belief` directly is therefore
+responsible for its own notify; without one the endpoint waits for the
+worker's next sweep, and stays reachable lexically meanwhile. The agent
+side of this -- `make-agent-tools`' `:embedder`, and how `retrieve`
+uses the index -- is in `docs/agent-tools.md`.
+
 An embedder error is logged to `*error-output*` once per outage, not
 once per attempt, and retried after a backoff that doubles from the
 `:backoff` argument (default 1 s) up to 60 s. That backoff is a

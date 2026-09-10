@@ -180,6 +180,11 @@ the belief starts to hold (RFC 3339; default now)."
                 :rule rule :rule-version rule-version
                 :confidence confidence
                 :scope (scope-stores scope))))
+       ;; The write path never embeds; it wakes the worker once its
+       ;; transaction has committed (#78 SS4.3).  A refused or
+       ;; idempotent conclude touched no endpoint, and the notify is
+       ;; then a drain that finds nothing -- cheaper than deciding here.
+       (mem:notify-endpoint-indexer)
        (%decision-json scope d)))))
 
 (defun %conclude-absence-tool (scope)
@@ -249,6 +254,8 @@ a read-only store is an error."
            (let ((retracted
                    (gdb:with-transaction (:graph g)
                      (mem:retract-belief claim))))
+             ;; Both endpoints lost a line (#78 SS4.2).
+             (mem:notify-endpoint-indexer)
              (json:to-json
               (json:jobject
                "cite" cite

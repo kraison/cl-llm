@@ -94,3 +94,54 @@ straight to the raw constructor, which does."
 (defun %call (tools name &rest plist)
   "Call tool NAME as the model would and parse its JSON result."
   (json:parse (llm:call-tool (%tool tools name) (apply #'%args plist))))
+
+;;; A deterministic embedder for the semantic index tests (#78 SS7):
+;;; each concept is one dimension; a word not in the table hashes into
+;;; the upper half, so an unrelated word never touches a concept.  It
+;;; still collides with another hashed word, which is why the queries
+;;; below are chosen with a margin either side of the floor -- see
+;;; docs/superpowers/specs/2026-09-10-semantic-memory-indexing-design.
+(defparameter +concepts+
+  '(("rollback" "reverted" "revert" "rolled" "undo" "undone")
+    ("deploy" "deployment" "release" "shipped" "rollout")
+    ("database" "db" "store" "replica")
+    ("outage" "incident" "failure" "broke")
+    ("cause" "reason" "because" "why" "root")
+    ("reindex" "reindexing" "index" "maintenance")
+    ("nightly" "periodic" "scheduled" "cron")
+    ("checksum" "mismatch" "corrupt")
+    ("august" "2026" "08")
+    ("ledger" "ledgers")
+    ("freeze" "frozen" "halt")))
+
+(defparameter +embed-dimension+ 32)
+
+(defclass %synonym-embedder (rag:embedder) ()
+  (:default-initargs :model "synonym-test"))
+
+(defun %concept-index (word)
+  (or (position-if (lambda (row) (member word row :test #'string=))
+                   +concepts+)
+      (+ (length +concepts+)
+         (mod (rag::string-hash word)
+              (- +embed-dimension+ (length +concepts+))))))
+
+(defmethod rag:embed ((e %synonym-embedder) input)
+  (flet ((one (text)
+           (let ((v (make-array +embed-dimension+
+                                :element-type 'double-float
+                                :initial-element 0d0)))
+             (dolist (w (rag::words text))
+               (incf (aref v (%concept-index w)) 1d0))
+             (rag:as-embedding v))))
+    (if (listp input) (mapcar #'one input) (one input))))
+
+(defun %embedder (&key (floor 0.3))
+  (agent:make-endpoint-embedder (make-instance '%synonym-embedder)
+                                :floor floor))
+
+(defun %drain (stores ee)
+  "Embed every dirty endpoint of STORES with EE, as the worker would."
+  (mem:drain-endpoint-vectors
+   stores :embed (agent:endpoint-embedder-embed ee)
+          :model (agent:endpoint-embedder-model ee)))
