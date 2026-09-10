@@ -143,6 +143,39 @@ against beliefs it no longer holds; with no embedder configured the
 lexical-only (spec 2026-09-10-semantic-memory-indexing-design SS2,
 SS4.2).
 
+### The dirty set, the drain and the rebuild
+
+Nothing records dirtiness: an endpoint **is** dirty when it has a
+current belief and its `endpoint-vector` holds no conforming vector, or
+one from another model. `dirty-endpoints` derives that from the store's
+vocabulary, so it survives a crash, an exit or a lost worker unchanged.
+
+`drain-endpoint-vectors` embeds that set in the calling thread and
+returns the number embedded. It takes an embedding *function* (text to
+a `(simple-array single-float (*))`) and a model name, never a
+`cl-llm/rag` embedder: `cl-llm/memory` depends on no LLM. Per store it
+first runs `materialise-endpoint-vectors`, which gives every vocabulary
+endpoint a vector-less vertex, so from then on the drain and the write
+path only ever update existing nodes. Then, per endpoint, it renders,
+embeds and stores **inside one transaction**: a write that clears the
+same endpoint in between is a write to a claim the render read, so the
+commit fails the engine's validation (`GRAPH-DB:VALIDATION-CONFLICT`)
+and the retry re-renders. A drain that rendered outside its transaction
+would overwrite a fresh clear with a stale vector and nothing would
+re-embed it. An embedder error propagates and leaves the endpoint
+dirty; the next drain retries it.
+
+`rebuild-endpoint-vectors` clears every vector first, so it re-embeds
+clean endpoints too — a model or a corpus change. `nearest-endpoints`
+searches the segment and answers `((namespace . key) . cosine)` best
+first, one entry per endpoint.
+
+A *dimension* change is not something the drain can absorb: an empty
+segment keeps its dimension, and the engine's only drop is unsafe
+against a concurrent search. `reset-endpoint-segment` clears every
+vector and drops the segment, returning `T` when it reset; it must run
+at start, before anything can search (spec SS4.3).
+
 ## Capturing a memory directory
 
 The proving corpus is the agent's own memory files

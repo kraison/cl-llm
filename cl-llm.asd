@@ -206,7 +206,10 @@
   :license "MIT"
   ;; graph-db/spacetime only -- never cl-llm core or cl-llm/rag: this
   ;; tenant needs no LLM (spec 2026-09-01-agent-memory-tenant SS8).
-  :depends-on ("graph-db/spacetime" "ironclad" "babel")
+  ;; BORDEAUX-THREADS for the semantic index's worker (#78 SS4.3);
+  ;; graph-db already loads it, so no new code arrives.
+  :depends-on ("graph-db/spacetime" "ironclad" "babel"
+               "bordeaux-threads")
   :serial t
   :pathname "memory/"
   :components ((:file "packages")
@@ -216,6 +219,7 @@
                (:file "scope")
                (:file "recall")
                (:file "vocabulary")
+               (:file "index")
                (:file "capture")
                (:file "banners")
                (:file "cite")
@@ -237,6 +241,7 @@
                (:file "recall-tests")
                (:file "vocabulary-tests")
                (:file "profile-tests")
+               (:file "index-tests")
                (:file "capture-tests")
                (:file "cite-tests")
                (:file "trace-tests")
