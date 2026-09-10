@@ -31,7 +31,7 @@
    ;; the semantic index (#78)
    #:nearest-endpoints #:dirty-endpoints #:materialise-endpoint-vectors
    #:drain-endpoint-vectors #:rebuild-endpoint-vectors
-   #:reset-endpoint-segment
+   #:reset-endpoint-segment #:*embed-passes*
    ;; scope (S6b)
    #:check-scope #:scope-argument-error
    #:call-with-scope-snapshots #:with-scope-snapshots

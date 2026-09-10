@@ -156,17 +156,28 @@ a `(simple-array single-float (*))`) and a model name, never a
 `cl-llm/rag` embedder: `cl-llm/memory` depends on no LLM. Per store it
 first runs `materialise-endpoint-vectors`, which gives every vocabulary
 endpoint a vector-less vertex, so from then on the drain and the write
-path only ever update existing nodes. Then, per endpoint, it renders,
-embeds and stores **inside one transaction**: a write that clears the
-same endpoint in between is a write to a claim the render read, so the
-commit fails the engine's validation (`GRAPH-DB:VALIDATION-CONFLICT`)
-and the retry re-renders. A drain that rendered outside its transaction
-would overwrite a fresh clear with a stale vector and nothing would
-re-embed it. An embedder error propagates and leaves the endpoint
-dirty; the next drain retries it.
+path only ever update existing nodes.
+
+Then, per endpoint, up to `*embed-passes*` (4) passes of: render the
+profile under a read snapshot, call the embedder **outside every
+transaction**, then in one transaction re-render and store the vector
+only when the text is unchanged. The embedder stays outside because it
+is a network round trip and the engine's ninth attempt at a
+transaction runs the body under the global transaction-manager lock,
+which would stall every writer -- and would bill a hot endpoint for
+nine embeddings. The two windows a racing write can land in are both
+closed: one that commits before the re-render changes the text, so
+nothing is stored and the pass repeats; one that commits after it
+fails the store's validation, because `touch-endpoints` saves every
+live vertex of the endpoint whether or not it held a vector, and that
+write-set entry is the only thing a create-only writer -- a first
+belief, nothing superseded -- gives the drain to validate against. An
+endpoint whose profile changes under all four passes is left dirty
+rather than embedded from a text it no longer has, as is one whose
+embedder signalled; the next drain retries it.
 
 `rebuild-endpoint-vectors` clears every vector first, so it re-embeds
-clean endpoints too — a model or a corpus change. `nearest-endpoints`
+clean endpoints too -- a model or a corpus change. `nearest-endpoints`
 searches the segment and answers `((namespace . key) . cosine)` best
 first, one entry per endpoint.
 

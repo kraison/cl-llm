@@ -128,21 +128,26 @@ entries die with their transaction.")
 (defun touch-endpoints (graph endpoints)
   "Clear the vector of every live ENDPOINT-VECTOR of every (NAMESPACE
 . KEY) in ENDPOINTS, creating one when none exists; each endpoint
-handled once per transaction per GRAPH.  A never-indexed endpoint
-touched from two transactions can end up with more than one live
-vertex -- benign (R-a): every live one found here gets cleared, not
-just the first.  Must run inside the caller's transaction (SS4.2).
-Never embeds."
+handled once per transaction per GRAPH.  Every live vertex is COPY'd
+and SAVE'd even when it already holds no vector: GDB:SAVE records a
+TX-UPDATE unconditionally, and that write set entry is the only thing
+a concurrent drain's commit validates against.  Without it a
+create-only writer -- a first belief, no supersession, whose own
+claims are all creates -- is invisible to the drain's validation and
+leaves a stale vector nothing re-embeds (#78 SS4.3 step 2).  A
+never-indexed endpoint touched from two transactions can end up with
+more than one live vertex -- benign (R-a): every live one found here
+is cleared, not just the first.  Must run inside the caller's
+transaction (SS4.2).  Never embeds."
   (dolist (ep (remove-duplicates endpoints :test #'equal))
     (unless (%already-touched-p graph ep)
       (%mark-touched graph ep)
       (let ((evs (%endpoint-vectors-of graph (car ep) (cdr ep))))
         (if evs
             (dolist (ev evs)
-              (when (endpoint-vector-value ev)
-                (let ((c (gdb:copy ev)))
-                  (setf (embedding c) nil (ev-model c) "")
-                  (gdb:save c))))
+              (let ((c (gdb:copy ev)))
+                (setf (embedding c) nil (ev-model c) "")
+                (gdb:save c)))
             (make-endpoint-vector :graph graph
                                   :ev-namespace (car ep) :ev-key (cdr ep)
                                   :ev-model ""))))))

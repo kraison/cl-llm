@@ -75,29 +75,68 @@ concurrently, and a duplicate vertex is benign (SS2.5)."
                               :ev-key key :ev-model model
                               :embedding vector))))
 
+(defparameter *embed-passes* 4
+  "Render-embed-store passes one endpoint gets before the drain leaves
+it dirty for the next one (SS4.3 step 2).")
+
+(defun %clear-one-endpoint (graph namespace key)
+  "Clear the vector of every live vertex of the endpoint that holds
+one; => T when it wrote, NIL when there was nothing to clear (and then
+no transaction was opened).  Nothing is current, so nothing may stay
+searchable (SS4.1)."
+  (when (find-if #'endpoint-vector-value
+                 (%endpoint-vectors-of graph namespace key))
+    (gdb:with-transaction (:graph graph)
+      (dolist (ev (%endpoint-vectors-of graph namespace key) t)
+        (when (endpoint-vector-value ev)
+          (let ((c (gdb:copy ev)))
+            (setf (embedding c) nil (ev-model c) "")
+            (gdb:save c)))))))
+
 (defun %embed-endpoint (graph namespace key embed model)
-  "Render, embed and store one endpoint in ONE transaction; => T when a
-vector was written, NIL when nothing is current (the vertex then keeps
-no vector).  The render and the EMBED call are inside the transaction
-on purpose (SS4.3 step 2): a touch committing between them is a write
-to a claim this render read, so the commit fails the engine's
-validation and the retry re-renders.  Rendering outside and storing in
-a small transaction would overwrite a fresh clear with a stale vector,
-and nothing would ever re-embed it.  No WITH-SCOPE-SNAPSHOTS here: the
-transaction is the snapshot, and a scope read inside one is refused.
-An error from EMBED propagates, leaving the endpoint dirty."
-  (gdb:with-transaction (:graph graph)
-    (let ((text (endpoint-profile graph namespace key)))
-      (when text
-        (%store-vector graph namespace key (funcall embed text) model)
-        t))))
+  "Render, embed and store one endpoint; => T when a vector was
+written, NIL when nothing is current or the profile kept changing.
+
+The EMBED call runs OUTSIDE every transaction (SS4.3 step 2): an
+embedder is a network round trip, and the engine's ninth attempt at a
+transaction runs the body under the GLOBAL transaction-manager lock,
+which would stall every writer in the image -- and a hot endpoint
+would be billed for up to nine embeddings.  So each pass is: render
+under a read snapshot, embed outside, then in ONE transaction
+re-render and store only when the text is unchanged.  The re-render
+records its reads and the store writes the vertex, so a touch that
+commits before the re-render changes the text and a touch that commits
+after it fails the commit's validation -- which is why TOUCH-ENDPOINTS
+saves every live vertex, vector or not.  A changed profile is embedded
+again, at most *EMBED-PASSES* times, after which the endpoint stays
+dirty for the next drain.  An error from EMBED propagates, leaving the
+endpoint dirty."
+  (loop repeat *embed-passes*
+        do (let ((text (with-scope-snapshots ((list graph))
+                         (endpoint-profile graph namespace key))))
+             (unless text
+               (%clear-one-endpoint graph namespace key)
+               (return nil))
+             (let ((vector (funcall embed text)))
+               (when (eq t (gdb:with-transaction (:graph graph)
+                             (if (string= text (endpoint-profile
+                                                graph namespace key))
+                                 (progn
+                                   (%store-vector graph namespace key
+                                                  vector model)
+                                   t)
+                                 :changed)))
+                 (return t))))))
 
 (defun drain-endpoint-vectors (stores &key embed model)
   "Materialise, then embed every dirty endpoint of every store in
 STORES with EMBED under MODEL, in the calling thread; => the number
 embedded.  An EMBED error propagates after the endpoints before it were
-stored.  Trap: the dirty set is taken once per store, so an endpoint a
-write creates while the drain runs is left for the next one."
+stored.  Traps: the dirty set is taken once per store, so an endpoint a
+write creates while the drain runs is left for the next one; and an
+endpoint whose profile changes under every one of *EMBED-PASSES*
+passes is left dirty rather than embedded from a text it no longer
+has."
   (let ((n 0))
     (dolist (g stores n)
       (materialise-endpoint-vectors g)

@@ -28,6 +28,48 @@ counting calls in COUNTER's car; the first FAIL-TIMES calls signal."
     (setf (aref q 0) 1f0)
     q))
 
+(defun %near-far-embed (dimension near)
+  "EMBED giving a text that starts with NEAR the unit query itself
+(cosine 1) and every other text its 45-degree neighbour (cosine
+1/sqrt 2), so the NEAR endpoint must sort strictly first."
+  (lambda (text)
+    (let ((v (make-array dimension :element-type 'single-float
+                                   :initial-element 0f0)))
+      (setf (aref v 0) 1f0)
+      (unless (eql 0 (search near text))
+        (setf (aref v 1) 1f0))
+      v)))
+
+(defstruct (%embed-log (:conc-name %log-))
+  "What a race test's EMBED did: CALLS embeddings, TEXTS newest first,
+RACED once the interleaved write has fired."
+  (calls 0)
+  (texts '())
+  (raced nil))
+
+(defun %log-text (log n)
+  "The text LOG's Nth embed call (1-based) was given."
+  (nth (- (%log-calls log) n) (%log-texts log)))
+
+(defun %racing-embed (log race)
+  "EMBED for a race test: records each text in LOG, numbers the call in
+the vector's second component, and -- once, on the first text of the
+repo endpoint -- funcalls RACE from inside the embed, i.e. between the
+render and the store (#78 SS4.3 step 2)."
+  (lambda (text)
+    (push text (%log-texts log))
+    (incf (%log-calls log))
+    ;; The profile opens with the endpoint as words, so the key's
+    ;; hyphens are spaces there (SS2.2).
+    (when (and (not (%log-raced log))
+               (eql 0 (search "repo cl llm" text)))
+      (setf (%log-raced log) t)
+      (funcall race))
+    (let ((v (make-array 4 :element-type 'single-float
+                           :initial-element 0f0)))
+      (setf (aref v 0) 1f0 (aref v 1) (float (%log-calls log) 0f0))
+      v)))
+
 (test materialise-gives-every-endpoint-a-vector-less-vertex
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
@@ -70,13 +112,18 @@ counting calls in COUNTER's car; the first FAIL-TIMES calls signal."
 (test nearest-returns-endpoints-best-first-and-skips-other-models
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
-    (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 4)
-                                         :model "m")
+    (mem:drain-endpoint-vectors
+     (list g) :embed (%near-far-embed 4 "repo cl llm") :model "m")
     (let ((q (%unit-query 4)))
       (let ((hits (mem:nearest-endpoints g q :k 5 :model "m")))
         (is (= 2 (length hits)))
-        (is (every (lambda (h) (> (cdr h) 0.99)) hits))
-        (is (member '(:repo . "cl-llm") hits :key #'car :test #'equal)))
+        (is (equal '(:repo . "cl-llm") (car (first hits)))
+            "the nearer endpoint first: ~a" hits)
+        (is (equal '(:verdict . "green") (car (second hits))))
+        (is (> (cdr (first hits)) (cdr (second hits)))
+            "strictly better first: ~a" hits)
+        (is (> (cdr (first hits)) 0.99))
+        (is (< 0.7 (cdr (second hits)) 0.71) "45 degrees: ~a" hits))
       (is (null (mem:nearest-endpoints g q :k 5 :model "other"))
           "a vector from another model is not a hit"))))
 
@@ -169,39 +216,31 @@ counting calls in COUNTER's car; the first FAIL-TIMES calls signal."
 (test a-touch-between-render-and-store-never-leaves-a-stale-vector
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
-    (let* ((texts '()) (calls 0) (raced nil)
-           (embed
-             (lambda (text)
-               (push text texts)
-               (incf calls)
-               ;; The race (#78 SS4.3 step 2): commit a supersession of
-               ;; the belief this render just read, from BETWEEN the
-               ;; render and the store.  Once, on the repo endpoint.
-               ;; The profile opens with the endpoint as words, so
-               ;; the key's hyphens are spaces there (SS2.2).
-               (when (and (not raced) (eql 0 (search "repo cl llm" text)))
-                 (setf raced t)
-                 (%pbelief g '(:repo . "cl-llm") "ci-status"
-                           '(:verdict . "red") "2026-08-31T08:00:00Z"))
-               (let ((v (make-array 4 :element-type 'single-float
-                                      :initial-element 0f0)))
-                 (setf (aref v 0) 1f0 (aref v 1) (float calls 0f0))
-                 v))))
+    (let* ((log (make-%embed-log))
+           (embed (%racing-embed
+                   log
+                   ;; A SUPERSESSION: the writer closes the belief this
+                   ;; render read, so its write set names that claim.
+                   (lambda ()
+                     (%pbelief g '(:repo . "cl-llm") "ci-status"
+                               '(:verdict . "red")
+                               "2026-08-31T08:00:00Z")))))
       (mem:drain-endpoint-vectors (list g) :embed embed :model "m")
-      (is-true raced
-               "control: the supersession fired inside an embed call")
-      (is (= 2 calls) "the conflict forced exactly one re-render")
-      (is-true (search "verdict:red" (first texts))
-               "the last text embedded is the NEW profile: ~a"
-               (first texts))
-      (is-false (search "verdict:red" (car (last texts)))
-                "the first text embedded was the old profile")
+      (is-true (%log-raced log)
+               "control: the write fired inside an embed call")
+      (is (= 2 (%log-calls log))
+          "the changed profile forced exactly one re-embed")
+      (is-true (search "verdict:red" (%log-text log 2))
+               "the second call's text is the NEW profile: ~a"
+               (%log-text log 2))
+      (is-false (search "verdict:red" (%log-text log 1))
+                "control: the first call's text was the old profile")
       (let ((v (mem:endpoint-vector-value
                 (mem:endpoint-vector-of g :repo "cl-llm"))))
         (is-true v "the repo endpoint ended with a vector")
         (is (= 2f0 (aref v 1))
             "the stored vector is the SECOND render's, not the first's")
-        (is (= (float calls 0f0) (aref v 1))
+        (is (= (float (%log-calls log) 0f0) (aref v 1))
             "which is the last EMBED call: no later render was lost"))
       (is-false (mem:endpoint-dirty-p g :repo "cl-llm" "m")
                 "and the raced endpoint is clean")
@@ -209,4 +248,48 @@ counting calls in COUNTER's car; the first FAIL-TIMES calls signal."
           "only the endpoint the race created is left dirty")
       (is (= 1 (mem:drain-endpoint-vectors (list g) :embed embed
                                                     :model "m")))
-      (is (null (mem:dirty-endpoints g "m"))))))
+      (is-false (mem:dirty-endpoints g "m")))))
+
+(test a-new-belief-between-render-and-store-never-leaves-a-stale-vector
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (let* ((log (make-%embed-log))
+           (embed (%racing-embed
+                   log
+                   ;; A CREATE-ONLY writer: a FIRST belief on a new
+                   ;; relation, nothing superseded, so every claim it
+                   ;; writes is a create and its claim write set is
+                   ;; empty.  Only TOUCH-ENDPOINTS' unconditional save
+                   ;; of the endpoint's vertex makes it visible to a
+                   ;; concurrent drain's validation (SS4.3 step 2).
+                   (lambda ()
+                     (%pbelief g '(:repo . "cl-llm") "owner"
+                               '(:person . "kevin")
+                               "2026-08-31T08:00:00Z")))))
+      (mem:drain-endpoint-vectors (list g) :embed embed :model "m")
+      (is-true (%log-raced log)
+               "control: the write fired inside an embed call")
+      (let* ((v (mem:endpoint-vector-value
+                 (mem:endpoint-vector-of g :repo "cl-llm")))
+             (n (and v (round (aref v 1)))))
+        (is-true v "the repo endpoint ended with a vector")
+        (is (= 2 n) "the stored vector is the SECOND embed call's")
+        (is-true (search "owner person:kevin" (%log-text log n))
+                 "and that call's text already had the new belief: ~a"
+                 (%log-text log n))
+        (is-false (search "owner person:kevin" (%log-text log 1))
+                  "control: the first call's text predates it"))
+      ;; verdict:green is drained last and its profile never changed,
+      ;; so its vector is the LAST text's.
+      (is (= (float (%log-calls log) 0f0)
+             (aref (mem:endpoint-vector-value
+                    (mem:endpoint-vector-of g :verdict "green"))
+                   1))
+          "the last endpoint drained stored the last text's vector")
+      (is-false (mem:endpoint-dirty-p g :repo "cl-llm" "m")
+                "and the raced endpoint is clean")
+      (is (equal '((:person . "kevin")) (mem:dirty-endpoints g "m"))
+          "only the endpoint the race created is left dirty")
+      (is (= 1 (mem:drain-endpoint-vectors (list g) :embed embed
+                                                    :model "m")))
+      (is-false (mem:dirty-endpoints g "m")))))

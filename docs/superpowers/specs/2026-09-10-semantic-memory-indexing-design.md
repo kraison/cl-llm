@@ -223,18 +223,26 @@ One thread per process that has an embedder, started by
    count indexes make this a lookup, #361), and for each dirty one
    (4.1) enqueue it. This is also the bulk rebuild: a store copied in,
    or opened with a new model, fills in behind while the image serves.
-2. **Materialise, then drain** (amended in SDD Task 1): the sweep first
-   creates a vertex, with no vector, for every vocabulary endpoint that
-   lacks one, so in steady state the drain and the touch only ever
-   UPDATE an existing node. Then, per endpoint, the drain renders,
-   embeds and stores INSIDE ONE transaction: a touch that commits
-   meanwhile is a write to the same node, so the drain's commit fails
-   the engine's validation and the retry re-renders. (A drain that
-   rendered outside its store transaction could overwrite a fresh
-   clear with a stale vector, and nothing would ever re-embed it.) An
-   endpoint that turns out to have no current belief gets no vector.
-   The embedding call therefore runs inside the worker's transaction,
-   which holds no engine lock until commit.
+2. **Materialise, then drain** (amended in SDD Task 1, re-amended in
+   its fix round): the sweep first creates a vertex, with no vector,
+   for every vocabulary endpoint that lacks one, so the drain and the
+   touch only ever UPDATE an existing node. A touch then rewrites
+   every live vertex of its endpoints unconditionally -- clearing an
+   already-clear vector is still a `save`, and that write-set entry is
+   the only thing a create-only writer (a first belief, nothing
+   superseded, whose claim writes are all creates) offers a concurrent
+   drain to validate against. The drain itself embeds OUTSIDE every
+   transaction -- an embedder is a network round trip and the engine's
+   ninth attempt at a transaction runs the body under the global
+   transaction-manager lock -- and per endpoint makes up to four
+   passes of: render under a read snapshot, embed, then in ONE
+   transaction re-render and store the vector only when the text is
+   unchanged. A racing touch that commits before the re-render changes
+   the text, so nothing is stored and the pass repeats; one that
+   commits after it fails the store's validation, and the engine's
+   retry re-renders to the same effect. An endpoint with no current
+   belief gets no vector; one still changing after four passes stays
+   dirty for the next drain.
 3. **Failure**: an embedder error is logged once per outage on stderr,
    the endpoint stays dirty, and the worker backs off (1 s doubling to
    60 s) before retrying the queue. Nothing is dropped.
