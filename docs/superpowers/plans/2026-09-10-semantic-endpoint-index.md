@@ -42,8 +42,8 @@ b787516 (`graph-db/spacetime`, vector segments); `cl-llm/rag` embedders;
   (at main 3e3e17a against engine b787516).
 - Suites run in a subprocess, never in a shared image; one SBCL at a
   time, foreground, timeout ≥ 5 min; never `pkill`, `pgrep -f`, `kill`;
-  never touch ports 4007–4029, `~/.cl-llm-memory*`, `~/work/cl-llm`
-  (main) or `~/work/vg-c3` (the engine clone, read-only).
+  never touch the developer's live memory images, their store
+  directories, the main checkout, or the engine clone (read-only).
   Suites load through a source registry naming this worktree and the
   engine checkout, plus `:inherit-configuration` for quicklisp.
 - Docs travel with the code: every task that adds behaviour touches
@@ -499,7 +499,7 @@ git commit -m "memory: endpoint profiles and the write-path touch for the semant
 - Docs: `docs/agent-memory.md` (the same subsection gains the drain and rebuild)
 
 **Interfaces:**
-- Consumes: Task 1's functions; `gdb:vector-search`, `gdb:lookup-vertex`, `mem:vocabulary`, `with-scope-snapshots`; the engine internals `graph-db::vector-segments`, `graph-db::segment-dimension`, `graph-db::rebuild-vector-segment` (E3; read their definitions in `~/work/vg-c3/segment.lisp` and `transactions.lisp` for the exact lambda lists before use).
+- Consumes: Task 1's functions; `gdb:vector-search`, `gdb:lookup-vertex`, `mem:vocabulary`, `with-scope-snapshots`; the engine internals `graph-db::vector-segments`, `graph-db::segment-dimension`, `graph-db::rebuild-vector-segment` (E3; read their definitions in the engine's `segment.lisp` and `transactions.lisp` for the exact lambda lists before use).
 - Produces (exported): `nearest-endpoints (graph query-vector &key (k 10) model)` → list of `((namespace . key) . cosine)` best first; `dirty-endpoints (graph &optional model)`; `drain-endpoint-vectors (stores &key embed model)` → count embedded; `rebuild-endpoint-vectors (stores &key embed model)`; `reset-endpoint-segment (graph dimension)` → T when it reset; the worker in Task 3.
 
 - [ ] **Step 1: Write the failing tests**

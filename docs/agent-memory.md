@@ -193,8 +193,9 @@ at start, before anything can search (spec SS4.3).
 One worker per process draws the drain off the write path.
 `start-endpoint-indexer` takes the stores, an embedding function and a
 model name, and returns an `endpoint-indexer` it also parks in
-`*endpoint-indexer*` -- stopping and joining whatever worker was there
-first, so a re-entered start never orphans one. It starts with
+`*endpoint-indexer*` -- first stopping whatever worker was there (a
+bounded stop: a worker wedged in an embedding past the timeout is
+abandoned with a logged line), so a re-entered start never orphans one. It starts with
 `pending` set, so the first thing it does is a sweep of everything
 already dirty. After that it sleeps in a condition wait until
 `notify-endpoint-indexer` -- called with no

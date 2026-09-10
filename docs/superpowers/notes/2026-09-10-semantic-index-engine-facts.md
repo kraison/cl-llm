@@ -3,10 +3,10 @@
 **Spec:** `docs/superpowers/specs/2026-09-10-semantic-memory-indexing-design.md`
 (§2.5, §4, §8).  **Date:** 2026-09-10.
 
-**Sources.**  Engine: `~/work/vg-c3` at `experiment` b787516 (read
+**Sources.**  Engine: a clean clone of `experiment` at b787516 (read
 only).  cl-llm: this worktree at 44844ff.  Line numbers are those
 trees.  **Probes:** two foreground SBCL 2.6.6 runs, one process at a
-time, against `~/work/vg-c3-notes/registry-78.lisp` (a copy of
+time, against a source registry naming that clone (a copy of
 registry-72 pointing at this worktree), scratch store `/tmp/x78/`
 (deleted afterwards).  The probe loaded `cl-llm/memory` and
 `cl-llm/rag/claims`, made a `:cl-llm-memory` store under the current
