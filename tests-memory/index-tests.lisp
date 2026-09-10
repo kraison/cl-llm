@@ -351,17 +351,23 @@ render and the store (#78 SS4.3 step 2)."
     (multiple-value-bind (embed counter) (%counting-embed 4 :fail-times 1000)
       (let ((w (mem:start-endpoint-indexer (list g) :embed embed :model "m"
                                                     :backoff 30.0)))
-        (loop repeat 200 until (plusp (car counter)) do (sleep 0.05))
-        (is (plusp (car counter)) "control: the embedder was called")
-        ;; Nothing was embedded and the store stays dirty, so the
-        ;; worker must not report itself idle (SS4.3).
-        (is (null (mem:wait-endpoint-indexer w :timeout 0.3))
-            "a worker whose store is still dirty is never idle")
-        (let ((s (%seconds-to (lambda () (mem:stop-endpoint-indexer w)))))
-          ;; A SLEEP backoff would hold the join for 30 seconds.
-          (is (< s 2) "stop woke the backoff wait in ~,2fs" s))
-        (is (not (bt:thread-alive-p (mem::endpoint-indexer-thread w))))
-        (is (= 0 (mem:endpoint-indexer-embedded w)))))))
+        (unwind-protect
+             (progn
+               (loop repeat 200 until (plusp (car counter))
+                     do (sleep 0.05))
+               (is (plusp (car counter)) "control: the embedder was called")
+               ;; Nothing was embedded and the store stays dirty, so the
+               ;; worker must not report itself idle (SS4.3).
+               (is (null (mem:wait-endpoint-indexer w :timeout 0.3))
+                   "a worker whose store is still dirty is never idle")
+               (let ((s (%seconds-to
+                         (lambda () (mem:stop-endpoint-indexer w)))))
+                 ;; A SLEEP backoff would hold the join for 30 seconds.
+                 (is (< s 2) "stop woke the backoff wait in ~,2fs" s))
+               (is (not (bt:thread-alive-p
+                         (mem::endpoint-indexer-thread w))))
+               (is (= 0 (mem:endpoint-indexer-embedded w))))
+          (mem:stop-endpoint-indexer w))))))
 
 (test notify-without-a-worker-is-a-no-op
   (let ((mem:*endpoint-indexer* nil))
@@ -401,9 +407,62 @@ leaves the endpoint dirty -- the bounded-pass fallout (SS4.3 step 2)."
                (is (plusp (mem:endpoint-indexer-embedded w))
                    "control: the drains did store vectors")
                (is (> (car counter) mem:*embed-passes*)
-                   "control: more than one drain ran")
+                   "control: one endpoint used up all ~d passes (~d calls)"
+                   mem:*embed-passes* (car counter))
                (is-true (member '(:repo . "cl-llm")
                                 (mem:dirty-endpoints g "m")
                                 :test #'equal)
-                        "control: the endpoint really is still dirty"))
+                        "control: the endpoint really is still dirty")
+               ;; Named once per worker, however many drains ran.
+               (let ((named (mem::endpoint-indexer-reported w)))
+                 (is (= 1 (hash-table-count named))
+                     "the fallout was logged once, not once per drain")
+                 (is-true (gethash '(:repo . "cl-llm") named)
+                          "and it named the endpoint that fell out")))
           (mem:stop-endpoint-indexer w))))))
+
+(test a-notify-does-not-cancel-an-outage-backoff
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter) (%counting-embed 4 :fail-times 1000)
+      (let ((w (mem:start-endpoint-indexer (list g) :embed embed :model "m"
+                                                    :backoff 0.5))
+            (stop-seconds nil))
+        (unwind-protect
+             (progn
+               (loop repeat 200 until (plusp (car counter))
+                     do (sleep 0.01))
+               (is (= 1 (car counter)) "control: the sweep failed once")
+               ;; Task 4 wires a notify to every write, so an import
+               ;; against a down embedder must not buy one failing
+               ;; round trip per write (SS4.3 step 3).
+               (dotimes (i 3)
+                 (mem:notify-endpoint-indexer w)
+                 (sleep 0.05))
+               (sleep 1.0)
+               (is (= 2 (car counter))
+                   "one attempt per backoff period -- 0.5s, then 1.0s ~
+                    -- not one per notify; got ~d"
+                   (car counter)))
+          (setf stop-seconds
+                (%seconds-to (lambda () (mem:stop-endpoint-indexer w)))))
+        (is (< stop-seconds 2)
+            "stop still returns in ~,2fs" stop-seconds)))))
+
+(test a-second-start-stops-the-first-worker
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (let ((w1 (mem:start-endpoint-indexer (list g)
+                                          :embed (%counting-embed 4)
+                                          :model "m")))
+      (unwind-protect
+           (let ((w2 (mem:start-endpoint-indexer
+                      (list g) :embed (%counting-embed 4) :model "m")))
+             (is (not (eq w1 w2)))
+             (is (not (bt:thread-alive-p
+                       (mem::endpoint-indexer-thread w1)))
+                 "the worker it replaced was stopped and joined")
+             (is (eq w2 mem:*endpoint-indexer*))
+             (is (mem:wait-endpoint-indexer w2 :timeout 10)
+                 "and the new one drains"))
+        (mem:stop-endpoint-indexer mem:*endpoint-indexer*)))))

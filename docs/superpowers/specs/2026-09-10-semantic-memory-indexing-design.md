@@ -245,7 +245,14 @@ One thread per process that has an embedder, started by
    dirty for the next drain.
 3. **Failure**: an embedder error is logged once per outage on stderr,
    the endpoint stays dirty, and the worker backs off (1 s doubling to
-   60 s) before retrying the queue. Nothing is dropped.
+   60 s) before retrying the queue. Nothing is dropped. The backoff is
+   a deadline (SDD Task 3 fix round 1): a notify does not shorten it,
+   only a stop does, since the write path notifies per write and an
+   import against a down embedder would otherwise make one failing
+   round trip per write. Recovery -- clearing the outage and resetting
+   the backoff -- is claimed only by a drain that embedded at least
+   one endpoint, so an empty drain mid-outage does not read as the
+   embedder returning.
 4. **Model change**: a vector whose `ev-model` differs from the
    configured model is dirty and re-embedded by the ordinary drain. A
    *dimension* change cannot be handled by the worker: an empty segment
@@ -261,8 +268,10 @@ One thread per process that has an embedder, started by
    when a drain finished with no notify outstanding *and* no store has
    a dirty endpoint left, so `wait-endpoint-indexer` cannot read
    "drained" over an endpoint the four passes of step 2 could not
-   settle. Such an endpoint is not an error: the worker waits its
-   backoff and drains again. The notify flag is cleared before the
+   settle. Such an endpoint is not an error: the worker waits the
+   initial backoff (a never-settling endpoint is an embedder-speed
+   problem, not an outage) and drains again, naming it on stderr once
+   per worker so an operator can see it. The notify flag is cleared before the
    drain runs, so a write landing mid-drain is kept for the next pass
    rather than lost -- one drain takes each store's dirty set once and
    is not promised to empty it.
