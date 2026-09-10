@@ -4,6 +4,10 @@
 
 (in-package #:cl-llm.memory)
 
+;; TOUCH-ENDPOINTS is defined in profile.lisp, which loads after this
+;; file (#78 SS4.2): a run-time call under :SERIAL T, quieted here.
+(declaim (ftype function touch-endpoints))
+
 (define-condition belief-argument-error (error)
   ((argument :initarg :argument :reader belief-argument-error-argument)
    (value :initarg :value :reader belief-argument-error-value)
@@ -124,14 +128,21 @@ Must run inside the caller's WITH-TRANSACTION."
             ((not (local-time:timestamp< (%start-instant pred) start))
              (error 'belief-successor-before-predecessor
                     :predecessor pred :start start))
-            (t (%close-validity pred start))))
-    (make-belief-binary
-     :graph graph
-     :subject-namespace (car subject) :subject-key (cdr subject)
-     :relation relation
-     :object-namespace (car object) :object-key (cdr object)
-     :producer producer :standing standing :extent extent
-     :confidence confidence :method method :rule-version rule-version)))
+            (t (%close-validity pred start)
+               ;; The predecessor's object endpoint loses a line (#78).
+               (touch-endpoints graph
+                                (list (cons (st:claim-object-namespace pred)
+                                            (st:claim-object-key pred)))))))
+    (let ((new (make-belief-binary
+                :graph graph
+                :subject-namespace (car subject) :subject-key (cdr subject)
+                :relation relation
+                :object-namespace (car object) :object-key (cdr object)
+                :producer producer :standing standing :extent extent
+                :confidence confidence :method method
+                :rule-version rule-version)))
+      (touch-endpoints graph (list subject object))
+      new)))
 
 (defun %assert-from-file (graph subject relation object
                           &key producer method (extent (%default-extent)))
@@ -196,4 +207,15 @@ RETRACT-CLAIM would silently do nothing."
     (%arg-error :claim claim "only a belief can be retracted"))
   (unless (st:claim-current-p claim)
     (%arg-error :claim claim "already retracted"))
-  (st:retract-claim claim :at at))
+  (let ((graph (or (graph-db::resolve-node-graph (gdb:id claim))
+                   gdb:*graph*)))
+    (prog1 (st:retract-claim claim :at at)
+      ;; Both endpoints lose a line (#78 SS4.2).  RESOLVE-NODE-GRAPH is
+      ;; internal (noted on kraison/vivace-graph#322), as in %CLAIM-STORE.
+      (touch-endpoints
+       graph
+       (list* (cons (st:claim-subject-namespace claim)
+                    (st:claim-subject-key claim))
+              (and (typep claim 'belief-binary)
+                   (list (cons (st:claim-object-namespace claim)
+                               (st:claim-object-key claim)))))))))

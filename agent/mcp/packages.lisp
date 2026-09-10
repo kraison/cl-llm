@@ -6,6 +6,7 @@
                     (#:c #:cl-llm.conditions)
                     (#:agent #:cl-llm.agent)
                     (#:mem #:cl-llm.memory)
+                    (#:rag #:cl-llm.rag)
                     (#:gdb #:graph-db)
                     (#:st #:graph-db.spacetime)
                     (#:mcp #:cl-mcp)
@@ -13,6 +14,9 @@
   (:export
    ;; config
    #:env #:parse-scope #:declare-store-schemas #:open-scope #:close-scope
+   ;; the semantic endpoint index's embedder (#78 SS5)
+   #:embedder-from-env #:probe-embedding-dimension #:embed-key-source
+   #:index-off-reason
    ;; adapter
    #:make-memory-server #:register-llm-tool
    ;; identity

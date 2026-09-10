@@ -55,7 +55,7 @@ a bug to chase.
 
 ```lisp
 (agent:make-agent-tools stores &key write-store producer sources
-                                     (k 5) (max-rows 50))
+                                     (k 5) (max-rows 50) embedder)
 ;; => 9 tools: recall trace decisions-citing conclude
 ;;    conclude-absence retract list-taxonomy retrieve plan-bounds
 
@@ -75,6 +75,21 @@ a bug to chase.
 - `sources` — extra `collect-evidence` sources `retrieve` fuses in
   beside one claim source per store in scope, such as a dense index
   over the same corpus.
+- `embedder` — an `agent:make-endpoint-embedder` of a `rag:embedder`
+  and a cosine `:floor`, which turns on the semantic endpoint index
+  for `retrieve` and `plan-bounds` (#78; `docs/agent-memory.md`).
+  The embedder must name a model, and the floor is required:
+
+  ```lisp
+  (agent:make-endpoint-embedder
+   (rag:make-openai-compatible-embedder :base-url "..." :model "...")
+   :floor 0.35)
+  ```
+
+  Without it the two planner tools are lexical only. Nothing here
+  writes vectors: the endpoint index is filled by the memory layer's
+  indexer, which `conclude` and `retract` wake once their transaction
+  has committed.
 - `k`, `max-rows` — caps on what a call may ask for. A larger request
   is clamped, never refused, and the result says `truncated`.
 - `max-inferences`, `timeout` — the Prolog budgets `query` runs under
@@ -354,8 +369,18 @@ Explicit `endpoints` come first and are never displaced; the union is
 capped at twice the operator's `k` per store (the cap fixed at
 construction, not the call's `k`). So "why did the ledger freeze in
 May" consults `incident:ledger-freeze-2026-05-22` with no endpoints
-given. The vocabulary behind this is `mem:vocabulary`, walked once
-per call (#64).
+given. The vocabulary behind this is `mem:vocabulary` (#64).
+
+With an `embedder` configured, that lexical route runs first and keeps
+its order; the rest of the cap is then filled with the endpoints whose
+profile embeds nearest the query, best first, at cosine at or above the
+embedder's floor — so "why was the deployment rolled back in August"
+reaches `incident:ledger-rollback-2026-08-30` with no token in common
+(#78). The query is embedded once per call, whatever the number of
+stores in scope. Below the floor nothing is added, and the
+nothing-consulted refusal below is unchanged: the floor is a refusal,
+not a ranking. An endpoint a write has touched is reachable lexically
+until the indexer re-embeds it.
 
 ```json
 {

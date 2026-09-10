@@ -72,14 +72,119 @@ global id registry (GDB:STORE-ID-COLLISION-ERROR)."
              (values stores write-store clock)))
       (unless ok (close-scope stores clock)))))
 
+(defun %close-note (control &rest args)
+  "One line to stderr about a close that failed, itself guarded: this
+runs in a cleanup form and must not signal."
+  (ignore-errors
+   (format *error-output* "~&memory scope: ~?~%" control args)
+   (finish-output *error-output*)))
+
 (defun close-scope (stores clock)
   "Close every store, each with *GRAPH* bound to it and without the
 snapshot -- unbounded work before the .dirty marker clears (recon C2)
--- then the clock.  Never signals; a closed store is skipped."
+-- then the clock.  Never signals; a failure is reported and the next
+store still closes.  Reported rather than swallowed because a parked
+.dirty marker with no diagnostics is what an IGNORE-ERRORS here
+costs (#78 I2)."
   (dolist (g stores)
-    (ignore-errors
-     (let ((gdb:*graph* g))
-       (gdb:close-graph g :snapshot-p nil))))
+    (handler-case (let ((gdb:*graph* g))
+                    (gdb:close-graph g :snapshot-p nil))
+      (serious-condition (c)
+        (%close-note "close-graph ~a failed: ~a" (gdb:graph-name g) c))))
   (when clock
-    (ignore-errors (gdb:close-system-clock clock)))
+    (handler-case (gdb:close-system-clock clock)
+      (serious-condition (c)
+        (%close-note "close-system-clock failed: ~a" c))))
   nil)
+
+;;;; The semantic endpoint index's embedder (#78 SS5)
+;;;;
+;;;; The LLM layer's defaults (LLM:*TIMEOUT* 60, LLM:*RETRIES* 3) suit
+;;;; a completion someone is waiting on.  Here they would stall the MCP
+;;;; handshake for minutes on an unreachable endpoint, and hold SIGTERM
+;;;; inside the worker's join on a hung one, so both round trips are
+;;;; bounded and neither retries: the indexer's doubling backoff is the
+;;;; retry policy (SS4.3).
+
+(defun %embed-floor (string)
+  "STRING as the cosine floor: read with *READ-EVAL* NIL, so a value
+from the environment cannot evaluate, under WITH-STANDARD-IO-SYNTAX,
+which makes \"0.42\" a single-float, and in the KEYWORD package, so a
+word interns nothing anywhere else.  The read must consume the whole
+trimmed string -- \"0.42 rm -rf\" is a typo, not a floor.  => the real;
+signals naming the offending text otherwise."
+  (let ((text (string-trim '(#\Space #\Tab #\Newline #\Return) string))
+        (value nil)
+        (end -1))
+    (handler-case
+        (with-standard-io-syntax
+          (let ((*read-eval* nil) (*package* (find-package :keyword)))
+            (multiple-value-setq (value end) (read-from-string text))))
+      (error () (setf value nil end -1)))
+    (unless (and (realp value) (= end (length text)))
+      (error "CL_LLM_MEMORY_EMBED_FLOOR must be a real in [0, 1], not ~s"
+             string))
+    value))
+
+(defun %bounded-embed (fn)
+  "FN under the index's worker bound: 30 s, no retry (see above).  The
+binding lives in the closure, not at the call site, because the worker
+runs in its own thread and BT:*DEFAULT-SPECIAL-BINDINGS* is NIL -- a
+binding made where the worker was started reaches nothing."
+  (lambda (text)
+    (let ((llm:*timeout* 30) (llm:*retries* 0))
+      (funcall fn text))))
+
+(defun embedder-from-env ()
+  "The semantic index's embedder from CL_LLM_MEMORY_EMBED_URL / _MODEL /
+_KEY / _FLOOR (#78 SS5), or NIL when the URL is empty -- the feature is
+then inert.  A URL without a model or a floor is an error, as is a floor
+outside [0, 1] (MAKE-ENDPOINT-EMBEDDER's own check).  Traps: nothing is
+embedded here, so an endpoint nothing answers on is found only at
+PROBE-EMBEDDING-DIMENSION; and an empty _KEY is not \"no credential\"
+-- see EMBED-KEY-SOURCE."
+  (let ((url (env "CL_LLM_MEMORY_EMBED_URL")))
+    (when url
+      (let ((model (env "CL_LLM_MEMORY_EMBED_MODEL"))
+            (floor (env "CL_LLM_MEMORY_EMBED_FLOOR")))
+        (unless model
+          (error "CL_LLM_MEMORY_EMBED_MODEL is required with a URL"))
+        (unless floor
+          (error "CL_LLM_MEMORY_EMBED_FLOOR is required with a URL"))
+        (let ((ee (agent:make-endpoint-embedder
+                   (rag:make-openai-compatible-embedder
+                    :base-url url :model model
+                    :api-key (env "CL_LLM_MEMORY_EMBED_KEY"))
+                   :floor (%embed-floor floor))))
+          (setf (agent:endpoint-embedder-embed ee)
+                (%bounded-embed (agent:endpoint-embedder-embed ee)))
+          ee)))))
+
+(defun probe-embedding-dimension (embedder)
+  "EMBEDDER's vector dimension, from one embedding of \"probe\"; the
+entry points reset the segment to it before anything can search (SS4.3
+step 4).  Calls RAG:EMBED rather than ENDPOINT-EMBEDDER-EMBED so the
+probe gets the short bound and not the worker's (see above).  Signals
+whatever the HTTP layer signals."
+  (let ((llm:*timeout* 5) (llm:*retries* 0))
+    (length (rag:embed (agent:endpoint-embedder-embedder embedder)
+                       "probe"))))
+
+(defun embed-key-source ()
+  "Which credential the index's embedder will send, for the start line:
+\"env CL_LLM_MEMORY_EMBED_KEY\", \"OPENAI_API_KEY fallback\", or
+\"none\".  Trap: RAG falls back to OPENAI_API_KEY when the variable is
+empty (rag/embed.lisp:91), so a CL_LLM_MEMORY_EMBED_URL on a host you
+do not control is handed that token."
+  (cond ((env "CL_LLM_MEMORY_EMBED_KEY") "env CL_LLM_MEMORY_EMBED_KEY")
+        ((env "OPENAI_API_KEY") "OPENAI_API_KEY fallback")
+        (t "none")))
+
+(defun index-off-reason (condition)
+  "CONDITION as the reason the semantic index is off, for one stderr
+line: an embedder failure prints itself, anything else is named as the
+engine's -- a store the segment reset cannot touch is not an outage,
+and the two want different fixes."
+  (if (typep condition 'c:llm-error)
+      (princ-to-string condition)
+      (format nil "engine error while resetting: ~a" condition)))

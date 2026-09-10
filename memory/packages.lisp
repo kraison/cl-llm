@@ -23,6 +23,19 @@
    ;; write
    #:record-belief #:record-absence #:retract-belief
    #:belief-argument-error #:belief-successor-before-predecessor
+   ;; endpoint profiles (#78)
+   #:endpoint-vector #:ev-namespace #:ev-key #:ev-model
+   #:current-beliefs #:endpoint-profile #:*profile-cap*
+   #:endpoint-vector-of #:endpoint-vector-value #:endpoint-dirty-p
+   #:touch-endpoints
+   ;; the semantic index (#78)
+   #:nearest-endpoints #:dirty-endpoints #:materialise-endpoint-vectors
+   #:drain-endpoint-vectors #:rebuild-endpoint-vectors
+   #:reset-endpoint-segment #:*embed-passes*
+   ;; the indexer worker (#78 SS4.3)
+   #:*endpoint-indexer* #:endpoint-indexer #:start-endpoint-indexer
+   #:notify-endpoint-indexer #:wait-endpoint-indexer
+   #:stop-endpoint-indexer #:endpoint-indexer-embedded
    ;; scope (S6b)
    #:check-scope #:scope-argument-error
    #:call-with-scope-snapshots #:with-scope-snapshots

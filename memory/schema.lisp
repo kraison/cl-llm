@@ -42,6 +42,25 @@ and friends always live here."
        :sensitivity  (:class :restricted)
        :registration :none
        :indexed-text (:text-fn bn-text))
+     ;; The semantic endpoint index (#78 SS2.5): one vertex per endpoint;
+     ;; EMBEDDING holding no conforming vector means lexical-only.  Named
+     ;; DEF-INDEX for lookup; deliberately no DEF-UNIQUE (R-a): a
+     ;; commit-time unique-constraint violation is not retried by the
+     ;; engine, so two connections first-touching one never-indexed
+     ;; endpoint would fail one agent's write for a race the index
+     ;; itself caused.  Duplicate live vertices for one endpoint are
+     ;; benign: TOUCH-ENDPOINTS clears every one INDEX-LOOKUP returns,
+     ;; ENDPOINT-VECTOR-OF returns the first, and search dedups hits by
+     ;; endpoint (a later task).
+     (gdb:def-vertex endpoint-vector ()
+       ((ev-namespace :type keyword)
+        (ev-key       :type string)
+        (ev-model     :type string)
+        (embedding    :type (simple-array single-float (*))
+                      :vector-index t))
+       ,graph-name)
+     (gdb:def-index endpoint-vector (ev-namespace ev-key) ,graph-name
+       :name ev-endpoint-index)
      ',graph-name))
 
 (define-memory-store :cl-llm-memory)

@@ -66,3 +66,67 @@ equal to a namespace name selects nothing by itself; it breaks ties."
             (push (list score hit ep) scored))))
       (let ((sorted (sort scored #'%better-match-p)))
         (mapcar #'third (subseq sorted 0 (min cap (length sorted))))))))
+
+;;;; The semantic route (#78 R2, R3): the same extractor, with the
+;;;; endpoints whose profile embeds nearest the query filling the cap.
+
+(defstruct (endpoint-embedder (:constructor %make-endpoint-embedder))
+  "A RAG:EMBEDDER with the MODEL it names and the cosine FLOOR a dense
+candidate must clear (#78 R3, R7).  EMBED is the (text -> vector)
+function the memory layer takes -- it depends on no LLM."
+  embedder model floor embed)
+
+(defun make-endpoint-embedder (embedder &key floor)
+  "Wrap EMBEDDER for the semantic index; => an ENDPOINT-EMBEDDER.
+EMBEDDER must name a model (RAG:EMBEDDER-MODEL, recorded on every
+vector so a model change re-embeds); FLOOR is required, a real in
+[0, 1].  Trap: nothing here checks that FLOOR suits the embedder -- a
+floor too low turns retrieve's refusal into noise."
+  (let ((model (rag:embedder-model embedder)))
+    (unless (and (stringp model) (plusp (length model)))
+      (error "the embedder names no model; the index records one per ~
+              vector"))
+    (unless (and (realp floor) (<= 0 floor 1))
+      (error "FLOOR must be a real in [0, 1], not ~s" floor))
+    (%make-endpoint-embedder
+     :embedder embedder :model model :floor floor
+     :embed (lambda (text) (rag:embed embedder text)))))
+
+(defun make-hybrid-key-extractor (graph vocabulary endpoint-embedder
+                                  &key (cap 10) query-vector)
+  "A function of a query string returning up to CAP endpoints of GRAPH
+as (namespace-keyword . key): VOCABULARY's lexical matches first, in
+MAKE-KEY-EXTRACTOR's order, then the endpoints whose profile embeds
+nearest the query at cosine >= the embedder's floor, best first.
+QUERY-VECTOR is a function of the query returning its embedding, so a
+caller can memoise it across the stores in scope; the default embeds
+on every call.  ENDPOINT-EMBEDDER NIL is MAKE-KEY-EXTRACTOR itself.
+Traps: an endpoint a write touched and the indexer has not re-embedded
+is reachable lexically only (#78 SS4.1); and the vector search runs
+when the returned function is called, not under whatever snapshot
+VOCABULARY was read in."
+  (let ((lexical (make-key-extractor vocabulary :cap cap)))
+    (if (null endpoint-embedder)
+        lexical
+        (let ((qv (or query-vector
+                      (endpoint-embedder-embed endpoint-embedder)))
+              (floor (endpoint-embedder-floor endpoint-embedder))
+              (model (endpoint-embedder-model endpoint-embedder)))
+          (lambda (query)
+            (let* ((l (funcall lexical query))
+                   (room (- cap (length l))))
+              (if (plusp room)
+                  (let ((dense
+                          (loop for (ep . score)
+                                  in (mem:nearest-endpoints
+                                      graph (funcall qv query)
+                                      ;; K bounds the SEGMENT hits, and a
+                                      ;; duplicate or another model's
+                                      ;; vector costs an endpoint (#78
+                                      ;; SS3.3) -- ask for more than CAP.
+                                      :k (* 2 cap) :model model)
+                                when (and (>= score floor)
+                                          (not (member ep l :test #'equal)))
+                                  collect ep)))
+                    (append l (subseq dense 0 (min room (length dense)))))
+                  l)))))))

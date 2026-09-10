@@ -217,3 +217,144 @@ namespace is a tool error, not a silent intern."
       (is (= 0 (length (json:jget (%call tools "plan-bounds"
                                          "query" "banana helicopter")
                                   "endpoints")))))))
+
+;;; #78 SS7: retrieve routes through the semantic endpoint index.
+
+(test retrieve-routes-a-paraphrase-through-the-semantic-index
+  "#78 SS7 test 1: the lexical route finds nothing; the dense fill
+does, and retrieve cites the belief.  Control: no embedder refuses."
+  (with-stores (w p)
+    (%belief w "root-cause" '(:cause . "replica-checksum-mismatch")
+             :subject '(:incident . "ledger-rollback-2026-08-30"))
+    (let* ((ee (%embedder))
+           (tools (agent:make-agent-tools (list w p) :producer +p+
+                                          :embedder ee))
+           (plain (agent:make-agent-tools (list w p) :producer +p+))
+           (q "why was the deployment reverted in august"))
+      (%drain (list w) ee)
+      (signals llm:llm-tool-error (%call plain "retrieve" "query" q))
+      (let ((r (%call tools "retrieve" "query" q)))
+        ;; The incident's profile is at cosine .37, the cause's at .25:
+        ;; only the one above the floor is consulted.
+        (is (equal '("incident:ledger-rollback-2026-08-30")
+                   (coerce (json:jget r "endpoints") 'list)))
+        (is (= 1 (length (json:jget r "evidence"))))
+        (is (search "replica-checksum-mismatch"
+                    (json:jget (elt (json:jget r "evidence") 0) "text")))))))
+
+(test retrieve-still-refuses-an-unindexed-topic-with-an-embedder
+  "#78 R3: the floor is a refusal, not a ranking -- a query no profile
+embeds near still names nothing, and the message is unchanged."
+  (with-stores (w p)
+    (%belief w "root-cause" '(:cause . "replica-checksum-mismatch")
+             :subject '(:incident . "ledger-rollback-2026-08-30"))
+    (let* ((ee (%embedder))
+           (tools (agent:make-agent-tools (list w p) :producer +p+
+                                          :embedder ee)))
+      (%drain (list w) ee)
+      (handler-case
+          (progn (%call tools "retrieve" "query" "pelican migration")
+                 (fail "must refuse"))
+        (llm:llm-tool-error (e)
+          (is (search "no endpoint recognised"
+                      (princ-to-string (llm:llm-error-underlying e)))))))))
+
+(test retrieve-embeds-the-query-once-per-call-across-stores
+  "#78 R7: one embedding per call, not one per store and not one per
+extractor invocation -- retrieve runs each store's extractor three
+times (consulted, seed, bounded fusion)."
+  (with-stores (w p)
+    (%belief w "root-cause" '(:cause . "x")
+             :subject '(:incident . "ledger-rollback"))
+    (%belief p "root-cause" '(:cause . "y")
+             :subject '(:incident . "ledger-freeze"))
+    (let* ((calls 0)
+           (ee (%embedder))
+           (tools (agent:make-agent-tools (list w p) :producer +p+
+                                          :embedder ee)))
+      (%drain (list w p) ee)
+      ;; Count query embeddings only: wrap the generic after the drain.
+      (let ((old (fdefinition 'rag:embed)))
+        (unwind-protect
+             (progn
+               (setf (fdefinition 'rag:embed)
+                     (lambda (e input) (incf calls) (funcall old e input)))
+               ;; The endpoint is named outright so the refusal cannot
+               ;; end the call before the second and third extractions.
+               (%call tools "retrieve"
+                      "query" "why was the deployment reverted"
+                      "endpoints" (vector "incident:ledger-rollback"))
+               (is (= 1 calls) "one embedding for two stores, got ~a"
+                   calls))
+          (setf (fdefinition 'rag:embed) old))))))
+
+(test conclude-and-retract-notify-the-indexer-and-never-embed
+  "#78 SS7 test 8: the write path embeds nothing; it wakes the worker
+after its transaction commits."
+  (with-stores (w p)
+    (let* ((calls 0) (notified 0)
+           (ee (%embedder))
+           (tools (agent:make-agent-tools (list w p) :producer +p+
+                                          :embedder ee))
+           (old (fdefinition 'mem:notify-endpoint-indexer))
+           (old-embed (fdefinition 'rag:embed)))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'mem:notify-endpoint-indexer)
+                   (lambda (&optional i) (declare (ignore i))
+                     (incf notified) nil)
+                   (fdefinition 'rag:embed)
+                   (lambda (e input) (incf calls) (funcall old-embed e input)))
+             (let ((r (%call tools "conclude"
+                             "subject-namespace" "incident"
+                             "subject-key" "ledger-rollback"
+                             "relation" "root-cause"
+                             "object-namespace" "cause"
+                             "object-key" "bad-deploy"
+                             "rule" "test")))
+               (is (string= "concluded" (json:jget r "outcome"))
+                   "control: the write committed")
+               (is (= 0 calls) "conclude embedded ~a times" calls)
+               (is (= 1 notified) "conclude woke the indexer ~a times"
+                   notified)
+               (%call tools "retract" "cite" (json:jget r "claim-cite"))
+               (is (= 0 calls) "retract embedded ~a times" calls)
+               (is (= 2 notified) "retract woke the indexer ~a times"
+                   (- notified 1))))
+        (setf (fdefinition 'mem:notify-endpoint-indexer) old
+              (fdefinition 'rag:embed) old-embed)))))
+
+(test conclude-absence-does-not-notify-the-indexer
+  "#78 SS4.2: an absence touches no endpoint, so it wakes nothing."
+  (with-stores (w p)
+    (let* ((notified 0)
+           (tools (agent:make-agent-tools (list w p) :producer +p+
+                                          :embedder (%embedder)))
+           (old (fdefinition 'mem:notify-endpoint-indexer)))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'mem:notify-endpoint-indexer)
+                   (lambda (&optional i) (declare (ignore i))
+                     (incf notified) nil))
+             (let ((r (%call tools "conclude-absence"
+                             "subject-namespace" "incident"
+                             "subject-key" "ledger-rollback"
+                             "relation" "root-cause" "rule" "test"
+                             "standing" "searched-empty")))
+               (is (string= "concluded" (json:jget r "outcome"))
+                   "control: the absence was recorded")
+               (is (= 0 notified) "an absence woke the indexer ~a times"
+                   notified)))
+        (setf (fdefinition 'mem:notify-endpoint-indexer) old)))))
+
+(test the-embedder-must-be-an-endpoint-embedder
+  (with-stores (w p)
+    (signals agent:scope-error
+      (agent:make-scope (list w p) :producer +p+
+                        :embedder (rag:make-mock-embedder)))
+    (is (null (agent:scope-embedder
+               (agent:make-scope (list w p) :producer +p+))))
+    (let ((ee (%embedder)))
+      (is (eq ee (agent:scope-embedder
+                  (agent:make-scope (list w p) :producer +p+
+                                    :embedder ee)))))))
