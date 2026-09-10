@@ -23,6 +23,11 @@
    ;; write
    #:record-belief #:record-absence #:retract-belief
    #:belief-argument-error #:belief-successor-before-predecessor
+   ;; endpoint profiles (#78)
+   #:endpoint-vector #:ev-namespace #:ev-key #:ev-model
+   #:current-beliefs #:endpoint-profile #:*profile-cap*
+   #:endpoint-vector-of #:endpoint-vector-value #:endpoint-dirty-p
+   #:touch-endpoints
    ;; scope (S6b)
    #:check-scope #:scope-argument-error
    #:call-with-scope-snapshots #:with-scope-snapshots

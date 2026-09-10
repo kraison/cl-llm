@@ -122,6 +122,25 @@ query does by one scan (#70). Inside a `with-as-of` extent the counters
 have no history, so the engine falls back to a walk that resolves
 nodes. Nothing is cached either way.
 
+## Endpoint profiles
+
+Every endpoint `(namespace . key)` gets a profile: the endpoint as
+words, then one line per belief that is current in recall's sense --
+not retracted, its validity still open -- the endpoint's own beliefs
+as subject first, then as object, newest validity first, capped at
+`*profile-cap*` lines (default 32). An absence (`record-absence`) is
+never a profile line: it is an instant, so it is never open. An
+endpoint with no current belief has no profile.
+
+This is the text the semantic endpoint index (#78) embeds. Every
+belief write -- `record-belief`'s create and the supersession it may
+perform, and `retract-belief` -- clears the touched endpoints' stored
+vectors in the same transaction, so a store's index is never stale
+against beliefs it no longer holds; with no embedder configured the
+`endpoint-vector` vertices exist but carry no vector, and the store is
+lexical-only (spec 2026-09-10-semantic-memory-indexing-design SS2,
+SS4.2).
+
 ## Capturing a memory directory
 
 The proving corpus is the agent's own memory files

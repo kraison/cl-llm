@@ -42,6 +42,20 @@ and friends always live here."
        :sensitivity  (:class :restricted)
        :registration :none
        :indexed-text (:text-fn bn-text))
+     ;; The semantic endpoint index (#78 SS2.5): one vertex per endpoint;
+     ;; EMBEDDING holding no conforming vector means lexical-only.  Two
+     ;; named declarations: DEF-INDEX looks up, DEF-UNIQUE enforces (E5).
+     (gdb:def-vertex endpoint-vector ()
+       ((ev-namespace :type keyword)
+        (ev-key       :type string)
+        (ev-model     :type string)
+        (embedding    :type (simple-array single-float (*))
+                      :vector-index t))
+       ,graph-name)
+     (gdb:def-index endpoint-vector (ev-namespace ev-key) ,graph-name
+       :name ev-endpoint-index)
+     (gdb:def-unique endpoint-vector (ev-namespace ev-key) ,graph-name
+       :name ev-endpoint-identity)
      ',graph-name))
 
 (define-memory-store :cl-llm-memory)
