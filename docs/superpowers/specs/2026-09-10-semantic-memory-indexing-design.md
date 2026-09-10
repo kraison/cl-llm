@@ -126,9 +126,15 @@ memory store has the class:
   <graph-name>)
 ```
 
-One vertex per endpoint per store, keyed by `(ev-namespace, ev-key)`
-through two named declarations: a `def-index` on the pair for lookup
-and a `def-unique` on it for enforcement (facts E5). "No vector" means
+One vertex per endpoint per store, found by a named `def-index` on
+`(ev-namespace, ev-key)`. There is deliberately NO unique constraint
+(amended in SDD Task 1): a commit-time unique violation is not retried
+by the engine, so two connections first-touching one endpoint would
+fail one agent's write for a race the index caused. Duplicates are
+benign instead: the touch clears every live vertex of the endpoint,
+lookups take the first live one, search dedups by endpoint. Within one
+transaction the touch dedups through a synchronized per-transaction
+set, since `index-lookup` reads committed state only. "No vector" means
 `embedding` holds anything but a conforming `(simple-array single-float
 (*))` (unbound and NIL both drop the segment entry, E2): the endpoint
 is then lexical-only. The segment is created lazily by the first
@@ -217,13 +223,18 @@ One thread per process that has an embedder, started by
    count indexes make this a lookup, #361), and for each dirty one
    (4.1) enqueue it. This is also the bulk rebuild: a store copied in,
    or opened with a new model, fills in behind while the image serves.
-2. **Drain**: for each enqueued endpoint, render the profile under a
-   fresh read snapshot, embed it, and in one small transaction set
-   `embedding` and `ev-model`; an endpoint that turns out to have no
-   current belief gets no vector. A write that lands between the render
-   and the store clears the vector again in its own transaction, and
-   the notification re-enqueues the endpoint; the last writer wins and
-   the invariant holds throughout.
+2. **Materialise, then drain** (amended in SDD Task 1): the sweep first
+   creates a vertex, with no vector, for every vocabulary endpoint that
+   lacks one, so in steady state the drain and the touch only ever
+   UPDATE an existing node. Then, per endpoint, the drain renders,
+   embeds and stores INSIDE ONE transaction: a touch that commits
+   meanwhile is a write to the same node, so the drain's commit fails
+   the engine's validation and the retry re-renders. (A drain that
+   rendered outside its store transaction could overwrite a fresh
+   clear with a stale vector, and nothing would ever re-embed it.) An
+   endpoint that turns out to have no current belief gets no vector.
+   The embedding call therefore runs inside the worker's transaction,
+   which holds no engine lock until commit.
 3. **Failure**: an embedder error is logged once per outage on stderr,
    the endpoint stays dirty, and the worker backs off (1 s doubling to
    60 s) before retrying the queue. Nothing is dropped.
