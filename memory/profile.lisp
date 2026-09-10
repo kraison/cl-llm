@@ -59,12 +59,22 @@ subject role first, at most CAP lines.  NIL when nothing is current."
                   (mapcar #'%profile-line
                           (subseq lines 0 (min cap (length lines))))))))))
 
+(defun %endpoint-vectors-of (graph namespace key)
+  "Every live ENDPOINT-VECTOR of (NAMESPACE . KEY) in GRAPH.
+INDEX-LOOKUP already excludes deleted nodes (graph-db index.lisp's
+INDEX-LOOKUP filters on (NOT (DELETED-P NODE)) per id); no DEF-UNIQUE
+(R-a) means this can be more than one vertex."
+  (gdb:index-lookup graph 'endpoint-vector '(ev-namespace ev-key)
+                    (list namespace key)))
+
 (defun endpoint-vector-of (graph namespace key)
-  "The ENDPOINT-VECTOR vertex of (NAMESPACE . KEY) in GRAPH, or NIL."
-  (find-if-not #'gdb:deleted-p
-               (gdb:index-lookup graph 'endpoint-vector
-                                 '(ev-namespace ev-key)
-                                 (list namespace key))))
+  "The first live ENDPOINT-VECTOR of (NAMESPACE . KEY) in GRAPH, or
+NIL.  Trap: this reads committed state only (R-c) -- a caller that
+looks this up and then creates inside one transaction can make a
+duplicate the way TOUCH-ENDPOINTS could before its per-transaction
+guard; any other look-up-then-create writer must guard itself the
+same way."
+  (first (%endpoint-vectors-of graph namespace key)))
 
 (defun endpoint-vector-value (vertex)
   "VERTEX's embedding when it is a conforming vector, else NIL --
@@ -83,40 +93,56 @@ vector from another MODEL (SS4.1)."
              (and model (string/= model (ev-model ev)))))
        t))
 
-(defvar *touched-in-transaction* (make-hash-table :test 'eq :weakness :key)
-  "GDB:*TRANSACTION* -> set of (NAMESPACE . KEY) TOUCH-ENDPOINTS has
-already handled this commit.  INDEX-LOOKUP does not see a sibling
-write's own uncommitted vertex, so two touches of one endpoint within
-one transaction would otherwise create two live vertices and fail the
-unique constraint at commit -- hit by %ASSERT-FROM-FILE's correction
-path, which retracts then re-records the same endpoint (#78 SS4.2).
-Weak on the transaction so entries die with it.")
+;; #-SBCL: a plain, unsynchronized table -- SBCL is this project's only
+;; target (the cl-mcp REPL, CI, the memory image), so weak/synchronized
+;; hash tables outside it are untested rather than deliberately absent.
+(defvar *touched-in-transaction*
+  (make-hash-table :test 'eq
+                   #+sbcl :weakness #+sbcl :key
+                   #+sbcl :synchronized #+sbcl t)
+  "GDB:*TRANSACTION* -> set of (GRAPH . (NAMESPACE . KEY))
+TOUCH-ENDPOINTS has already handled this commit, keyed on the store
+too so touching two graphs in one transaction is not cross-skipped
+(R-b).  INDEX-LOOKUP does not see a sibling write's own uncommitted
+vertex, so two touches of one endpoint within one transaction would
+otherwise both create a vertex -- harmless now (R-a) but wasteful,
+and the guard also fixes %ASSERT-FROM-FILE's correction path, which
+retracts then re-records the same endpoint in one transaction (#78
+SS4.2).  SYNCHRONIZED because one thread per MCP connection can hold
+concurrent transactions, so this GLOBAL table needs a lock even
+though distinct transactions never share a key; WEAKNESS :KEY so
+entries die with their transaction.")
 
-(defun %already-touched-p (endpoint)
+(defun %already-touched-p (graph endpoint)
   (let ((set (and gdb:*transaction*
                   (gethash gdb:*transaction* *touched-in-transaction*))))
-    (and set (gethash endpoint set))))
+    (and set (gethash (cons graph endpoint) set))))
 
-(defun %mark-touched (endpoint)
+(defun %mark-touched (graph endpoint)
   (when gdb:*transaction*
     (let ((set (or (gethash gdb:*transaction* *touched-in-transaction*)
                    (setf (gethash gdb:*transaction* *touched-in-transaction*)
                          (make-hash-table :test 'equal)))))
-      (setf (gethash endpoint set) t))))
+      (setf (gethash (cons graph endpoint) set) t))))
 
 (defun touch-endpoints (graph endpoints)
-  "Clear the vector of every (NAMESPACE . KEY) in ENDPOINTS, creating
-the vertex when absent; each once per transaction.  Must run inside
-the caller's transaction (SS4.2).  Never embeds."
+  "Clear the vector of every live ENDPOINT-VECTOR of every (NAMESPACE
+. KEY) in ENDPOINTS, creating one when none exists; each endpoint
+handled once per transaction per GRAPH.  A never-indexed endpoint
+touched from two transactions can end up with more than one live
+vertex -- benign (R-a): every live one found here gets cleared, not
+just the first.  Must run inside the caller's transaction (SS4.2).
+Never embeds."
   (dolist (ep (remove-duplicates endpoints :test #'equal))
-    (unless (%already-touched-p ep)
-      (%mark-touched ep)
-      (let ((ev (endpoint-vector-of graph (car ep) (cdr ep))))
-        (if ev
-            (when (endpoint-vector-value ev)
-              (let ((c (gdb:copy ev)))
-                (setf (embedding c) nil (ev-model c) "")
-                (gdb:save c)))
+    (unless (%already-touched-p graph ep)
+      (%mark-touched graph ep)
+      (let ((evs (%endpoint-vectors-of graph (car ep) (cdr ep))))
+        (if evs
+            (dolist (ev evs)
+              (when (endpoint-vector-value ev)
+                (let ((c (gdb:copy ev)))
+                  (setf (embedding c) nil (ev-model c) "")
+                  (gdb:save c))))
             (make-endpoint-vector :graph graph
                                   :ev-namespace (car ep) :ev-key (cdr ep)
                                   :ev-model ""))))))

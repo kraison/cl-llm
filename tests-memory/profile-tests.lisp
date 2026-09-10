@@ -48,11 +48,25 @@
 
 (test an-absence-is-never-a-profile-line
   (with-memory-graph (g)
+    ;; Positive control: a belief on the endpoint makes the profile
+    ;; non-NIL, so the NIL checks below (on a wholly separate,
+    ;; absence-only endpoint) are not vacuous.
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (mem:with-scope-snapshots ((list g))
+      (is (not (null (mem:endpoint-profile g :repo "cl-llm")))
+          "positive control: a belief makes the profile non-nil"))
     (gdb:with-transaction (:graph g)
-      (mem:record-absence g '(:repo . "cl-llm") "ci-status"
+      (mem:record-absence g '(:repo . "cl-llm") "postmortem"
+                          :producer +p+ :standing :searched-empty)
+      (mem:record-absence g '(:incident . "standalone") "postmortem"
                           :producer +p+ :standing :searched-empty))
-    (is (null (mem:endpoint-profile g :repo "cl-llm")))
-    (is (null (mem:endpoint-vector-of g :repo "cl-llm"))
+    (mem:with-scope-snapshots ((list g))
+      (let ((text (mem:endpoint-profile g :repo "cl-llm")))
+        (is (not (null text)))
+        (is (null (search "postmortem" text)) "the absence added no line"))
+      (is (null (mem:endpoint-profile g :incident "standalone"))
+          "an absence-only endpoint has no profile"))
+    (is (null (mem:endpoint-vector-of g :incident "standalone"))
         "and recording it touched nothing")))
 
 (test the-profile-is-capped-newest-first
@@ -143,3 +157,47 @@
                  (mem:endpoint-vector-of g :repo "cl-llm"))))
       (is (null (mem:endpoint-vector-value
                  (mem:endpoint-vector-of g :verdict "green")))))))
+
+(test touching-twice-in-one-transaction-makes-one-vertex
+  (with-memory-graph (g)
+    (gdb:with-transaction (:graph g)
+      (mem:touch-endpoints g '((:repo . "once")))
+      (mem:touch-endpoints g '((:repo . "once"))))
+    (is (= 1 (length (gdb:index-lookup
+                      g 'mem:endpoint-vector '(mem:ev-namespace mem:ev-key)
+                      (list :repo "once"))))
+        "one transaction, two touches: the guard skips the second")
+    ;; Control: two SEPARATE, sequential transactions -- the second
+    ;; sees the first's commit and does not duplicate it.
+    (gdb:with-transaction (:graph g)
+      (mem:touch-endpoints g '((:repo . "twice"))))
+    (gdb:with-transaction (:graph g)
+      (mem:touch-endpoints g '((:repo . "twice"))))
+    (is (= 1 (length (gdb:index-lookup
+                      g 'mem:endpoint-vector '(mem:ev-namespace mem:ev-key)
+                      (list :repo "twice"))))
+        "two sequential transactions also leave one vertex")))
+
+(test two-transactions-on-a-fresh-endpoint-leave-no-vector
+  (with-memory-graph (g)
+    ;; No DEF-UNIQUE any more (R-a): two transactions can each
+    ;; first-touch a never-indexed endpoint, so more than one live
+    ;; vertex can exist for it.  Simulate the race: touch once, then
+    ;; hand-create a second vertex WITH a vector in its own
+    ;; transaction (as another connection racing the index would),
+    ;; then touch again -- every live vertex must end up vector-less.
+    (gdb:with-transaction (:graph g)
+      (mem:touch-endpoints g '((:repo . "race"))))
+    (gdb:with-transaction (:graph g)
+      (mem::make-endpoint-vector
+       :graph g :ev-namespace :repo :ev-key "race" :ev-model "m"
+       :embedding (make-array 4 :element-type 'single-float
+                                :initial-element 0.5f0)))
+    (gdb:with-transaction (:graph g)
+      (mem:touch-endpoints g '((:repo . "race"))))
+    (let ((evs (gdb:index-lookup
+                g 'mem:endpoint-vector '(mem:ev-namespace mem:ev-key)
+                (list :repo "race"))))
+      (is (= 2 (length evs)) "both benign duplicate vertices remain")
+      (dolist (ev evs)
+        (is (null (mem:endpoint-vector-value ev)))))))

@@ -128,8 +128,10 @@ Every endpoint `(namespace . key)` gets a profile: the endpoint as
 words, then one line per belief that is current in recall's sense --
 not retracted, its validity still open -- the endpoint's own beliefs
 as subject first, then as object, newest validity first, capped at
-`*profile-cap*` lines (default 32). An absence (`record-absence`) is
-never a profile line: it is an instant, so it is never open. An
+`*profile-cap*` lines (default 32). An absence's (`record-absence`)
+default extent is an instant, so it is never open and never a profile
+line; an absence given an explicit open `:extent` would be a profile
+line, and `record-absence` never touches its endpoint either way. An
 endpoint with no current belief has no profile.
 
 This is the text the semantic endpoint index (#78) embeds. Every
