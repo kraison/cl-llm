@@ -45,6 +45,13 @@ run -- unconfigured, misconfigured, or the probe failed (#78 SS5).")
 
 (defun %dir (s) (namestring (uiop:ensure-directory-pathname s)))
 
+(defun %note (control &rest args)
+  "One line to stderr, guarded: a broken stream must not cost the
+session its server."
+  (ignore-errors
+   (format *error-output* "~&memory mcp: ~?~%" control args)
+   (finish-output *error-output*)))
+
 (defun stop ()
   "Stop the indexer -- it writes to the stores, so it is joined first --
 then close every store and the clock; never signals; idempotent.  The
@@ -57,10 +64,11 @@ exit hook, so SIGTERM leaves no .dirty marker (SS6)."
     (setf *stores* nil *clock* nil)))
 
 (defun start ()
-  "Open the scope, reset the semantic index's vector segments, and build
-the server; => the cl-mcp server.  The worker is not started here: the
-caller starts it once START has returned, so it logs to the process's
-stderr and never to the JSON-RPC stdout (#78 SS5)."
+  "Point log4cl's console at stderr, open the scope, reset the semantic
+index's vector segments, and build the server; => the cl-mcp server.
+The worker is not started here: the caller starts it once START has
+returned, so it logs to the process's stderr and never to the JSON-RPC
+stdout (#78 SS5)."
   (let* ((scope (mcp:env "CL_LLM_MEMORY_SCOPE"))
          (spec (if scope
                    (mcp:parse-scope scope)
@@ -75,6 +83,14 @@ stderr and never to the JSON-RPC stdout (#78 SS5)."
          (producer (mcp:env "CL_LLM_MEMORY_PRODUCER"
                             (format nil "claude-code/~(~a~)"
                                     (machine-instance)))))
+    ;; Before OPEN-SCOPE, and GLOBAL rather than a LET: log4cl resolves
+    ;; *DEBUG-IO* per write, and a thread created later inherits the
+    ;; global value (BT:*DEFAULT-SPECIAL-BINDINGS* is NIL), whose output
+    ;; side under --script is stdout -- so graph-db's buffer-pool
+    ;; monitor thread logs into the JSON-RPC stream (kraison/cl-llm#79).
+    (let ((io (make-two-way-stream *standard-input* *error-output*)))
+      (setf (sb-ext:symbol-global-value 'cl:*debug-io*) io
+            *debug-io* io))
     (multiple-value-bind (stores write-store clock)
         (mcp:open-scope
          :spec spec :write (mcp:env "CL_LLM_MEMORY_WRITE")
@@ -93,15 +109,21 @@ stderr and never to the JSON-RPC stdout (#78 SS5)."
       (handler-case
           (let ((ee (mcp:embedder-from-env)))
             (when ee
-              (let ((d (length (funcall (agent:endpoint-embedder-embed ee)
-                                        "probe"))))
-                (dolist (g stores) (mem:reset-endpoint-segment g d)))
-              (setf *embedder* ee)))
+              (let ((d (mcp:probe-embedding-dimension ee)))
+                (dolist (g stores)
+                  (when (mem:reset-endpoint-segment g d)
+                    (%note "semantic index: segment reset to ~
+dimension ~d (~a)"
+                           d (mem:store-name g)))))
+              (setf *embedder* ee)
+              ;; The image says this in its banner; the solo server has
+              ;; none, and "index on" is not otherwise observable (#78).
+              (%note "index ~a floor ~a (key: ~a)"
+                     (agent:endpoint-embedder-model ee)
+                     (agent:endpoint-embedder-floor ee)
+                     (mcp:embed-key-source))))
         (error (c)
-          (ignore-errors
-           (format *error-output* "~&memory mcp: semantic index off: ~a~%"
-                   c)
-           (finish-output *error-output*))
+          (%note "semantic index off: ~a" (mcp:index-off-reason c))
           (setf *embedder* nil)))
       (mcp:make-memory-server
        stores :write-store write-store :producer producer

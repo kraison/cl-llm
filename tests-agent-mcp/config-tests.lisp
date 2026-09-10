@@ -93,6 +93,13 @@ the floor are required, and the floor must read as a real in [0, 1]."
            (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR") "not-a-number")
            (signals (error "a floor that is not a number")
              (mcp:embedder-from-env))
+           (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR") "0.42 junk")
+           (signals (error "a floor the read does not consume whole")
+             (mcp:embedder-from-env))
+           (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR") "  0.42  ")
+           (is (= 0.42 (agent:endpoint-embedder-floor
+                        (mcp:embedder-from-env)))
+               "control: surrounding space is trimmed, not junk")
            (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR") "1.5")
            (signals (error "a floor outside [0, 1]")
              (mcp:embedder-from-env))
@@ -101,4 +108,42 @@ the floor are required, and the floor must read as a real in [0, 1]."
            (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR") "0.5"
                  (uiop:getenv "CL_LLM_MEMORY_EMBED_MODEL") "")
            (signals (error "and a model") (mcp:embedder-from-env)))
+      (dolist (p saved) (setf (uiop:getenv (car p)) (or (cdr p) ""))))))
+
+(test the-index-off-line-tells-an-outage-from-an-engine-error
+  "SS5: the one stderr line an entry point prints must not blame the
+embedder for a store whose segment the reset could not touch -- the two
+want different fixes."
+  (let ((outage (make-condition 'cl-llm.conditions:llm-timeout-error
+                                :url "http://127.0.0.1:1/v1/embeddings"))
+        (other (make-condition 'simple-error
+                               :format-control "segment ~a is busy"
+                               :format-arguments '("endpoint-vector"))))
+    (is (search "timed out" (mcp:index-off-reason outage)))
+    (is (not (search "engine error" (mcp:index-off-reason outage)))
+        "an embedder failure prints itself")
+    (is (search "engine error while resetting"
+                (mcp:index-off-reason other)))
+    (is (search "segment endpoint-vector is busy"
+                (mcp:index-off-reason other))
+        "and still names the condition")))
+
+(test the-start-line-names-which-key-the-embedder-will-send
+  "#78: an empty CL_LLM_MEMORY_EMBED_KEY is not \"no credential\" --
+RAG falls back to OPENAI_API_KEY (rag/embed.lisp:91) -- so the image's
+banner and the solo server's start line must say which one goes out."
+  (let ((saved (mapcar (lambda (n) (cons n (uiop:getenv n)))
+                       '("CL_LLM_MEMORY_EMBED_KEY" "OPENAI_API_KEY"))))
+    (unwind-protect
+         (progn
+           (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_KEY") ""
+                 (uiop:getenv "OPENAI_API_KEY") "")
+           (is (string= "none" (mcp:embed-key-source)))
+           (setf (uiop:getenv "OPENAI_API_KEY") "sk-would-have-leaked")
+           (is (string= "OPENAI_API_KEY fallback" (mcp:embed-key-source))
+               "an empty variable still sends a token")
+           (setf (uiop:getenv "CL_LLM_MEMORY_EMBED_KEY") "explicit")
+           (is (string= "env CL_LLM_MEMORY_EMBED_KEY"
+                        (mcp:embed-key-source))
+               "the explicit key wins"))
       (dolist (p saved) (setf (uiop:getenv (car p)) (or (cdr p) ""))))))

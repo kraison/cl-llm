@@ -535,7 +535,7 @@ scripts/run-memory.sh   # logs to stdout; SIGTERM or Ctrl-C closes the store
 | `CL_LLM_MEMORY_CLOCK` | `~/.cl-llm-memory/clock/` |
 | `CL_LLM_MEMORY_EMBED_URL` | empty; embeddings base URL; turns the index on |
 | `CL_LLM_MEMORY_EMBED_MODEL` | empty; required with a URL |
-| `CL_LLM_MEMORY_EMBED_KEY` | empty; a bearer token, when one is wanted |
+| `CL_LLM_MEMORY_EMBED_KEY` | empty; a bearer token -- but see the warning below |
 | `CL_LLM_MEMORY_EMBED_FLOOR` | empty; required with a URL: the cosine floor |
 | `CL_LLM_ASDF_REGISTRY` | the checkout the script lives in |
 
@@ -548,9 +548,9 @@ not at the first missing symbol (#72). The segment before it reads
 ("Semantic routing" below):
 
 ```
-memory image: :cl-llm-memory at /tmp/x78/working/ as claude-code/odm; \
-clock /tmp/x78/clock/; swank 127.0.0.1:4108; mcp off; index off; \
-graph-db /home/raison/work/vg-c3/
+memory image: :cl-llm-memory at /path/to/working/ as claude-code/host; \
+clock /path/to/clock/; swank 127.0.0.1:4008; mcp 127.0.0.1:4009; \
+index nomic-embed-text floor 0.55 (key: none); graph-db /path/to/engine/
 ```
 
 The image refuses a store left dirty (`store-not-closed-cleanly-error`,
@@ -602,7 +602,13 @@ claude mcp add --scope user memory -- /path/to/cl-llm/scripts/run-memory-mcp.sh
 The client launches `scripts/memory-mcp.lisp` through the wrapper. It
 reads the memory image's variables (the table above, plus
 `CL_LLM_MEMORY_CLOCK`), opens the clock and then the store on it, and
-serves stdin/stdout; every other byte goes to stderr. A multi-store
+serves stdin/stdout; every other byte goes to stderr. That last part
+takes more than binding `*standard-output*`: log4cl resolves
+`*debug-io*` per write and a thread started later inherits its
+**global** value, which under `sbcl --script` writes to stdout -- so
+the server sets that global to stderr before opening a store, or
+graph-db's buffer-pool thread would log into the JSON-RPC stream
+(kraison/cl-llm#79). A multi-store
 scope is `CL_LLM_MEMORY_SCOPE=private=/dir,working=/dir` in trust
 order with `CL_LLM_MEMORY_WRITE` naming the write store (default the
 last); `CL_LLM_MEMORY_QUERY_TOOL=1` adds the guarded Prolog tool. The
@@ -710,14 +716,43 @@ OpenAI-compatible embeddings endpoint and the two required companions:
 export CL_LLM_MEMORY_EMBED_URL=http://127.0.0.1:11434/v1
 export CL_LLM_MEMORY_EMBED_MODEL=nomic-embed-text
 export CL_LLM_MEMORY_EMBED_FLOOR=0.55
-export CL_LLM_MEMORY_EMBED_KEY=            # only if the endpoint wants one
+export CL_LLM_MEMORY_EMBED_KEY=            # read the warning below
 ```
 
 An empty (or unset) URL leaves the tools exactly as they were, lexical
 only. A URL without a model or a floor is a configuration error, and so
-is a floor that is not a real in [0, 1]. The endpoint need not be on
-the memory host: it is an HTTP round trip, so a GPU box elsewhere on
-the tailnet serves both modes.
+is a floor that is not a real in [0, 1] -- or a floor with anything
+after it, so `0.55 # good enough` is refused rather than half-read. The
+endpoint need not be on the memory host: it is an HTTP round trip, so a
+GPU box elsewhere on the tailnet serves both modes.
+
+> **The key is not optional in the way it looks.** An empty
+> `CL_LLM_MEMORY_EMBED_KEY` does **not** mean "send no credential":
+> `cl-llm/rag` falls back to `OPENAI_API_KEY` from the environment
+> (`rag/embed.lisp:91`). On a host that exports one -- most
+> development machines -- pointing `CL_LLM_MEMORY_EMBED_URL` at a LAN
+> box, a colleague's laptop or anything else you do not control hands
+> that box your OpenAI token as a bearer header. Both start lines say
+> which credential will be sent: `key: env CL_LLM_MEMORY_EMBED_KEY`,
+> `key: OPENAI_API_KEY fallback`, or `key: none`. Read it once after
+> configuring. To send nothing to a local endpoint, unset
+> `OPENAI_API_KEY` for the memory process.
+
+**What each mode prints at start.** The image's banner carries `index
+<model> floor <f> (key: <source>)` or `index off`; the solo server
+writes the same to stderr, prefixed `memory mcp:`, and neither is
+silent about a reset -- `semantic index: segment reset to dimension
+<n>` means every vector in that store was just dropped. A failure is
+one line, `semantic index off: ...`, distinguishing an embedder that
+would not answer from an engine error while resetting.
+
+**Both round trips are bounded**, because the LLM layer's defaults
+(60 s, three retries) are for a completion someone is watching. The
+start-up probe waits **5 s** and does not retry: a typo in the URL
+costs the handshake five seconds, not three minutes. A worker embedding
+waits **30 s** and does not retry either -- the indexer's own doubling
+backoff is the retry policy, and an unbounded one would hold `SIGTERM`
+inside the worker's join with the store still marked dirty.
 
 **The worker.** Each process runs one endpoint indexer (the memory
 image, or each solo server). It sweeps at start, then drains after
@@ -764,10 +799,10 @@ Each entry point embeds a single probe string at start, and resets the
 segment when the dimension differs -- before the listener accepts a
 connection and before the worker starts, because the engine's segment
 rebuild is unsafe against a concurrent search. Every vector is dropped
-and re-made from scratch. An embedder that will not answer that probe
-is reported once on stderr and leaves the index off for that run: the
-image still serves its store and its SWANK, and the solo server still
-completes the handshake.
+and re-made from scratch, and the start line says so. An embedder that
+will not answer that probe is reported once on stderr and leaves the
+index off for that run: the image still serves its store and its SWANK,
+and the solo server still completes the handshake, five seconds later.
 
 ### Telling an agent to use it
 

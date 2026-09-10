@@ -73,6 +73,13 @@ run -- unconfigured, misconfigured, or the probe failed (#78 SS5).")
 (defun %dir (s)
   (if (char= (char s (1- (length s))) #\/) s (concatenate 'string s "/")))
 
+(defun %note (control &rest args)
+  "One line to stderr, guarded: a broken stream must not cost the image
+its start."
+  (ignore-errors
+   (format *error-output* "~&memory image: ~?~%" control args)
+   (finish-output *error-output*)))
+
 (defun start ()
   "Open the store (make it when absent), bind it as the current graph,
 reset the semantic index's vector segment, start SWANK, then the MCP
@@ -113,15 +120,13 @@ store another image left dirty."
     (handler-case
         (let ((ee (mcp:embedder-from-env)))
           (when ee
-            (mem:reset-endpoint-segment
-             *graph*
-             (length (funcall (agent:endpoint-embedder-embed ee) "probe")))
+            (let ((d (mcp:probe-embedding-dimension ee)))
+              (when (mem:reset-endpoint-segment *graph* d)
+                (%note "semantic index: segment reset to dimension ~d"
+                       d)))
             (setf *embedder* ee)))
       (error (c)
-        (ignore-errors
-         (format *error-output*
-                 "~&memory image: semantic index off: ~a~%" c)
-         (finish-output *error-output*))
+        (%note "semantic index off: ~a" (mcp:index-off-reason c))
         (setf *embedder* nil)))
     ;; Raw, not %ENV: empty means off, only unset defaults (#75).
     (let ((mcp-port (or (sb-ext:posix-getenv "CL_LLM_MEMORY_MCP_PORT")
@@ -155,10 +160,7 @@ store another image left dirty."
                               (%env "CL_LLM_MEMORY_MAX_ROWS" "50"))
                    :embedder *embedder*))
           (error (c)
-            (ignore-errors
-             (format *error-output*
-                     "~&memory image: mcp listener disabled: ~a~%"
-                     (type-of c)))
+            (%note "mcp listener disabled: ~a" (type-of c))
             (setf *listener* nil))))
       ;; One worker per image, logging to this call's *ERROR-OUTPUT*
       ;; (stderr here) -- a new thread sees only the global stream.
@@ -178,8 +180,10 @@ swank 127.0.0.1:~D; ~A; ~A; graph-db ~A~%"
                           (mcp:listener-port *listener*))
                   "mcp off")
               (if *embedder*
-                  (format nil "index ~A"
-                          (agent:endpoint-embedder-model *embedder*))
+                  (format nil "index ~A floor ~A (key: ~A)"
+                          (agent:endpoint-embedder-model *embedder*)
+                          (agent:endpoint-embedder-floor *embedder*)
+                          (mcp:embed-key-source))
                   "index off")
               (asdf:system-source-directory
                (asdf:find-system :graph-db))))
