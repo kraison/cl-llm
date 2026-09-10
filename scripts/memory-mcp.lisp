@@ -53,11 +53,15 @@ session its server."
    (finish-output *error-output*)))
 
 (defun stop ()
-  "Stop the indexer -- it writes to the stores, so it is joined first --
-then close every store and the clock; never signals; idempotent.  The
-exit hook, so SIGTERM leaves no .dirty marker (SS6)."
+  "Stop the indexer -- it writes to the stores, so it is joined first,
+under a bound -- then close every store and the clock; never signals,
+but a close that fails says so on stderr (MCP:CLOSE-SCOPE);
+idempotent.  The exit hook, so SIGTERM leaves no .dirty marker (SS6)."
   (when *indexer*
-    (mem:stop-endpoint-indexer *indexer*)
+    ;; The embedder's own bound (MCP:%BOUNDED-EMBED, 30 s) plus a
+    ;; margin: past that the worker is abandoned rather than allowed to
+    ;; hold SIGTERM until the supervisor's SIGKILL (#78 I2).
+    (mem:stop-endpoint-indexer *indexer* :timeout 35)
     (setf *indexer* nil))
   (when (or *stores* *clock*)
     (mcp:close-scope *stores* *clock*)

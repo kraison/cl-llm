@@ -193,23 +193,32 @@ swank 127.0.0.1:~D; ~A; ~A; graph-db ~A~%"
 (defun stop ()
   "Stop the indexer, then the listener, then close the store without a
 snapshot (unbounded work before the .dirty marker clears; a backup is a
-separate operation), then the clock; never signals.  The worker writes
-to the store, so it is joined first.  The exit hook: SBCL runs
+separate operation), then the clock; never signals, but a close that
+fails says so on stderr.  The worker writes to the store, so it is
+joined first -- under a bound, so a hung embedder cannot hold the exit.
+The exit hook: SBCL runs
 *EXIT-HOOKS* on SIGTERM (measured in docs/superpowers/notes/
 2026-09-06-memory-mcp-engine-api-facts.md E5), so a stop from the shell
 or systemd leaves no .dirty marker."
   (when *indexer*
-    (mem:stop-endpoint-indexer *indexer*)
+    ;; The embedder's own bound (MCP:%BOUNDED-EMBED, 30 s) plus a
+    ;; margin: past that the worker is abandoned rather than allowed to
+    ;; hold SIGTERM until the supervisor's SIGKILL (#78 I2).
+    (mem:stop-endpoint-indexer *indexer* :timeout 35)
     (setf *indexer* nil))
   (when *listener*
     (mcp:stop-listener *listener*)
     (setf *listener* nil))
   (when *graph*
-    (ignore-errors (let ((gdb:*graph* *graph*))
-                     (gdb:close-graph *graph* :snapshot-p nil)))
+    ;; Reported, not swallowed: the one parked .dirty marker had no
+    ;; diagnostics because this was IGNORE-ERRORS.  %NOTE never signals.
+    (handler-case (let ((gdb:*graph* *graph*))
+                    (gdb:close-graph *graph* :snapshot-p nil))
+      (serious-condition (c) (%note "close-graph failed: ~a" c)))
     (setf *graph* nil gdb:*graph* nil))
   (when *clock*
-    (ignore-errors (gdb:close-system-clock *clock*))
+    (handler-case (gdb:close-system-clock *clock*)
+      (serious-condition (c) (%note "close-system-clock failed: ~a" c)))
     (setf *clock* nil)))
 
 ;; Before START, not after: an unhandled failure inside START escapes

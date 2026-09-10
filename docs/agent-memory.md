@@ -196,8 +196,8 @@ model name, and returns an `endpoint-indexer` it also parks in
 `*endpoint-indexer*` -- stopping and joining whatever worker was there
 first, so a re-entered start never orphans one. It starts with
 `pending` set, so the first thing it does is a sweep of everything
-already dirty. After that it sleeps
-in a condition wait until `notify-endpoint-indexer` -- called with no
+already dirty. After that it sleeps in a condition wait until
+`notify-endpoint-indexer` -- called with no
 argument it wakes `*endpoint-indexer*`, and is a no-op when there is
 none -- sets the flag and wakes it under the same lock, so a notify
 racing the wait cannot be lost.
@@ -218,14 +218,19 @@ worker's next sweep, and stays reachable lexically meanwhile. The agent
 side of this -- `make-agent-tools`' `:embedder`, and how `retrieve`
 uses the index -- is in `docs/agent-tools.md`.
 
-An embedder error is logged to `*error-output*` once per outage, not
-once per attempt, and retried after a backoff that doubles from the
-`:backoff` argument (default 1 s) up to 60 s. That backoff is a
-**deadline**, not a hint: a notify does not cut it short, only a stop
-does, and past it the worker drains whether or not one arrived. The
-write path notifies on every write, so without that an import against
-a down embedder would buy one failing round trip -- plus a full
-materialise and dirty sweep -- per write. The log goes to the
+A failed drain is logged to `*error-output*` once per outage, not once
+per attempt -- `drain failed: ...`, so named because the guard covers
+the engine work as well as the embedder, and an engine error is not an
+outage -- and retried after a backoff that doubles from the `:backoff`
+argument (default 1 s) up to 60 s. That guard is `serious-condition`,
+not `error`: a `storage-condition` costs the worker a backoff, not the
+process its life.
+
+That backoff is a **deadline**, not a hint: a notify does not cut it
+short, only a stop does, and past it the worker drains whether or not
+one arrived. The write path notifies on every write, so without that an
+import against a down embedder would buy one failing round trip -- plus
+a full materialise and dirty sweep -- per write. The log goes to the
 `*error-output*` in force when `start-endpoint-indexer` was called, not
 the global one a new thread would otherwise see.
 
@@ -240,15 +245,27 @@ whose profile outran all four passes is not an error and not drained
 either: it stays dirty, so the worker waits the initial backoff and
 drains again instead of idling, and names it on `*error-output*` once
 per worker -- an endpoint rewritten faster than it can be embedded is
-an embedder-speed problem an operator should see. `wait-endpoint-indexer` polls that flag --
+an embedder-speed problem an operator should see.
+`wait-endpoint-indexer` polls that flag --
 `(wait-endpoint-indexer w :timeout 10)`, `T` when idle, `NIL` on the
 timeout -- which is what a script or a test uses to mean "the index
 has caught up"; `endpoint-indexer-embedded` is the running count.
 
 `stop-endpoint-indexer` sets the stop flag, wakes the thread through
-the same condition variable -- so a worker idle or mid-backoff stops
-at once rather than after its delay -- joins it, and clears
-`*endpoint-indexer*`. It never signals: a worker that died rather than
+the same condition variable -- so a worker idle or mid-backoff stops at
+once rather than after its delay -- joins it, and clears
+`*endpoint-indexer*`. A worker *mid-drain* stops between endpoints, not
+at the end of the sweep, so one stop waits for at most one embedding
+rather than a whole vocabulary of them.
+
+The join is **bounded**: `:timeout` seconds (default 35, the entry
+points' 30 s embedder bound plus a margin), after which the worker is
+abandoned with one line on `*error-output*` -- `stop timed out after
+35 s; abandoning the worker` -- and the call answers `NIL` instead of
+`T`. An abandoned worker is still running and still writing, which is
+bad; a stop that never returns is worse, because it holds `SIGTERM`
+until the supervisor's `SIGKILL` and that leaves the store's `.dirty`
+marker behind. It never signals either: a worker that died rather than
 returned is logged, not re-signalled, because stop is usually called
 from a cleanup form. Stop the worker before closing its stores.
 
@@ -752,7 +769,9 @@ start-up probe waits **5 s** and does not retry: a typo in the URL
 costs the handshake five seconds, not three minutes. A worker embedding
 waits **30 s** and does not retry either -- the indexer's own doubling
 backoff is the retry policy, and an unbounded one would hold `SIGTERM`
-inside the worker's join with the store still marked dirty.
+inside the worker's join with the store still marked dirty. A cold
+local model that takes longer than 5 s to answer leaves the index off
+for this run; restart once it is warm.
 
 **The worker.** Each process runs one endpoint indexer (the memory
 image, or each solo server). It sweeps at start, then drains after

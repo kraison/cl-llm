@@ -4,17 +4,23 @@
 (in-package #:cl-llm.memory/tests)
 (in-suite :cl-llm-memory)
 
-(defun %counting-embed (dimension &key (fail-times 0))
+(defun %embedder-down ()
+  "The default embedder failure: a plain ERROR."
+  (error "embedder down"))
+
+(defun %counting-embed (dimension &key (fail-times 0)
+                                       (fail-with #'%embedder-down))
   "=> (values EMBED COUNTER): EMBED maps text to a DIMENSION vector
 whose first component is 1 (so every vector is nearest every other),
-counting calls in COUNTER's car; the first FAIL-TIMES calls signal."
+counting calls in COUNTER's car; the first FAIL-TIMES calls call
+FAIL-WITH, which must not return."
   (let ((counter (list 0)) (failures fail-times))
     (values (lambda (text)
               (declare (ignore text))
               (incf (car counter))
               (when (plusp failures)
                 (decf failures)
-                (error "embedder down"))
+                (funcall fail-with))
               (let ((v (make-array dimension :element-type 'single-float
                                              :initial-element 0f0)))
                 (setf (aref v 0) 1f0)
@@ -51,24 +57,33 @@ RACED once the interleaved write has fired."
   "The text LOG's Nth embed call (1-based) was given."
   (nth (- (%log-calls log) n) (%log-texts log)))
 
-(defun %racing-embed (log race)
-  "EMBED for a race test: records each text in LOG, numbers the call in
-the vector's second component, and -- once, on the first text of the
-repo endpoint -- funcalls RACE from inside the embed, i.e. between the
-render and the store (#78 SS4.3 step 2)."
+(defun %logging-embed (log &optional hook)
+  "EMBED recording each text in LOG and numbering the call in the
+vector's second component, so a stored vector names the render it came
+from.  HOOK, when given, runs after the text is recorded and before the
+vector is built."
   (lambda (text)
     (push text (%log-texts log))
     (incf (%log-calls log))
-    ;; The profile opens with the endpoint as words, so the key's
-    ;; hyphens are spaces there (SS2.2).
-    (when (and (not (%log-raced log))
-               (eql 0 (search "repo cl llm" text)))
-      (setf (%log-raced log) t)
-      (funcall race))
+    (when hook (funcall hook text))
     (let ((v (make-array 4 :element-type 'single-float
                            :initial-element 0f0)))
       (setf (aref v 0) 1f0 (aref v 1) (float (%log-calls log) 0f0))
       v)))
+
+(defun %racing-embed (log race)
+  "EMBED for a WINDOW 1 race test: %LOGGING-EMBED that -- once, on the
+first text of the repo endpoint -- funcalls RACE from inside the embed,
+i.e. between the render and the store transaction (#78 SS4.3 step 2)."
+  (%logging-embed
+   log
+   (lambda (text)
+     ;; The profile opens with the endpoint as words, so the key's
+     ;; hyphens are spaces there (SS2.2).
+     (when (and (not (%log-raced log))
+                (eql 0 (search "repo cl llm" text)))
+       (setf (%log-raced log) t)
+       (funcall race)))))
 
 (test materialise-gives-every-endpoint-a-vector-less-vertex
   (with-memory-graph (g)
@@ -294,6 +309,59 @@ render and the store (#78 SS4.3 step 2)."
                                                     :model "m")))
       (is-false (mem:dirty-endpoints g "m")))))
 
+(test a-touch-between-re-render-and-commit-never-leaves-a-stale-vector
+  "WINDOW 2: the interleaved write commits from inside %STORE-VECTOR --
+after the drain transaction's re-render, before its commit -- so the
+STRING= check cannot see it.  What catches it is TOUCH-ENDPOINTS'
+unconditional save of the endpoint's vertex, which puts that node in
+the writer's write set and makes the drain's commit fail validation.
+Restore the vector-less skip there and this test goes red while every
+other suite stays green (#78 SS4.3 step 2)."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (let* ((log (make-%embed-log))
+           (embed (%logging-embed log))
+           (store (fdefinition 'mem::%store-vector))
+           (raced-at nil))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'mem::%store-vector)
+                   (lambda (graph namespace key vector model)
+                     ;; A CREATE-ONLY writer in its own transaction: a
+                     ;; first belief on a new relation supersedes
+                     ;; nothing, so all its claim writes are creates and
+                     ;; VALIDATE (write sets only) would see nothing.
+                     (when (and (null raced-at) (eq namespace :repo))
+                       (setf raced-at (%log-calls log))
+                       (%pbelief g '(:repo . "cl-llm") "owner"
+                                 '(:person . "kevin")
+                                 "2026-08-31T08:00:00Z"))
+                     (funcall store graph namespace key vector model)))
+             (mem:drain-endpoint-vectors (list g) :embed embed
+                                                  :model "m"))
+        (setf (fdefinition 'mem::%store-vector) store))
+      (is-true raced-at
+               "control: the write fired inside %STORE-VECTOR")
+      (is (= 3 (%log-calls log))
+          "the conflict cost the repo endpoint one extra pass")
+      (is-false (search "owner person:kevin" (%log-text log raced-at))
+                "control: the raced render predates the new belief")
+      (let* ((v (mem:endpoint-vector-value
+                 (mem:endpoint-vector-of g :repo "cl-llm")))
+             (n (and v (round (aref v 1)))))
+        (is-true v "the repo endpoint ended with a vector")
+        (is (eql n (1+ raced-at))
+            "its vector is the re-render's, not the raced one's")
+        (is-true (search "owner person:kevin" (%log-text log n))
+                 "and that text already had the new belief: ~a"
+                 (%log-text log n)))
+      (is-false (mem:endpoint-dirty-p g :repo "cl-llm" "m")
+                "the raced endpoint is clean")
+      (is (= 1 (mem:drain-endpoint-vectors (list g) :embed embed
+                                                    :model "m"))
+          "only the endpoint the race created was left")
+      (is-false (mem:dirty-endpoints g "m")))))
+
 ;;; The worker (#78 SS4.3).
 
 (defun %seconds-to (thunk)
@@ -509,10 +577,116 @@ leaves the endpoint dirty -- the bounded-pass fallout (SS4.3 step 2)."
                  (is (= 2 (car counter)) "the second outage was tried")
                  (sleep 0.1)
                  (let ((text (get-output-stream-string log)))
-                   (is (= 2 (%count-substring "embedder failed" text))
+                   (is (= 2 (%count-substring "drain failed" text))
                        "both outages were logged, not just the first: ~s"
                        text)
                    (is (= 0 (%count-substring "embedder back" text))
                        "and no empty drain claimed the embedder back: ~s"
                        text)))
             (mem:stop-endpoint-indexer w)))))))
+
+(defun %blocking-embed (dimension &key (limit 10.0))
+  "=> (values EMBED COUNTER GATE): an EMBED that blocks until GATE's car
+is set or LIMIT seconds pass, then answers a DIMENSION vector.  It
+stands in for an embedder that has stopped answering; the gate lets the
+test release it once the stop has been proved not to wait for it, and
+LIMIT keeps a wedged run from hanging the suite."
+  (let ((counter (list 0)) (gate (list nil)))
+    (values (lambda (text)
+              (declare (ignore text))
+              (incf (car counter))
+              (let ((deadline (+ (get-internal-real-time)
+                                 (* limit
+                                    internal-time-units-per-second))))
+                (loop until (or (car gate)
+                                (>= (get-internal-real-time) deadline))
+                      do (sleep 0.05)))
+              (let ((v (make-array dimension
+                                   :element-type 'single-float
+                                   :initial-element 0f0)))
+                (setf (aref v 0) 1f0)
+                v))
+            counter gate)))
+
+(test stop-abandons-a-worker-wedged-in-an-embedding
+  "SS4.3 step 3: STOP-ENDPOINT-INDEXER is bounded.  A hung embedder used
+to hold the join, and through it SIGTERM, until the supervisor's
+SIGKILL left the store's .dirty marker behind."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter gate) (%blocking-embed 4)
+      (let* ((log (make-string-output-stream))
+             (*error-output* log)
+             (w (mem:start-endpoint-indexer (list g) :embed embed
+                                                     :model "m"))
+             (result :not-run)
+             (seconds nil))
+        (unwind-protect
+             (progn
+               (loop repeat 400 until (plusp (car counter))
+                     do (sleep 0.01))
+               (is (= 1 (car counter))
+                   "control: the worker is inside an embedding")
+               (setf seconds
+                     (%seconds-to
+                      (lambda ()
+                        (setf result (mem:stop-endpoint-indexer
+                                      w :timeout 1)))))
+               (is (null result)
+                   "a wedged worker is abandoned, not joined")
+               (is (< seconds 1.5) "and the stop returned in ~,2fs"
+                   seconds)
+               (is-true (bt:thread-alive-p
+                         (mem::endpoint-indexer-thread w))
+                        "control: it really was still running")
+               (is (null mem:*endpoint-indexer*)
+                   "and it is no longer the process's worker"))
+          ;; Release it and join for real: the graph closes next.
+          (setf (car gate) t)
+          (mem:stop-endpoint-indexer w :timeout 30))
+        (multiple-value-bind (fast fast-counter) (%counting-embed 4)
+          (declare (ignore fast-counter))
+          (let ((w2 (mem:start-endpoint-indexer (list g) :embed fast
+                                                         :model "m")))
+            (is-true (mem:stop-endpoint-indexer w2 :timeout 2)
+                     "control: a worker that is not wedged answers T")))
+        (is (= 1 (%count-substring "abandoning the worker"
+                                   (get-output-stream-string log)))
+            "the abandonment is on the record")))))
+
+(define-condition %embedder-storage-exhausted (storage-condition)
+  ()
+  (:report (lambda (c s)
+             (declare (ignore c))
+             (write-string "simulated storage exhaustion" s)))
+  (:documentation "A SERIOUS-CONDITION that is not an ERROR, the shape
+STORAGE-CONDITION takes: a HANDLER-CASE on ERROR lets it through, and
+under --script or --disable-debugger it takes the process (#78 M3)."))
+
+(test the-worker-survives-a-serious-condition-that-is-not-an-error
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter)
+        (%counting-embed
+         4 :fail-times 1
+           :fail-with (lambda () (error '%embedder-storage-exhausted)))
+      (let* ((log (make-string-output-stream))
+             (*error-output* log)
+             (w (mem:start-endpoint-indexer (list g) :embed embed
+                                            :model "m" :backoff 0.2)))
+        (unwind-protect
+             (progn
+               (is (mem:wait-endpoint-indexer w :timeout 15)
+                   "the worker outlived it and drained afterwards")
+               (is-true (bt:thread-alive-p
+                         (mem::endpoint-indexer-thread w))
+                        "control: the thread is still running")
+               (is (= 3 (car counter)) "one refusal, then both")
+               (is (null (mem:dirty-endpoints g "m")))
+               (sleep 0.1)
+               (let ((text (get-output-stream-string log)))
+                 (is (= 1 (%count-substring "drain failed" text))
+                     "and it was reported once, as a drain failure ~
+                      rather than an embedder outage: ~s"
+                     text)))
+          (mem:stop-endpoint-indexer w))))))

@@ -72,16 +72,29 @@ global id registry (GDB:STORE-ID-COLLISION-ERROR)."
              (values stores write-store clock)))
       (unless ok (close-scope stores clock)))))
 
+(defun %close-note (control &rest args)
+  "One line to stderr about a close that failed, itself guarded: this
+runs in a cleanup form and must not signal."
+  (ignore-errors
+   (format *error-output* "~&memory scope: ~?~%" control args)
+   (finish-output *error-output*)))
+
 (defun close-scope (stores clock)
   "Close every store, each with *GRAPH* bound to it and without the
 snapshot -- unbounded work before the .dirty marker clears (recon C2)
--- then the clock.  Never signals; a closed store is skipped."
+-- then the clock.  Never signals; a failure is reported and the next
+store still closes.  Reported rather than swallowed because a parked
+.dirty marker with no diagnostics is what an IGNORE-ERRORS here
+costs (#78 I2)."
   (dolist (g stores)
-    (ignore-errors
-     (let ((gdb:*graph* g))
-       (gdb:close-graph g :snapshot-p nil))))
+    (handler-case (let ((gdb:*graph* g))
+                    (gdb:close-graph g :snapshot-p nil))
+      (serious-condition (c)
+        (%close-note "close-graph ~a failed: ~a" (gdb:graph-name g) c))))
   (when clock
-    (ignore-errors (gdb:close-system-clock clock)))
+    (handler-case (gdb:close-system-clock clock)
+      (serious-condition (c)
+        (%close-note "close-system-clock failed: ~a" c))))
   nil)
 
 ;;;; The semantic endpoint index's embedder (#78 SS5)
