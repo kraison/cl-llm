@@ -257,6 +257,15 @@ One thread per process that has an embedder, started by
    (`graph-db::rebuild-vector-segment`, internal; an export is asked of
    the engine) while nothing can search. A dimension change therefore
    costs one restart, which a configuration change already requires.
+5. **Idle** (added in SDD Task 3): the worker reports itself idle only
+   when a drain finished with no notify outstanding *and* no store has
+   a dirty endpoint left, so `wait-endpoint-indexer` cannot read
+   "drained" over an endpoint the four passes of step 2 could not
+   settle. Such an endpoint is not an error: the worker waits its
+   backoff and drains again. The notify flag is cleared before the
+   drain runs, so a write landing mid-drain is kept for the next pass
+   rather than lost -- one drain takes each store's dirty set once and
+   is not promised to empty it.
 
 ### 4.4 Synchronous drain
 

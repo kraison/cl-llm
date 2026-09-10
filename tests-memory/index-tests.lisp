@@ -293,3 +293,117 @@ render and the store (#78 SS4.3 step 2)."
       (is (= 1 (mem:drain-endpoint-vectors (list g) :embed embed
                                                     :model "m")))
       (is-false (mem:dirty-endpoints g "m")))))
+
+;;; The worker (#78 SS4.3).
+
+(defun %seconds-to (thunk)
+  "Wall seconds spent FUNCALLing THUNK, as a single float."
+  (let ((start (get-internal-real-time)))
+    (funcall thunk)
+    (/ (float (- (get-internal-real-time) start) 0f0)
+       internal-time-units-per-second)))
+
+(test the-worker-drains-after-a-notify-and-stops-cleanly
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter) (%counting-embed 4)
+      (let ((w (mem:start-endpoint-indexer (list g) :embed embed
+                                                    :model "m"))
+            (stop-seconds nil))
+        (unwind-protect
+             (progn
+               (is (mem:wait-endpoint-indexer w :timeout 10)
+                   "the start-up sweep drains")
+               (is (= 2 (car counter)))
+               (is (= 2 (mem:endpoint-indexer-embedded w)))
+               (%pbelief g '(:repo . "cl-llm") "ci-status"
+                         '(:verdict . "red") "2026-08-31T08:00:00Z")
+               (is (= 2 (car counter)) "the write embedded nothing")
+               (mem:notify-endpoint-indexer w)
+               (is (mem:wait-endpoint-indexer w :timeout 10))
+               (is (= 4 (car counter)) "repo and verdict:red")
+               (is (null (mem:dirty-endpoints g "m"))))
+          (setf stop-seconds
+                (%seconds-to (lambda () (mem:stop-endpoint-indexer w)))))
+        (is (not (bt:thread-alive-p (mem::endpoint-indexer-thread w))))
+        ;; The idle worker sits in an untimed CONDITION-WAIT, so stop
+        ;; is only prompt if its notify lands under the same lock.
+        (is (< stop-seconds 2) "stop joined in ~,2fs" stop-seconds)
+        (is (null mem:*endpoint-indexer*)
+            "and stop cleared the process's worker")))))
+
+(test the-worker-backs-off-on-an-embedder-error-and-retries
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter) (%counting-embed 4 :fail-times 1)
+      (let ((w (mem:start-endpoint-indexer (list g) :embed embed :model "m"
+                                                    :backoff 0.2)))
+        (unwind-protect
+             (progn
+               (is (mem:wait-endpoint-indexer w :timeout 15))
+               (is (= 3 (car counter)) "one failure, then both")
+               (is (null (mem:dirty-endpoints g "m"))))
+          (mem:stop-endpoint-indexer w))))))
+
+(test stop-wakes-the-worker-out-of-a-long-backoff
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter) (%counting-embed 4 :fail-times 1000)
+      (let ((w (mem:start-endpoint-indexer (list g) :embed embed :model "m"
+                                                    :backoff 30.0)))
+        (loop repeat 200 until (plusp (car counter)) do (sleep 0.05))
+        (is (plusp (car counter)) "control: the embedder was called")
+        ;; Nothing was embedded and the store stays dirty, so the
+        ;; worker must not report itself idle (SS4.3).
+        (is (null (mem:wait-endpoint-indexer w :timeout 0.3))
+            "a worker whose store is still dirty is never idle")
+        (let ((s (%seconds-to (lambda () (mem:stop-endpoint-indexer w)))))
+          ;; A SLEEP backoff would hold the join for 30 seconds.
+          (is (< s 2) "stop woke the backoff wait in ~,2fs" s))
+        (is (not (bt:thread-alive-p (mem::endpoint-indexer-thread w))))
+        (is (= 0 (mem:endpoint-indexer-embedded w)))))))
+
+(test notify-without-a-worker-is-a-no-op
+  (let ((mem:*endpoint-indexer* nil))
+    (finishes (mem:notify-endpoint-indexer))))
+
+(defun %unsettling-embed (g)
+  "=> (values EMBED COUNTER): an EMBED that, whenever it is given the
+repo endpoint's profile, writes another belief on that endpoint, so no
+number of passes settles it.  The drain returns WITHOUT error and
+leaves the endpoint dirty -- the bounded-pass fallout (SS4.3 step 2)."
+  (let ((counter (list 0)))
+    (values (lambda (text)
+              (incf (car counter))
+              (when (eql 0 (search "repo cl llm" text))
+                (%pbelief g '(:repo . "cl-llm")
+                          (format nil "note~d" (car counter))
+                          '(:digest . "d")))
+              (let ((v (make-array 4 :element-type 'single-float
+                                     :initial-element 0f0)))
+                (setf (aref v 0) 1f0)
+                v))
+            counter)))
+
+(test a-store-that-never-settles-is-never-reported-idle
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter) (%unsettling-embed g)
+      (let ((w (mem:start-endpoint-indexer (list g) :embed embed :model "m"
+                                                    :backoff 0.1)))
+        (unwind-protect
+             (progn
+               ;; No error is ever signalled here: the drains complete
+               ;; and store, so only the dirty-set check can keep the
+               ;; worker from claiming it is drained (SS4.3).
+               (is (null (mem:wait-endpoint-indexer w :timeout 1))
+                   "idle over an endpoint the passes never settled")
+               (is (plusp (mem:endpoint-indexer-embedded w))
+                   "control: the drains did store vectors")
+               (is (> (car counter) mem:*embed-passes*)
+                   "control: more than one drain ran")
+               (is-true (member '(:repo . "cl-llm")
+                                (mem:dirty-endpoints g "m")
+                                :test #'equal)
+                        "control: the endpoint really is still dirty"))
+          (mem:stop-endpoint-indexer w))))))

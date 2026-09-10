@@ -192,3 +192,162 @@ unsafe against a concurrent VECTOR-SEARCH."
       ;; write fixes the new dimension (E3).
       (graph-db::rebuild-vector-segment graph 'endpoint-vector 'embedding)
       t)))
+
+;;;; The worker (SS4.3): one thread per process, a sweep at start, a
+;;;; drain after every notify, a doubling backoff over an outage.
+
+(defvar *endpoint-indexer* nil
+  "This process's worker, or NIL when no embedder is configured.
+NOTIFY-ENDPOINT-INDEXER with no argument uses it (SS4.5).")
+
+(defstruct (endpoint-indexer (:constructor %make-endpoint-indexer))
+  "One thread draining STORES with EMBED under MODEL.  PENDING says a
+notify arrived since the running drain began, IDLE that the last drain
+left every store clean; both are read and written under LOCK only."
+  stores embed model thread
+  (lock (bt:make-lock "endpoint-indexer"))
+  (cv (bt:make-condition-variable :name "endpoint-indexer"))
+  (pending t)                 ; T at birth: the start-up sweep
+  (idle nil)
+  (stop-p nil)
+  (embedded 0)
+  (backoff 1.0)               ; seconds before the next attempt
+  (initial-backoff 1.0)       ; what a drain that got through resets it to
+  (max-backoff 60.0)
+  (failing nil))              ; T once this outage has been logged
+
+(defun %indexer-log (control &rest args)
+  "Print one line to *ERROR-OUTPUT*, never signalling: an outage is all
+the worker can report, and it must not die reporting it."
+  (ignore-errors
+   (apply #'format *error-output* control args)
+   (finish-output *error-output*)))
+
+(defun %indexer-await (w delay)
+  "Block until a notify, DELAY seconds (when non-NIL) or a stop; => T
+to drain, NIL to stop.  Clears PENDING before the drain, so a notify
+arriving during one is kept for the next pass rather than lost:
+DRAIN-ENDPOINT-VECTORS takes each store's dirty set once (SS4.3)."
+  (bt:with-lock-held ((endpoint-indexer-lock w))
+    (loop until (or (endpoint-indexer-stop-p w)
+                    (endpoint-indexer-pending w))
+          do (if delay
+                 (progn
+                   (bt:condition-wait (endpoint-indexer-cv w)
+                                      (endpoint-indexer-lock w)
+                                      :timeout delay)
+                   (setf (endpoint-indexer-pending w) t))
+                 (bt:condition-wait (endpoint-indexer-cv w)
+                                    (endpoint-indexer-lock w))))
+    (unless (endpoint-indexer-stop-p w)
+      (setf (endpoint-indexer-pending w) nil
+            (endpoint-indexer-idle w) nil)
+      t)))
+
+(defun %indexer-dirty-p (w)
+  "T when any store of W still holds an endpoint dirty under its model.
+Trap: a second vocabulary pass per drain, the price of never reporting
+idle over a dirty store."
+  (when (some (lambda (g) (dirty-endpoints g (endpoint-indexer-model w)))
+              (endpoint-indexer-stores w))
+    t))
+
+(defun %indexer-pass (w)
+  "One drain and its bookkeeping; => the seconds to wait before the
+next attempt, or NIL to wait for a notify.  IDLE is set only when the
+drain left every store clean and no notify arrived: an endpoint whose
+profile outlasted *EMBED-PASSES* stays dirty and is retried after the
+backoff, so WAIT-ENDPOINT-INDEXER cannot read idle over it (SS4.3)."
+  (handler-case
+      (let* ((n (drain-endpoint-vectors
+                 (endpoint-indexer-stores w)
+                 :embed (endpoint-indexer-embed w)
+                 :model (endpoint-indexer-model w)))
+             (dirty (%indexer-dirty-p w)))
+        (bt:with-lock-held ((endpoint-indexer-lock w))
+          (incf (endpoint-indexer-embedded w) n)
+          (setf (endpoint-indexer-backoff w)
+                (endpoint-indexer-initial-backoff w))
+          (when (endpoint-indexer-failing w)
+            (%indexer-log "~&endpoint indexer: embedder back~%")
+            (setf (endpoint-indexer-failing w) nil))
+          (cond ((endpoint-indexer-pending w) nil)
+                (dirty (endpoint-indexer-backoff w))
+                (t (setf (endpoint-indexer-idle w) t)
+                   (bt:condition-notify (endpoint-indexer-cv w))
+                   nil))))
+    (error (c)
+      (bt:with-lock-held ((endpoint-indexer-lock w))
+        (unless (endpoint-indexer-failing w)
+          (%indexer-log "~&endpoint indexer: embedder failed: ~a; ~
+                         retrying with backoff~%" c)
+          (setf (endpoint-indexer-failing w) t))
+        (prog1 (endpoint-indexer-backoff w)
+          (setf (endpoint-indexer-backoff w)
+                (min (endpoint-indexer-max-backoff w)
+                     (* 2 (endpoint-indexer-backoff w)))))))))
+
+(defun %indexer-loop (w)
+  "The worker thread's body: await, drain, repeat until stopped."
+  (loop with delay = nil
+        while (%indexer-await w delay)
+        do (setf delay (%indexer-pass w))))
+
+(defun start-endpoint-indexer (stores &key embed model (backoff 1.0)
+                                           (name "endpoint-indexer"))
+  "Start the worker over STORES with EMBED (text -> vector) and MODEL:
+a sweep at once, then a drain after every NOTIFY-ENDPOINT-INDEXER; an
+embedder error is logged once per outage and retried with a doubling
+BACKOFF (seconds, capped at 60).  => the ENDPOINT-INDEXER, also set as
+*ENDPOINT-INDEXER*.  Trap: stop it before closing the stores."
+  (let ((w (%make-endpoint-indexer :stores stores :embed embed
+                                   :model model :backoff backoff
+                                   :initial-backoff backoff)))
+    (setf (endpoint-indexer-thread w)
+          (bt:make-thread (lambda () (%indexer-loop w)) :name name))
+    (setf *endpoint-indexer* w)))
+
+(defun notify-endpoint-indexer (&optional (indexer *endpoint-indexer*))
+  "Wake INDEXER to drain; a no-op when there is none.  The flag is set
+and the condition notified under one lock, so a worker on its way into
+CONDITION-WAIT cannot miss it."
+  (when indexer
+    (bt:with-lock-held ((endpoint-indexer-lock indexer))
+      (setf (endpoint-indexer-pending indexer) t
+            (endpoint-indexer-idle indexer) nil)
+      (bt:condition-notify (endpoint-indexer-cv indexer))))
+  nil)
+
+(defun %indexer-idle-p (w)
+  "W's IDLE flag, read under its lock."
+  (bt:with-lock-held ((endpoint-indexer-lock w))
+    (endpoint-indexer-idle w)))
+
+(defun wait-endpoint-indexer (indexer &key (timeout 10))
+  "Block until INDEXER has drained every store clean, or TIMEOUT
+seconds; => T when idle, NIL on the timeout.  Polls the flag instead of
+waiting on the condition, so a notify cannot be missed here.  For tests
+and scripted sessions (SS4.3, SS4.4)."
+  (let ((deadline (+ (get-internal-real-time)
+                     (* timeout internal-time-units-per-second))))
+    (loop
+      (when (%indexer-idle-p indexer) (return t))
+      (when (> (get-internal-real-time) deadline) (return nil))
+      (sleep 0.05))))
+
+(defun stop-endpoint-indexer (indexer)
+  "Stop INDEXER and join its thread; clears *ENDPOINT-INDEXER* when it
+was this one.  Idempotent.  The stop flag and the wake go under one
+lock, so a worker in CONDITION-WAIT -- idle or mid-backoff -- returns
+at once rather than after its delay; a worker mid-drain is joined when
+that drain ends."
+  (when indexer
+    (bt:with-lock-held ((endpoint-indexer-lock indexer))
+      (setf (endpoint-indexer-stop-p indexer) t)
+      (bt:condition-notify (endpoint-indexer-cv indexer)))
+    (let ((thread (endpoint-indexer-thread indexer)))
+      (when (and thread (bt:thread-alive-p thread))
+        (bt:join-thread thread)))
+    (when (eq indexer *endpoint-indexer*)
+      (setf *endpoint-indexer* nil)))
+  nil)

@@ -32,6 +32,10 @@
    #:nearest-endpoints #:dirty-endpoints #:materialise-endpoint-vectors
    #:drain-endpoint-vectors #:rebuild-endpoint-vectors
    #:reset-endpoint-segment #:*embed-passes*
+   ;; the indexer worker (#78 SS4.4)
+   #:*endpoint-indexer* #:endpoint-indexer #:start-endpoint-indexer
+   #:notify-endpoint-indexer #:wait-endpoint-indexer
+   #:stop-endpoint-indexer #:endpoint-indexer-embedded
    ;; scope (S6b)
    #:check-scope #:scope-argument-error
    #:call-with-scope-snapshots #:with-scope-snapshots

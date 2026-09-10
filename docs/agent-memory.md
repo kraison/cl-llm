@@ -187,6 +187,42 @@ against a concurrent search. `reset-endpoint-segment` clears every
 vector and drops the segment, returning `T` when it reset; it must run
 at start, before anything can search (spec SS4.3).
 
+### The worker
+
+One worker per process draws the drain off the write path.
+`start-endpoint-indexer` takes the stores, an embedding function and a
+model name, and returns an `endpoint-indexer` it also parks in
+`*endpoint-indexer*`; it starts with `pending` set, so the first thing
+it does is a sweep of everything already dirty. After that it sleeps
+in a condition wait until `notify-endpoint-indexer` -- called with no
+argument it wakes `*endpoint-indexer*`, and is a no-op when there is
+none -- sets the flag and wakes it under the same lock, so a notify
+racing the wait cannot be lost.
+
+The flag is cleared *before* the drain runs, so a write that lands
+mid-drain sets it again and is picked up by the next pass rather than
+lost: `drain-endpoint-vectors` takes each store's dirty set once, and
+one pass is not promised to empty it.
+
+An embedder error is logged to `*error-output*` once per outage, not
+once per attempt, and retried after a backoff that doubles from the
+`:backoff` argument (default 1 s) up to 60 s; the first drain that
+gets through logs one line and resets it.
+
+The worker calls itself idle only when a drain finished with no notify
+outstanding **and** no store has a dirty endpoint left. An endpoint
+whose profile outran all four passes is not an error and not drained
+either: it stays dirty, so the worker waits its backoff and drains
+again instead of idling. `wait-endpoint-indexer` polls that flag --
+`(wait-endpoint-indexer w :timeout 10)`, `T` when idle, `NIL` on the
+timeout -- which is what a script or a test uses to mean "the index
+has caught up"; `endpoint-indexer-embedded` is the running count.
+
+`stop-endpoint-indexer` sets the stop flag, wakes the thread through
+the same condition variable -- so a worker idle or mid-backoff stops
+at once rather than after its delay -- joins it, and clears
+`*endpoint-indexer*`. Stop the worker before closing its stores.
+
 ## Capturing a memory directory
 
 The proving corpus is the agent's own memory files
