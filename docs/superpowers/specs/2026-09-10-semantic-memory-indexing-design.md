@@ -6,8 +6,12 @@ vertex slot, `graph-db:vector-search`), already used by
 `cl-llm/rag/vivace`; the memory's recall rules (`memory/recall.lisp`)
 and the vocabulary (`memory/vocabulary.lisp`, #64, #68, #70).
 **Date:** 2026-09-10.
-**Status:** Proposed; rulings R1–R7 approved in discussion on
-2026-09-10.
+**Status:** Approved 2026-09-10 (rulings R1–R7 in discussion); amended
+the same day after the engine-facts pass
+(`docs/superpowers/notes/2026-09-10-semantic-index-engine-facts.md`):
+profiles carry beliefs only, absences never touch, the segment reset
+happens at start before the listener, the memory layer takes an
+embedding *function* rather than a `cl-llm/rag` embedder.
 
 ---
 
@@ -43,7 +47,7 @@ is that design.
 | **R1** | **Vectors route to endpoints, never to beliefs.** Dense search yields candidate endpoints `(namespace-keyword . key-string)`; the graph is then traversed exactly as today. No chunk, no belief text, is served from the vector side. | The graph stays authoritative for validity intervals, transaction time, citations and provenance. Every downstream tool keeps its contract. |
 | **R2** | **Lexical first, then dense fill.** Lexical hits keep today's order and come first; dense candidates above the floor fill the remaining cap in similarity order; duplicates collapse. | An exact identifier in the query (`sigil-…`, a commit SHA, a date) is a lexical hit and is never displaced by embedding drift. With no embedder the route is exactly today's, so the change is additive. |
 | **R3** | **The refusal stays, with a per-embedder floor.** No lexical hit and no dense candidate at or above the floor is still `no endpoint recognised`. The floor is a field of the embedder configuration, not a constant. | Keeps `searched-empty` distinct from `uncovered`. A fixed cosine such as 0.65 would gate out most paraphrases on common models, silently. |
-| **R4** | **The unit indexed is an endpoint's active profile**, rendered from the beliefs that are current in recall's sense (not retracted, validity open) plus the current decisions citing them, capped. | A single triple lacks the context an embedding needs; a superseded predecessor must leave the profile the moment its successor lands. |
+| **R4** | **The unit indexed is an endpoint's active profile**, rendered from the beliefs that are current in recall's sense (not retracted, validity open), capped. Decisions are not in the profile (amended: a concluded decision carries only its rule name and cites, and it is written by `conclude`'s own transaction, possibly citing beliefs in other stores, so it would need a cross-store touch for one word of text). | A single triple lacks the context an embedding needs; a superseded predecessor must leave the profile the moment its successor lands. |
 | **R5** | **Invalidation is a derived dirty set.** A write clears the touched endpoints' vectors inside its transaction. An endpoint with current beliefs and no vector *is* dirty; the state is on disk, nothing is queued durably. One worker thread per process re-embeds; the write path never waits on the embedder. | Nothing stale is ever searchable, in any mode. The memory host has no GPU: a local model's cold load, timeouts and outages must not land in an agent's tool call. A lost queue costs nothing because the sweep re-derives it. |
 | **R6** | **The engine's vector segment is the store.** The `endpoint-vector` vertex declares its `embedding` slot `:vector-index t`; the apply path maintains the mmap segment, `graph-db:vector-search` scans it. | No new storage, no daemon; `cl-llm/rag/vivace` already proves the path. |
 | **R7** | **The embedder rides on the scope; each vector records its model.** Configured by environment on the image and the solo server, empty meaning inert. A vector from a different model reads as absent, so a model change re-embeds in the background; the floor travels with the model. | One configuration path for the in-process agent and both MCP entry points. Vectors from two models are not comparable, at any dimension. |
@@ -77,14 +81,18 @@ Rendered in this order, one line each:
 2. one line per current belief, rendered by `claims:render-claim`
    (endpoints, relation, producer, standing, validity), the endpoint's
    own beliefs first as subject then as object, newest validity first;
-3. one line per current decision that cites one of those beliefs (the
-   trace record reachable through `decisions-citing`): its rule, its
-   outcome and its report text. This is where "why" questions find
-   their words; the memory has no separate rationale field.
+Decisions contribute no line (R4 as amended; facts E6). The "why" a
+paraphrase finds is the relation and the object of the belief itself
+(`decided-because`, `root-cause`), which is what the memory records.
+
+The rendering is the memory layer's own, in `render-claim`'s shape
+(`ns:key relation ns:key (producer, standing, validity)`): the memory
+system does not depend on `cl-llm/rag`, where `render-claim` lives.
 
 The profile is **capped** at a documented number of belief lines
-(default 32) and decision lines (default 8), newest first, so an
-endpoint with hundreds of beliefs embeds a representative head.
+(default 32), newest validity first, so an endpoint with hundreds of
+beliefs embeds a representative head. Absences (`record-absence`) are
+instants, never open, so they are never profile lines.
 
 ### 2.3 Supersession chains
 
@@ -119,9 +127,11 @@ memory store has the class:
 ```
 
 One vertex per endpoint per store, keyed by `(ev-namespace, ev-key)`
-through a unique index. `embedding` unbound means "no vector": the
-segment holds no entry, `vector-search` cannot return the endpoint, and
-the endpoint is lexical-only. The segment is created lazily by the first
+through two named declarations: a `def-index` on the pair for lookup
+and a `def-unique` on it for enforcement (facts E5). "No vector" means
+`embedding` holds anything but a conforming `(simple-array single-float
+(*))` (unbound and NIL both drop the segment entry, E2): the endpoint
+is then lexical-only. The segment is created lazily by the first
 conforming write and fixes its dimension then (engine behaviour).
 
 ---
@@ -174,23 +184,24 @@ segment scan per store. A store without a segment yet answers
 ### 4.1 Definition
 
 An endpoint is **dirty** when it has at least one current belief and its
-`endpoint-vector` either does not exist, has `embedding` unbound, or
+`endpoint-vector` either does not exist, holds no conforming vector, or
 carries an `ev-model` other than the configured model. Nothing else
 records dirtiness: the set is derived from the store, so it survives a
 crash, an exit, or a lost worker unchanged.
 
 ### 4.2 The write path
 
-Inside the transaction that `record-belief`, `record-absence`, the
-supersession it performs, or `retract-belief` runs in, the touched
-endpoints are the subject and, when binary, the object of the written or
-retracted belief. For each, the `endpoint-vector` (created if absent)
-has its `embedding` made unbound. The apply
-path removes the segment entry with the commit. From that commit on the
-endpoint is lexical-only until re-embedded. A superseded predecessor
-shares its subject with the successor and contributes no endpoint of its
-own; its object endpoint is touched as well, since its profile loses a
-line.
+Inside the transaction that `record-belief`, the supersession it
+performs, or `retract-belief` runs in, the touched endpoints are the
+subject and, when binary, the object of the written or retracted belief.
+For each, the `endpoint-vector` (created if absent) has its `embedding`
+cleared. The apply path removes the segment entry with the commit. From
+that commit on the endpoint is lexical-only until re-embedded. A
+superseded predecessor shares its subject with the successor and
+contributes no endpoint of its own; its object endpoint is touched as
+well, since its profile loses a line. `record-absence` touches nothing:
+an absence is never a profile line (§2.2). `conclude` touches nothing
+beyond the belief it records through `record-belief`.
 
 `conclude` and `retract` (the tools) do nothing more: they own the
 transaction, and the clearing rides inside it. After the commit they
@@ -216,10 +227,17 @@ One thread per process that has an embedder, started by
 3. **Failure**: an embedder error is logged once per outage on stderr,
    the endpoint stays dirty, and the worker backs off (1 s doubling to
    60 s) before retrying the queue. Nothing is dropped.
-4. **Model change**: when the configured model differs from the
-   segment's, and its dimension differs, the sweep drops the segment
-   file before the first write (an engine operation, pinned in the
-   facts pass); otherwise the per-vector `ev-model` mismatch is enough.
+4. **Model change**: a vector whose `ev-model` differs from the
+   configured model is dirty and re-embedded by the ordinary drain. A
+   *dimension* change cannot be handled by the worker: an empty segment
+   keeps its dimension and the engine's only drop is unsafe against a
+   concurrent search (facts E3). So each entry point, after opening the
+   stores and before starting the listener or the worker, embeds one
+   probe string, and when the segment's dimension differs it clears
+   every vector in one transaction and rebuilds the segment
+   (`graph-db::rebuild-vector-segment`, internal; an export is asked of
+   the engine) while nothing can search. A dimension change therefore
+   costs one restart, which a configuration change already requires.
 
 ### 4.4 Synchronous drain
 
@@ -241,9 +259,16 @@ one store (engine rule), so two workers never race on one segment.
 
 ## 5. Configuration
 
-The embedder is a field of the agent scope (`agent/scope.lisp`), set by
-`make-agent-tools :embedder`. The image and the solo server read it from
-the environment, in the house style of the existing variables:
+The memory layer (`cl-llm/memory`) depends on the engine only and must
+not depend on `cl-llm/rag` (its system definition says so). It therefore
+takes an **embedding function** `(lambda (text) vector)` and a model
+name, never an embedder object. The agent layer wraps a `rag:embedder`
+into that pair together with the floor: `endpoint-embedder (embedder
+model floor)`, made by `make-endpoint-embedder`, which requires a
+non-empty model name (a `rag:mock-embedder` has none, E9). It is a
+field of the agent scope (`agent/scope.lisp`), set by
+`make-agent-tools :embedder`. The image and the solo server read it
+from the environment, in the house style of the existing variables:
 
 | variable | meaning |
 |---|---|
@@ -302,7 +327,8 @@ suite gates its child-process tests.
    endpoint whose profile embeds nearer the query).
 4. **Supersession.** A belief superseded by another on the same subject:
    after the commit the old object endpoint is dirty and unsearchable;
-   after a drain, its profile no longer contains the old line, and a
+   after a drain, its profile no longer contains the old line (the
+   endpoint has no vector at all when nothing current remains), and a
    paraphrase for the new object routes to the new endpoint.
 5. **Retraction.** A retracted belief leaves its endpoints dirty; an
    endpoint with no remaining current belief has no vector after the
@@ -311,8 +337,9 @@ suite gates its child-process tests.
    already held leaves the vector in place and the counting embedder
    reports no embedding.
 7. **Model change.** Vectors written under model A read as dirty under
-   model B; a drain re-embeds every endpoint; with a different
-   dimension the segment is recreated.
+   model B; a drain re-embeds every endpoint. A different dimension:
+   the start-time reset clears the vectors and rebuilds the segment,
+   and a vector of the new length is then accepted.
 8. **The write path never embeds.** A probe on the embedder proves
    `conclude` and `retract` return with zero embedder calls, and that
    the calls happen in the drain.
@@ -323,26 +350,28 @@ suite gates its child-process tests.
 
 ## 8. Implementation phases
 
-1. **Profile and schema (`cl-llm/memory`).** `endpoint-vector` in
-   `define-memory-store`; `memory/profile.lisp` with the renderer and
-   the dirty predicate; the write-path clearing in `memory/write.lisp`.
-2. **Routing (`cl-llm/agent`).** `make-hybrid-key-extractor` and
-   `nearest-endpoints` in `agent/extract.lisp`; the scope's embedder;
-   `%claim-sources` passes it; the test embedder.
-3. **The worker (`cl-llm/memory`).** `start-/stop-endpoint-indexer`,
-   `drain-endpoint-vectors`, `rebuild-endpoint-vectors`, the sweep, the
-   model check and the segment drop; `conclude`/`retract` notify.
+1. **Profile and schema (`cl-llm/memory`).** `endpoint-vector` and its
+   two declarations in `define-memory-store`; `memory/profile.lisp`
+   with the renderer, the current-belief walk, the dirty predicate and
+   `touch-endpoints`; the write-path clearing in `memory/write.lisp`.
+2. **The indexer (`cl-llm/memory`).** `memory/index.lisp`:
+   `nearest-endpoints`, `drain-endpoint-vectors`,
+   `rebuild-endpoint-vectors`, `reset-endpoint-segment`,
+   `start-/notify-/stop-endpoint-indexer` over an embedding function
+   and a model name; `bordeaux-threads` joins the system's dependencies
+   (the engine already loads it).
+3. **Routing (`cl-llm/agent`).** `endpoint-embedder`,
+   `make-hybrid-key-extractor` in `agent/extract.lisp`; the scope's
+   embedder; `%claim-sources` passes it and embeds the query once per
+   call; the synonym-table test embedder; `conclude`/`retract` notify.
 4. **Entry points and docs (`cl-llm/agent/mcp`, `scripts/`).** The
-   environment variables on the image and the solo server, the worker's
-   start and stop in their lifecycles, `docs/agent-memory.md` and
-   `docs/agent-tools.md`.
+   environment variables on the image and the solo server, the
+   dimension reset before the listener, the worker's start and stop in
+   their lifecycles, `docs/agent-memory.md` and `docs/agent-tools.md`.
 
-An engine-facts pass precedes the plan and pins: adding a vertex class
-with a vector slot to an existing store (schema manifest); making a
-`:vector-index` slot unbound on update removes the segment entry;
-dropping and recreating a segment with a new dimension; what
-`render-claim` and the trace record expose; the count-index route for
-the endpoint walk.
+The engine-facts pass (`docs/superpowers/notes/2026-09-10-semantic-index-engine-facts.md`)
+pinned the facts this design relies on; its seven disagreements are
+resolved in the amendments above.
 
 ---
 
