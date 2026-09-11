@@ -5,11 +5,23 @@
 (in-suite :cl-llm-memory)
 
 (defun %pbelief (g subject relation object
-                &optional (start "2026-08-30T08:00:00Z"))
+                &optional (start "2026-08-30T08:00:00Z") (producer +p+))
   (gdb:with-transaction (:graph g)
     (mem:record-belief g subject relation object
-                       :producer +p+ :standing :observed
+                       :producer producer :standing :observed
                        :extent (%open-from (%ts start)))))
+
+(defun %store-vector (g endpoint)
+  "Give ENDPOINT's vertex a vector by hand, so a later touch shows as
+its removal."
+  (gdb:with-transaction (:graph g)
+    (let ((c (gdb:copy (mem:endpoint-vector-of g (car endpoint)
+                                               (cdr endpoint)))))
+      (setf (slot-value c 'mem::embedding)
+            (make-array 4 :element-type 'single-float
+                          :initial-element 0.5f0)
+            (slot-value c 'mem::ev-model) "m")
+      (gdb:save c))))
 
 (test a-profile-lists-the-current-beliefs-of-an-endpoint-in-both-roles
   (with-memory-graph (g)
@@ -201,3 +213,36 @@
       (is (= 2 (length evs)) "both benign duplicate vertices remain")
       (dolist (ev evs)
         (is (null (mem:endpoint-vector-value ev)))))))
+
+(test a-belief-another-producer-outdates-leaves-the-profile
+  "#82: currency is cross-producer on read, so X's line must leave the
+subject's profile when Y's later belief leads -- and the write that
+outdated it must touch X's object endpoint, or the stale line stays
+embedded there."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green")
+              "2026-08-30T08:00:00Z" +px+)
+    (mem:with-scope-snapshots ((list g))
+      (is (not (null (mem:endpoint-profile g :verdict "green")))
+          "premise: X's belief is in the profile while it leads"))
+    (%store-vector g '(:verdict . "green"))
+    (let ((y (%pbelief g '(:repo . "cl-llm") "ci-status"
+                       '(:verdict . "red") "2026-08-31T08:00:00Z" +py+)))
+      (mem:with-scope-snapshots ((list g))
+        (let ((text (mem:endpoint-profile g :repo "cl-llm")))
+          (is (search "verdict:red" text))
+          (is (null (search "verdict:green" text))
+              "outdated by Y: X's line leaves the subject's profile"))
+        (is (null (mem:endpoint-profile g :verdict "green"))
+            "and the endpoint it named has nothing current"))
+      (is (null (mem:endpoint-vector-value
+                 (mem:endpoint-vector-of g :verdict "green")))
+          "Y's write touched the endpoint its belief outdated")
+      (%store-vector g '(:verdict . "green"))
+      (gdb:with-transaction (:graph g) (mem:retract-belief y))
+      (is (null (mem:endpoint-vector-value
+                 (mem:endpoint-vector-of g :verdict "green")))
+          "retracting Y touched it again")
+      (mem:with-scope-snapshots ((list g))
+        (is (not (null (mem:endpoint-profile g :verdict "green")))
+            "X leads again, so its line comes back")))))

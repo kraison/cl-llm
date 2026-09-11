@@ -210,7 +210,10 @@ caller (`key-extractor`); the source itself is tenant-neutral. See
 (kraison/cl-llm#16). "I looked and there was nothing" is a write, not a
 missing row; a belief that stopped being true is recalled *as
 superseded*, naming its successor; a belief that was wrong is retracted
-and stays readable as "believed from t1 to t2".
+and stays readable as "believed from t1 to t2". Where several agent
+instances share a store, a belief another instance's later belief has
+overtaken is recalled as `outdated-by` it — derived on read, so no
+agent ever rewrites another's claim (kraison/cl-llm#82).
 
 ```lisp
 ;; mem = cl-llm.memory

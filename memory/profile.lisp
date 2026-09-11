@@ -4,16 +4,24 @@
 
 (in-package #:cl-llm.memory)
 
+;; OUTDATED-BY is defined in recall.lisp, which loads after this file
+;; (#82): a run-time call under :SERIAL T, quieted here.
+(declaim (ftype function outdated-by))
+
 (defparameter *profile-cap* 32
   "Belief lines a profile keeps, newest validity first (SS2.2).")
 
 (defun current-beliefs (graph namespace key)
   "GRAPH's beliefs on (NAMESPACE . KEY) in either role that are
-current in recall's sense -- not retracted, validity open -- newest
-validity first.  Trap: an absence is an instant and never open."
-  (sort (remove-if-not #'%open-p
-                       (st:claims-touching graph 'belief namespace key
-                                           :role :either :current t))
+current in recall's sense -- not retracted, validity open, and not
+outdated by a later belief another producer holds on the same subject
+and relation (#82) -- newest validity first.  Trap: an absence is an
+instant and never open; and the outdated test costs one
+CLAIMS-TOUCHING per belief, so an endpoint with many is not free."
+  (sort (remove-if-not
+         (lambda (c) (and (%open-p c) (null (outdated-by c graph))))
+         (st:claims-touching graph 'belief namespace key
+                             :role :either :current t))
         (lambda (a b) (local-time:timestamp> (%start-instant a)
                                              (%start-instant b)))))
 
