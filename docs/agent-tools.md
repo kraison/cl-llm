@@ -132,7 +132,9 @@ variable or an empty slot).
 ### `recall`
 
 Parameters: `subject-namespace`, `subject-key`; optional `relation`,
-`at` (RFC 3339 — only beliefs valid then).
+`at` (RFC 3339 — only beliefs valid then), `producer`. A `producer`
+ending in `/` is a **prefix**, so `"<agent>/<host>/"` answers for
+every instance on that host; any other name must match exactly (#82).
 
 ```json
 {
@@ -160,9 +162,16 @@ above) and its `standing` is one of `searched-empty`,
 there is none. `superseded-by` is an object `{"cite", "store"}` naming
 the successor and the store it lives in, which may be another store
 in scope, or absent; `current` is false when a claim is superseded
-anywhere in scope under the trust rule. An empty `records` array
-means "nothing recorded" — it is not an absence; an absence is a
-record.
+anywhere in scope under the trust rule. `outdated-by` is the same
+shape for the cross-producer question (#82): a belief stays `current`
+in its own author's series, and `outdated-by` names the later belief
+another producer holds on the same subject and relation — the one
+that leads. It is absent when nothing outdates the belief, including
+when another producer's belief starts at the very same instant, which
+is a disagreement rather than an outdating. The `producer` filter
+narrows the rows only; the leader is still found across every
+producer in scope. An empty `records` array means "nothing recorded"
+— it is not an absence; an absence is a record.
 
 ### `trace`
 
@@ -434,6 +443,13 @@ with nothing behind it is not truncated. A recognised endpoint with
 nothing recorded comes back as its own evidence item, `standing:
 "searched-empty"`, with no `cite` — "looked and found nothing"
 survives into the bundle rather than reading as an omission.
+
+An evidence line for a belief another producer's later belief
+outdates ends with ` (outdated by <cite>)` (#82), naming the leader —
+the same question `recall`'s `outdated-by` answers, carried in the
+text because the text is all the model reads here. Nothing else about
+the item changes, and `conclude`'s evidence resolution never sees the
+suffix: it resolves the `cite`.
 
 ### `plan-bounds`
 

@@ -53,6 +53,10 @@ the fixture so a silently unattached store cannot pass vacuously."
 (defparameter +p+ "claude-code/test")
 (defparameter +subj+ '(:repo . "cl-llm"))
 
+;; Two instances of one agent sharing a store (#82).
+(defparameter +px+ "agent/host/x")
+(defparameter +py+ "agent/host/y")
+
 (defun %ts (s) (local-time:parse-timestring s))
 
 (defun %open-from (s)
@@ -60,10 +64,10 @@ the fixture so a silently unattached store cannot pass vacuously."
                     :semantics :validity :standing :asserted))
 
 (defun %belief (g relation object &key (start "2026-09-01T08:00:00Z")
-                                       (subject +subj+))
+                                       (subject +subj+) (producer +p+))
   (gdb:with-transaction (:graph g)
     (mem:record-belief g subject relation object
-                       :producer +p+ :standing :observed
+                       :producer producer :standing :observed
                        :extent (%open-from start))))
 
 (defun %belief-at (g object-key at)

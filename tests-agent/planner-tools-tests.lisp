@@ -358,3 +358,39 @@ after its transaction commits."
       (is (eq ee (agent:scope-embedder
                   (agent:make-scope (list w p) :producer +p+
                                     :embedder ee)))))))
+
+(defun %ends-with (suffix text)
+  "True when TEXT ends with SUFFIX.  A function, not an AND inside IS:
+FIVEAM evaluates both arms of the form it reports on."
+  (let ((n (length suffix)) (m (length text)))
+    (and (<= n m) (string= suffix text :start2 (- m n)))))
+
+(test retrieve-marks-evidence-another-producers-belief-outdates
+  "#82: the evidence line itself says the belief is outdated, so a
+model reading the bundle sees what RECALL would have told it."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green") :producer +px+)
+    (%belief w "ci-status" '(:verdict . "red") :producer +py+
+                           :start "2026-09-02T08:00:00Z")
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (r (%call tools "retrieve" "query" "q"
+                     "endpoints" (vector "repo:cl-llm")))
+           (ev (coerce (json:jget r "evidence") 'list))
+           (green (find-if (lambda (e) (search "verdict:green"
+                                               (json:jget e "text")))
+                           ev))
+           (red (find-if (lambda (e) (search "verdict:red"
+                                             (json:jget e "text")))
+                         ev)))
+      ;; Two claims from W, plus P's searched-empty item: P holds
+      ;; nothing on this endpoint (claims/source.lisp %ABSENCE-EVIDENCE).
+      (is (= 3 (length ev)))
+      (is (not (null green)))
+      (is (not (null red)))
+      (is (%ends-with (format nil " (outdated by ~a)"
+                              (json:jget red "cite"))
+                      (json:jget green "text"))
+          "the outdated line ends with the leader's cite: ~a"
+          (json:jget green "text"))
+      (is (null (search "outdated by" (json:jget red "text")))
+          "control: the leader's own line is unchanged"))))

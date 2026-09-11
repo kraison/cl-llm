@@ -11,6 +11,18 @@ colon (namespaces are canonical [a-z0-9-])."
         unless i do (error "endpoint ~s is not namespace:key" s)
         collect (cons (%keyword (subseq s 0 i)) (subseq s (1+ i)))))
 
+(defun %claim-renderer (graph)
+  "CLAIMS:RENDER-CLAIM, plus what only a cross-producer read knows: a
+belief another producer's later belief outdates says so in the line
+itself (#82), because evidence text is all a model gets here.
+CONCLUDE resolves the cite and is untouched."
+  (lambda (claim)
+    (let ((leader (mem:outdated-by claim graph)))
+      (if leader
+          (format nil "~a (outdated by ~a)"
+                  (claims:render-claim claim) (mem:claim-cite leader))
+          (claims:render-claim claim)))))
+
 (defun %claim-sources (scope endpoints)
   "One claim source per store in scope.  Each recognises ENDPOINTS
 first, never displaced, then what its own vocabulary finds in the
@@ -42,7 +54,8 @@ scope and however often each extractor runs (#78 R7)."
                  (let ((all (remove-duplicates
                              (append endpoints (funcall extract query))
                              :test #'equal :from-end t)))
-                   (subseq all 0 (min cap (length all)))))))
+                   (subseq all 0 (min cap (length all)))))
+               :renderer (%claim-renderer g)))
             stores extractors)))
 
 (defun %consulted (claim-sources query)
