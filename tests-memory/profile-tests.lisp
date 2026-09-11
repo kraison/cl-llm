@@ -246,3 +246,37 @@ embedded there."
       (mem:with-scope-snapshots ((list g))
         (is (not (null (mem:endpoint-profile g :verdict "green")))
             "X leads again, so its line comes back")))))
+
+(test a-capped-profile-asks-only-about-the-lines-it-keeps
+  "#82: the leader lookup is one claim query per belief EXAMINED, so
+it must run after the order and the cap, never over every belief the
+endpoint has.  The probe counts the lookups and is restored."
+  (with-memory-graph (g)
+    (dotimes (i 6)
+      (%pbelief g '(:repo . "cl-llm") (format nil "rel~D" i)
+                (cons :thing (format nil "t~D" i))
+                (format nil "2026-08-~2,'0DT08:00:00Z" (1+ i))))
+    (let ((calls 0)
+          (real (fdefinition 'mem::outdated-by)))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'mem::outdated-by)
+                   (lambda (claim graph)
+                     (incf calls)
+                     (funcall real claim graph)))
+             (is (= 6 (length (mem:current-beliefs g :repo "cl-llm"
+                                                   :cap 100)))
+                 "premise: six current beliefs, none outdated")
+             (is (= 6 calls)
+                 "control: the probe fires, once per belief examined")
+             (setf calls 0)
+             (is (search "thing:t5"
+                         (mem:endpoint-profile g :repo "cl-llm" :cap 2)))
+             (is (<= calls 3)
+                 "cap 2 asks about at most cap+1 beliefs, not 6: ~a" calls)
+             (setf calls 0)
+             (is (mem:endpoint-dirty-p g :repo "cl-llm" "m"))
+             (is (= 1 calls)
+                 "dirty-p stops at the first current belief: ~a" calls))
+        (setf (fdefinition 'mem::outdated-by) real))
+      (is (eq real (fdefinition 'mem::outdated-by)) "probe restored"))))

@@ -541,8 +541,10 @@ BELIEF-ARGUMENT-ERRORs; either alone resolves (the control)."
 does not outdate X's in the first.  The reversed scope, where Y's
 store leads, is the control that proves the rule reads scope order."
   (with-two-stores (w p)
-    (%belief-as w +px+ '(:verdict . "green") "2026-09-01T08:00:00Z")
-    (%belief-as p +py+ '(:verdict . "red") "2026-09-02T08:00:00Z")
+    (%belief-as w +px+ '(:verdict . "green") "2026-09-01T08:00:00Z"
+                :subject +ss+)
+    (%belief-as p +py+ '(:verdict . "red") "2026-09-02T08:00:00Z"
+                :subject +ss+)
     (let* ((rows (mem:recall w +ss+ :relation "ci-status"
                              :scope (list w p)))
            (green (%row rows "green")))
@@ -561,3 +563,43 @@ store leads, is the control that proves the rule reads scope order."
                     (mem:belief-record-outdated-by green))))
       (is (eq p (mem:belief-record-outdated-by-store green)))
       (is (null (mem:belief-record-outdated-by red))))))
+
+(test the-leader-is-sought-per-candidate-among-the-stores-it-trusts
+  "#82: the trust rule belongs to the CHOICE of leader, per candidate.
+One global leader vetoed afterwards would let P's later belief mask
+W-NEW, the legitimate outdater in W's own store.  Scope (W P): W holds
+X-OLD from 09-01 and W-NEW from 09-02, P holds P-NEWEST from 09-03 --
+three producers on one (subject, relation)."
+  (with-two-stores (w p)
+    (%belief-as w +px+ '(:verdict . "x-old") "2026-09-01T08:00:00Z"
+                :subject +ss+)
+    (%belief-as w +pz+ '(:verdict . "w-new") "2026-09-02T08:00:00Z"
+                :subject +ss+)
+    (%belief-as p +py+ '(:verdict . "p-newest") "2026-09-03T08:00:00Z"
+                :subject +ss+)
+    (flet ((leader-key (row)
+             (let ((c (mem:belief-record-outdated-by row)))
+               (and c (st:claim-object-key c)))))
+      (let* ((rows (mem:recall w +ss+ :relation "ci-status"
+                               :scope (list w p)))
+             (x (%row rows "x-old"))
+             (b (%row rows "w-new"))
+             (a (%row rows "p-newest")))
+        (is (= 3 (length rows)))
+        (is (string= "w-new" (leader-key x))
+            "X is outdated by W's own later belief, not masked by P's")
+        (is (eq w (mem:belief-record-outdated-by-store x)))
+        (is (null (leader-key b))
+            "W-NEW leads among the stores that may outdate it")
+        (is (null (leader-key a)) "P-NEWEST is the latest anywhere"))
+      ;; The mirror: P first in scope, so its later belief outdates both
+      ;; of W's -- the trust rule reads scope order, not store identity.
+      (let* ((rows (mem:recall p +ss+ :relation "ci-status"
+                               :scope (list p w)))
+             (x (%row rows "x-old"))
+             (b (%row rows "w-new"))
+             (a (%row rows "p-newest")))
+        (is (string= "p-newest" (leader-key x)))
+        (is (string= "p-newest" (leader-key b)))
+        (is (eq p (mem:belief-record-outdated-by-store x)))
+        (is (null (leader-key a)))))))

@@ -449,7 +449,9 @@ outdates ends with ` (outdated by <cite>)` (#82), naming the leader —
 the same question `recall`'s `outdated-by` answers, carried in the
 text because the text is all the model reads here. Nothing else about
 the item changes, and `conclude`'s evidence resolution never sees the
-suffix: it resolves the `cite`.
+suffix: it resolves the `cite`. It costs one claim lookup per claim
+rendered, per fusion pass — and `retrieve` fuses twice when it derives
+its own window, once for the seed and once for the bounded run.
 
 ### `plan-bounds`
 

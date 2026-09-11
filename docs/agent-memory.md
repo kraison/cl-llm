@@ -115,9 +115,13 @@ outdated. A retracted claim never leads and is never outdated, so
 retracting the leader restores what it outdated, with no write to
 those claims. `current-p` keeps its own-series meaning throughout.
 
-The trust rule is supersession's (§ Scopes): a leader in a store
-*later* in scope order than the outdated candidate does not outdate it
-— a lower-trust store never outdates a higher one.
+The trust rule is supersession's (§ Scopes), and it is applied when
+the leader is *chosen*, per candidate: the leader for a belief is
+sought among the stores at or before that belief's own in scope order.
+A lower-trust store never outdates a higher one — and, because the
+choice is per candidate rather than one global leader vetoed
+afterwards, a lower-trust store's later belief never masks a
+legitimate outdater in the candidate's own store either.
 
 `:producer` narrows to one writer. **A producer ending in `/` is a
 prefix**, so `"<agent>/<host>/"` answers for every instance on that
@@ -191,8 +195,16 @@ belief can leave a profile without anyone writing to it:
   leads only while it is current.
 
 `%assert-from-file` goes through both, so a file capture needs nothing
-extra. Reading a profile costs one claim lookup per current belief of
-the endpoint to answer the outdated question.
+extra.
+
+Answering "is this belief outdated" is one claim lookup on its
+subject, so `current-beliefs` orders and caps **before** it asks: a
+profile pays for the lines it keeps (`cap`, 32 by default), not for
+every belief the endpoint has. The drain therefore costs at most
+`2 × cap` of those lookups per endpoint per embed pass — it renders
+once under a read snapshot and re-renders inside the storing
+transaction — and `endpoint-dirty-p`, which the dirty scan runs over
+every endpoint, stops at the first belief that is still current.
 
 ### The dirty set, the drain and the rebuild
 

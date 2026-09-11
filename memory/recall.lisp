@@ -10,9 +10,10 @@ same (producer subject relation) series by validity start, in a store
 no later in scope order (SS4, the trust rule) -- never stored, so it
 cannot go stale.  OUTDATED-BY is the same question across producers
 (#82): the latest-starting belief on this (subject relation) that is
-current in its own series, when it starts strictly later than this one
-and the trust rule allows it.  STORE is the graph the claim lives in;
-SUPERSEDED-BY-STORE the successor's, OUTDATED-BY-STORE the leader's."
+current in its own series, sought among the stores at or before this
+claim's in scope order and kept only when it starts strictly later.
+STORE is the graph the claim lives in; SUPERSEDED-BY-STORE the
+successor's, OUTDATED-BY-STORE the leader's."
   claim
   (current-p nil)
   (superseded-by nil)
@@ -81,38 +82,43 @@ the leader never depends on traversal order (#82)."
                            (st:claim-identity-key b))
                   t)))))
 
-(defun %group-leader (group series owner)
-  "The leader of GROUP -- one (subject relation) across producers and
-stores: the latest-starting belief among those current in their own
-series, or NIL.  A retracted, closed or superseded belief never leads
-(#82)."
+(defun %group-leader (group series owner limit)
+  "The leader of GROUP -- one (subject relation) across producers --
+for a candidate in scope position LIMIT: the latest-starting belief
+among those current in their own series and living no later than LIMIT
+in scope order.  A retracted, closed or superseded belief never leads
+(#82).  The trust rule is applied HERE, per candidate, exactly as
+%SUCCESSOR applies it: a leader picked globally and vetoed afterwards
+would let a lower-trust store's later belief mask a legitimate
+outdater in the candidate's own store."
   (let ((best nil))
     (dolist (c group best)
-      (when (and (st:claim-current-p c)
+      (when (and (<= (gethash c owner) limit)
+                 (st:claim-current-p c)
                  (%open-p c)
                  (null (%successor c (gethash (%series-key c) series)
                                    owner))
                  (or (null best) (%leads-p c best owner)))
         (setf best c)))))
 
-(defun %outdating (leader claim owner)
-  "LEADER when it outdates CLAIM: a strictly later validity start, from
-a store no later in scope order than CLAIM's (SS4's trust rule, as for
-supersession).  Equal starts are a disagreement, not an outdating."
+(defun %outdating (leader claim)
+  "LEADER when it outdates CLAIM: a strictly later validity start.
+Equal starts are a disagreement, not an outdating.  The trust rule is
+already in %GROUP-LEADER's LIMIT."
   (and leader
        (not (eq leader claim))
        (local-time:timestamp< (%start-instant claim)
                               (%start-instant leader))
-       (<= (gethash leader owner) (gethash claim owner))
        leader))
 
 (defun outdated-by (claim graph)
   "The belief in GRAPH that outdates CLAIM -- the leader of its
 (subject relation) group across producers (#82) -- or NIL.  For a
-caller holding one claim rather than a RECALL row: one store, so no
-trust rule applies, at the cost of one CLAIMS-TOUCHING on the subject.
-Trap: a retracted, closed or superseded CLAIM is never outdated, only
-replaced in its own series."
+caller holding one claim rather than a RECALL row: one store, so every
+claim is at scope position 0 and the trust rule cannot bite, at the
+cost of one CLAIMS-TOUCHING on the subject.  Trap: a retracted, closed
+or superseded CLAIM is never outdated, only replaced in its own
+series."
   (let ((series (make-hash-table :test 'equal))
         (owner (make-hash-table :test 'eq))
         (group '()))
@@ -132,7 +138,7 @@ replaced in its own series."
            (%open-p self)
            (null (%successor self (gethash (%series-key self) series)
                              owner))
-           (%outdating (%group-leader group series owner) self owner)))))
+           (%outdating (%group-leader group series owner 0) self)))))
 
 (defun %object-key-for-order (claim)
   (if (typep claim 'belief-binary) (st:claim-object-key claim) ""))
@@ -201,7 +207,6 @@ Nothing recorded returns NIL -- which is not an absence standing."
   (with-scope-snapshots (scope)
     (let ((series (make-hash-table :test 'equal))
           (groups (make-hash-table :test 'equal))
-          (leaders (make-hash-table :test 'equal))
           (owner (make-hash-table :test 'eq))
           (rows '()))
       ;; Store-major in scope order, then a stable sort: a genuine
@@ -221,31 +226,31 @@ Nothing recorded returns NIL -- which is not an absence standing."
                    (push c (gethash (%group-key c) groups)))
                  (dolist (c (sort (copy-list wanted) #'%before-p))
                    (push (cons g c) rows))))
-      (maphash (lambda (key group)
-                 (setf (gethash key leaders)
-                       (%group-leader group series owner)))
-               groups)
-      (loop for (g . c) in (stable-sort (nreverse rows) #'%before-p
-                                        :key #'cdr)
-            for succ = (%successor c (gethash (%series-key c) series)
-                                   owner)
-            for current = (and (st:claim-current-p c) (%open-p c)
-                               (null succ))
-            for leader = (and current
-                              (%outdating (gethash (%group-key c) leaders)
-                                          c owner))
-            collect (make-belief-record
-                     :claim c
-                     :current-p current
-                     :superseded-by succ
-                     :superseded-by-store (and succ
-                                               (nth (gethash succ owner)
+      ;; The leader is per candidate, over the stores at or before the
+      ;; candidate's own (#82 fix round, finding 1).
+      (flet ((leader-for (c)
+               (%outdating (%group-leader (gethash (%group-key c) groups)
+                                          series owner (gethash c owner))
+                           c)))
+        (loop for (g . c) in (stable-sort (nreverse rows) #'%before-p
+                                          :key #'cdr)
+              for succ = (%successor c (gethash (%series-key c) series)
+                                     owner)
+              for current = (and (st:claim-current-p c) (%open-p c)
+                                 (null succ))
+              for leader = (and current (leader-for c))
+              collect (make-belief-record
+                       :claim c
+                       :current-p current
+                       :superseded-by succ
+                       :superseded-by-store (and succ
+                                                 (nth (gethash succ owner)
+                                                      scope))
+                       :outdated-by leader
+                       :outdated-by-store (and leader
+                                               (nth (gethash leader owner)
                                                     scope))
-                     :outdated-by leader
-                     :outdated-by-store (and leader
-                                             (nth (gethash leader owner)
-                                                  scope))
-                     :retracted-at (%retracted-at c)
-                     :standing (st:claim-standing c)
-                     :extent (st:claim-extent c)
-                     :store g)))))
+                       :retracted-at (%retracted-at c)
+                       :standing (st:claim-standing c)
+                       :extent (st:claim-extent c)
+                       :store g))))))
