@@ -88,13 +88,51 @@ with a `belief-argument-error`.
 
 Each `belief-record` carries the claim plus `current-p` (validity open
 *and* transaction current), `superseded-by` (the next claim in the
-series, or NIL), `retracted-at` (or NIL), and the claim's own `standing`
-and `extent`. Filters: `:relation`, `:producer`, `:at` (a timestamp —
-only beliefs valid then, and a belief valid *then* but superseded since
-is not current), `:include-retracted`.
+series, or NIL), `outdated-by` (below), `retracted-at` (or NIL), and
+the claim's own `standing` and `extent`. Filters: `:relation`,
+`:producer`, `:at` (a timestamp — only beliefs valid then, and a
+belief valid *then* but superseded since is not current),
+`:include-retracted`.
 
 **Order is the contract:** validity start descending, then `recorded-at`
 descending, then object key. A reordering is a regression.
+
+### Currency across producers
+
+Several instances of one agent share a store, each writing under its
+own producer (`<agent>/<host>/<instance>`). Supersession is per
+`(producer, subject, relation)`, so a later belief from instance B
+leaves A's older belief current in A's own series. `recall` closes
+that gap on the **read** side — no agent ever rewrites another's claim
+(#82).
+
+Among the beliefs on one `(subject, relation)` that are current in
+their own series, across every producer in scope, the one with the
+latest validity start **leads**. Every other one whose start is
+strictly earlier is `outdated-by` the leader, and `outdated-by-store`
+names the leader's store. Equal starts are a *disagreement*: nobody is
+outdated. A retracted claim never leads and is never outdated, so
+retracting the leader restores what it outdated, with no write to
+those claims. `current-p` keeps its own-series meaning throughout.
+
+The trust rule is supersession's (§ Scopes), and it is applied when
+the leader is *chosen*, per candidate: the leader for a belief is
+sought among the stores at or before that belief's own in scope order.
+A lower-trust store never outdates a higher one — and, because the
+choice is per candidate rather than one global leader vetoed
+afterwards, a lower-trust store's later belief never masks a
+legitimate outdater in the candidate's own store either.
+
+`:producer` narrows to one writer. **A producer ending in `/` is a
+prefix**, so `"<agent>/<host>/"` answers for every instance on that
+host; any other name must match exactly. The filter narrows the rows
+only: the leader is still found across every producer in scope, so
+filtering to one instance still shows what outdates it.
+
+For a caller holding a single claim rather than a recall row —
+the semantic index, `retrieve`'s renderer — `(mem:outdated-by claim
+graph)` answers the same question for one store, at the cost of one
+claim lookup on the subject.
 
 ## What a store names
 
@@ -126,9 +164,10 @@ nodes. Nothing is cached either way.
 
 Every endpoint `(namespace . key)` gets a profile: the endpoint as
 words, then one line per belief that is current in recall's sense --
-not retracted, its validity still open -- the endpoint's own beliefs
-as subject first, then as object, newest validity first, capped at
-`*profile-cap*` lines (default 32). An absence's (`record-absence`)
+not retracted, its validity still open, and not outdated by another
+producer's later belief (#82) -- the endpoint's own beliefs as subject
+first, then as object, newest validity first, capped at `*profile-cap*`
+lines (default 32). An absence's (`record-absence`)
 default extent is an instant, so it is never open and never a profile
 line; an absence given an explicit open `:extent` would be a profile
 line, and `record-absence` never touches its endpoint either way. An
@@ -142,6 +181,30 @@ against beliefs it no longer holds; with no embedder configured the
 `endpoint-vector` vertices exist but carry no vector, and the store is
 lexical-only (spec 2026-09-10-semantic-memory-indexing-design SS2,
 SS4.2).
+
+Cross-producer currency adds two touches to that set (#82), because a
+belief can leave a profile without anyone writing to it:
+
+- `record-belief` also touches the **object endpoint of every belief
+  another producer holds that the new one now outdates** — current,
+  open, an earlier validity start. The subject endpoint is in the set
+  already, and `touch-endpoints` dedups.
+- `retract-belief` also touches the object endpoints of the beliefs
+  the retracted claim **was** outdating, since they come back into
+  those profiles. They are computed *before* the retraction: the claim
+  leads only while it is current.
+
+`%assert-from-file` goes through both, so a file capture needs nothing
+extra.
+
+Answering "is this belief outdated" is one claim lookup on its
+subject, so `current-beliefs` orders and caps **before** it asks: a
+profile pays for the lines it keeps (`cap`, 32 by default), not for
+every belief the endpoint has. The drain therefore costs at most
+`2 × cap` of those lookups per endpoint per embed pass — it renders
+once under a read snapshot and re-renders inside the storing
+transaction — and `endpoint-dirty-p`, which the dirty scan runs over
+every endpoint, stops at the first belief that is still current.
 
 ### The dirty set, the drain and the rebuild
 

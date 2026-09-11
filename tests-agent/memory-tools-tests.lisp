@@ -49,6 +49,47 @@ came from; the private store is invisible when out of scope."
         (is (= 1 (length (json:jget r2 "records")))
             "the private store is not in scope")))))
 
+(test recall-shows-what-another-producers-later-belief-outdates
+  "#82: the record carries the leader's cite and store, while CURRENT
+keeps its own-series meaning."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green") :producer +px+)
+    (%belief w "ci-status" '(:verdict . "red") :producer +py+
+                           :start "2026-09-02T08:00:00Z")
+    (let* ((tools (agent:make-agent-tools (list w p) :producer +p+))
+           (r (%call tools "recall" "subject-namespace" "repo"
+                     "subject-key" "cl-llm" "relation" "ci-status"))
+           (rows (coerce (json:jget r "records") 'list))
+           (red (first rows))
+           (green (second rows)))
+      (is (string= "red" (json:jget red "object" "key")))
+      (is (null (json:jget red "outdated-by")) "the leader")
+      (is (eq t (json:jget green "current"))
+          "current in its own series: nothing superseded it")
+      (is (null (json:jget green "superseded-by")) "control")
+      (is (string= (json:jget red "cite")
+                   (json:jget green "outdated-by" "cite")))
+      (is (string= "cl-llm-memory"
+                   (json:jget green "outdated-by" "store"))))))
+
+(test the-recall-tool-takes-a-producer-prefix
+  "#82: a producer ending in / is a prefix, so <agent>/<host>/ answers
+for every instance on that host."
+  (with-stores (w p)
+    (%belief w "ci-status" '(:verdict . "green") :producer +px+)
+    (%belief w "ci-status" '(:verdict . "red") :producer +py+
+                           :start "2026-09-02T08:00:00Z")
+    (let ((tools (agent:make-agent-tools (list w p) :producer +p+)))
+      (flet ((n (producer)
+               (length (json:jget (%call tools "recall"
+                                         "subject-namespace" "repo"
+                                         "subject-key" "cl-llm"
+                                         "producer" producer)
+                                  "records"))))
+        (is (= 2 (n "agent/host/")))
+        (is (= 1 (n +px+)) "an exact name is still exact")
+        (is (= 0 (n "agent/host")) "no trailing slash, no prefix")))))
+
 (test recall-clamps-to-max-rows-and-says-so
   (with-stores (w p)
     (dotimes (i 3)

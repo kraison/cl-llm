@@ -4,18 +4,51 @@
 
 (in-package #:cl-llm.memory)
 
+;; OUTDATED-BY is defined in recall.lisp, which loads after this file
+;; (#82): a run-time call under :SERIAL T, quieted here.
+(declaim (ftype function outdated-by))
+
 (defparameter *profile-cap* 32
   "Belief lines a profile keeps, newest validity first (SS2.2).")
 
-(defun current-beliefs (graph namespace key)
-  "GRAPH's beliefs on (NAMESPACE . KEY) in either role that are
-current in recall's sense -- not retracted, validity open -- newest
-validity first.  Trap: an absence is an instant and never open."
+(defun %held-beliefs (graph namespace key)
+  "Every belief on (NAMESPACE . KEY) in GRAPH that is not retracted and
+whose validity is still open, newest validity first.  No leader
+lookup: this is the cheap half of CURRENT-BELIEFS."
   (sort (remove-if-not #'%open-p
                        (st:claims-touching graph 'belief namespace key
                                            :role :either :current t))
         (lambda (a b) (local-time:timestamp> (%start-instant a)
                                              (%start-instant b)))))
+
+(defun %role-ordered (claims namespace key)
+  "CLAIMS with the endpoint's own beliefs as subject first, then as
+object, each half keeping CLAIMS' order (SS2.2)."
+  (flet ((subject-p (c)
+           (and (eq namespace (st:claim-subject-namespace c))
+                (string= key (st:claim-subject-key c)))))
+    (append (remove-if-not #'subject-p claims)
+            (remove-if #'subject-p claims))))
+
+(defun current-beliefs (graph namespace key &key (cap *profile-cap*))
+  "GRAPH's beliefs on (NAMESPACE . KEY) in either role that are
+current in recall's sense -- not retracted, validity open, and not
+outdated by a later belief another producer holds on the same subject
+and relation (#82) -- at most CAP of them, the endpoint's own beliefs
+as subject first and then as object, each newest validity first.
+Trap: an absence is an instant and never open; and the outdated test
+is one CLAIMS-TOUCHING per belief EXAMINED, so ordering and capping
+come first and a capped profile pays for CAP of them, not for every
+belief the endpoint has."
+  (loop with kept = '()
+        with n = 0
+        for c in (%role-ordered (%held-beliefs graph namespace key)
+                                namespace key)
+        until (>= n cap)
+        do (unless (outdated-by c graph)
+             (push c kept)
+             (incf n))
+        finally (return (nreverse kept))))
 
 (defun %endpoint-words (namespace key)
   (format nil "~(~a~) ~a" namespace (substitute #\Space #\- key)))
@@ -40,24 +73,10 @@ DATE)."
   "The profile text of (NAMESPACE . KEY) in GRAPH under the caller's
 snapshot: the endpoint as words, then one line per current belief, the
 subject role first, at most CAP lines.  NIL when nothing is current."
-  (let ((claims (current-beliefs graph namespace key)))
+  (let ((claims (current-beliefs graph namespace key :cap cap)))
     (when claims
-      (let ((subject
-              (remove-if-not
-               (lambda (c)
-                 (and (eq namespace (st:claim-subject-namespace c))
-                      (string= key (st:claim-subject-key c))))
-               claims))
-            (object
-              (remove-if
-               (lambda (c)
-                 (and (eq namespace (st:claim-subject-namespace c))
-                      (string= key (st:claim-subject-key c))))
-               claims)))
-        (let ((lines (append subject object)))
-          (format nil "~a~%~{~a~^~%~}" (%endpoint-words namespace key)
-                  (mapcar #'%profile-line
-                          (subseq lines 0 (min cap (length lines))))))))))
+      (format nil "~a~%~{~a~^~%~}" (%endpoint-words namespace key)
+              (mapcar #'%profile-line claims)))))
 
 (defun %endpoint-vectors-of (graph namespace key)
   "Every live ENDPOINT-VECTOR of (NAMESPACE . KEY) in GRAPH.
@@ -83,10 +102,19 @@ unbound and NIL both mean no vector (E2)."
                 (slot-value vertex 'embedding))))
     (and (typep v '(simple-array single-float (*))) v)))
 
+(defun %any-current-belief-p (graph namespace key)
+  "True as soon as one belief on (NAMESPACE . KEY) would be a profile
+line: SOME, so the leader lookup stops at the first (#82)."
+  (and (some (lambda (c) (and (%open-p c) (null (outdated-by c graph))))
+             (st:claims-touching graph 'belief namespace key
+                                 :role :either :current t))
+       t))
+
 (defun endpoint-dirty-p (graph namespace key &optional model)
   "True when the endpoint has a current belief and no vector, or a
-vector from another MODEL (SS4.1)."
-  (and (current-beliefs graph namespace key)
+vector from another MODEL (SS4.1).  Asks only whether ONE belief is
+current, never how many."
+  (and (%any-current-belief-p graph namespace key)
        (let ((ev (endpoint-vector-of graph namespace key)))
          (or (null ev)
              (null (endpoint-vector-value ev))

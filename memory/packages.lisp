@@ -45,6 +45,9 @@
    #:belief-record-retracted-at #:belief-record-standing
    #:belief-record-extent #:belief-record-store
    #:belief-record-superseded-by-store #:claim-before-p
+   ;; cross-producer currency (#82)
+   #:belief-record-outdated-by #:belief-record-outdated-by-store
+   #:outdated-by
    ;; vocabulary (#64)
    #:vocabulary #:make-vocabulary #:vocabulary-store
    #:vocabulary-namespaces #:vocabulary-relations #:vocabulary-endpoints

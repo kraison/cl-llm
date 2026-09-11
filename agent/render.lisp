@@ -57,9 +57,12 @@ was recorded under it is the store's answer, never this image's (#61)."
 (defun %record-json (record)
   "One BELIEF-RECORD as the model reads it (SS6).  STORE is the record's
 own; SUPERSEDED-BY names the successor's cite and store, which may be
-another store in scope (S6b SS4)."
+another store in scope (S6b SS4).  OUTDATED-BY names, the same way,
+the later belief another producer holds on this subject and relation
+(#82) -- CURRENT stays the claim's own series."
   (let* ((c (mem:belief-record-claim record))
          (s (mem:belief-record-superseded-by record))
+         (o (mem:belief-record-outdated-by record))
          (e (mem:belief-record-extent record)))
     (json:jobject
      "store" (mem:store-name (mem:belief-record-store record))
@@ -76,7 +79,12 @@ another store in scope (S6b SS4)."
      (and s (json:jobject
              "cite" (mem:claim-cite s)
              "store" (mem:store-name
-                      (mem:belief-record-superseded-by-store record)))))))
+                      (mem:belief-record-superseded-by-store record))))
+     "outdated-by"
+     (and o (json:jobject
+             "cite" (mem:claim-cite o)
+             "store" (mem:store-name
+                      (mem:belief-record-outdated-by-store record)))))))
 
 (defun %cite-record-json (record)
   "One CITE-RECORD as the model reads it.  STORE is the record's own --

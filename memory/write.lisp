@@ -4,9 +4,10 @@
 
 (in-package #:cl-llm.memory)
 
-;; TOUCH-ENDPOINTS is defined in profile.lisp, which loads after this
-;; file (#78 SS4.2): a run-time call under :SERIAL T, quieted here.
-(declaim (ftype function touch-endpoints))
+;; TOUCH-ENDPOINTS is defined in profile.lisp and OUTDATED-BY in
+;; recall.lisp, both loaded after this file (#78 SS4.2, #82): run-time
+;; calls under :SERIAL T, quieted here.
+(declaim (ftype function touch-endpoints outdated-by))
 
 (define-condition belief-argument-error (error)
   ((argument :initarg :argument :reader belief-argument-error-argument)
@@ -104,6 +105,42 @@ successor's start strictly."
   (and (string= (cdr object) (st:claim-object-key pred))
        (eq (car object) (st:claim-object-namespace pred))))
 
+(defun %outdated-elsewhere (graph producer subject relation start)
+  "The object endpoints of the current, open beliefs OTHER producers
+hold on (SUBJECT, RELATION) in GRAPH whose validity starts before
+START: a write at START outdates them (#82), so each loses a line from
+that endpoint's profile."
+  (loop for c in (st:claims-touching graph 'belief (car subject)
+                                     (cdr subject) :role :subject)
+        when (and (typep c 'belief-binary)
+                  (string= relation (st:claim-relation c))
+                  (string/= producer (st:claim-producer c))
+                  (st:claim-current-p c)
+                  (%open-p c)
+                  (local-time:timestamp< (%start-instant c) start))
+          collect (cons (st:claim-object-namespace c)
+                        (st:claim-object-key c))))
+
+(defun %outdated-under (graph claim)
+  "The object endpoints of the beliefs CLAIM outdates: retracting CLAIM
+returns each of their lines to that endpoint's profile (#82).  Trap:
+call it BEFORE the retraction -- CLAIM leads only while it is current."
+  (loop for c in (st:claims-touching graph 'belief
+                                     (st:claim-subject-namespace claim)
+                                     (st:claim-subject-key claim)
+                                     :role :subject :current t)
+        for leader = (and (typep c 'belief-binary)
+                          (string= (st:claim-relation claim)
+                                   (st:claim-relation c))
+                          (string/= (st:claim-producer claim)
+                                    (st:claim-producer c))
+                          (outdated-by c graph))
+        when (and leader
+                  (string= (st:claim-identity-key leader)
+                           (st:claim-identity-key claim)))
+          collect (cons (st:claim-object-namespace c)
+                        (st:claim-object-key c))))
+
 (defun record-belief (graph subject relation object
                       &key producer standing (extent (%default-extent))
                            confidence method rule-version)
@@ -133,15 +170,19 @@ Must run inside the caller's WITH-TRANSACTION."
                (touch-endpoints graph
                                 (list (cons (st:claim-object-namespace pred)
                                             (st:claim-object-key pred)))))))
-    (let ((new (make-belief-binary
-                :graph graph
-                :subject-namespace (car subject) :subject-key (cdr subject)
-                :relation relation
-                :object-namespace (car object) :object-key (cdr object)
-                :producer producer :standing standing :extent extent
-                :confidence confidence :method method
-                :rule-version rule-version)))
-      (touch-endpoints graph (list subject object))
+    ;; Both endpoints of NEW, plus the object endpoint of every belief
+    ;; another producer holds that NEW now outdates (#82).
+    (let* ((outdated (%outdated-elsewhere graph producer subject relation
+                                          start))
+           (new (make-belief-binary
+                 :graph graph
+                 :subject-namespace (car subject) :subject-key (cdr subject)
+                 :relation relation
+                 :object-namespace (car object) :object-key (cdr object)
+                 :producer producer :standing standing :extent extent
+                 :confidence confidence :method method
+                 :rule-version rule-version)))
+      (touch-endpoints graph (list* subject object outdated))
       new)))
 
 (defun %assert-from-file (graph subject relation object
@@ -207,15 +248,19 @@ RETRACT-CLAIM would silently do nothing."
     (%arg-error :claim claim "only a belief can be retracted"))
   (unless (st:claim-current-p claim)
     (%arg-error :claim claim "already retracted"))
-  (let ((graph (or (graph-db::resolve-node-graph (gdb:id claim))
-                   gdb:*graph*)))
+  (let* ((graph (or (graph-db::resolve-node-graph (gdb:id claim))
+                    gdb:*graph*))
+         ;; Both endpoints lose a line (#78 SS4.2), and every belief
+         ;; CLAIM was outdating gets one back (#82) -- computed here,
+         ;; while CLAIM still leads.  RESOLVE-NODE-GRAPH is internal
+         ;; (noted on kraison/vivace-graph#322), as in %CLAIM-STORE.
+         (endpoints
+           (list* (cons (st:claim-subject-namespace claim)
+                        (st:claim-subject-key claim))
+                  (append
+                   (and (typep claim 'belief-binary)
+                        (list (cons (st:claim-object-namespace claim)
+                                    (st:claim-object-key claim))))
+                   (%outdated-under graph claim)))))
     (prog1 (st:retract-claim claim :at at)
-      ;; Both endpoints lose a line (#78 SS4.2).  RESOLVE-NODE-GRAPH is
-      ;; internal (noted on kraison/vivace-graph#322), as in %CLAIM-STORE.
-      (touch-endpoints
-       graph
-       (list* (cons (st:claim-subject-namespace claim)
-                    (st:claim-subject-key claim))
-              (and (typep claim 'belief-binary)
-                   (list (cons (st:claim-object-namespace claim)
-                               (st:claim-object-key claim)))))))))
+      (touch-endpoints graph endpoints))))

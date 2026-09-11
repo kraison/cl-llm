@@ -9,11 +9,16 @@
    "Recall what is believed about a subject: every belief on
 (subject-namespace, subject-key) across the memory in scope, newest
 validity first, each with its cite, standing, validity window, whether
-it is current, and what superseded it.  Optional relation narrows to
-one predicate; optional at (RFC 3339) keeps only beliefs valid then."
+it is current, what superseded it, and outdated-by -- a later belief
+another producer holds on the same subject and relation, which current
+(its own author's series) does not show.  Optional relation narrows to
+one predicate; optional at (RFC 3339) keeps only beliefs valid then;
+optional producer narrows to one writer, and a producer ending in \"/\"
+is a prefix, so \"<agent>/<host>/\" answers for every instance there."
    '((subject-namespace :type string) (subject-key :type string)
-     (relation :type string :optional t) (at :type string :optional t))
-   (lambda (subject-namespace subject-key relation at)
+     (relation :type string :optional t) (at :type string :optional t)
+     (producer :type string :optional t))
+   (lambda (subject-namespace subject-key relation at producer)
      ;; The namespace is resolved, not looked up in this image: what
      ;; was recorded under it is the store's answer (#61).  An
      ;; uncanonical name is an error, as in retrieve, never an empty
@@ -24,6 +29,7 @@ one predicate; optional at (RFC 3339) keeps only beliefs valid then."
             ;; computes supersession under the trust rule (S6b SS4).
             (rows (mem:recall (scope-write-store scope) subject
                               :relation relation :at instant
+                              :producer producer
                               :scope (scope-stores scope))))
        ;; Seed the cache in SCOPE order, not row order: first-wins must
        ;; mean first-in-scope, whatever recall's tie-break put first

@@ -8,8 +8,12 @@
 wrongly.  SUPERSEDED-BY is COMPUTED -- the next current claim in the
 same (producer subject relation) series by validity start, in a store
 no later in scope order (SS4, the trust rule) -- never stored, so it
-cannot go stale.  STORE is the graph the claim lives in;
-SUPERSEDED-BY-STORE the successor's."
+cannot go stale.  OUTDATED-BY is the same question across producers
+(#82): the latest-starting belief on this (subject relation) that is
+current in its own series, sought among the stores at or before this
+claim's in scope order and kept only when it starts strictly later.
+STORE is the graph the claim lives in; SUPERSEDED-BY-STORE the
+successor's, OUTDATED-BY-STORE the leader's."
   claim
   (current-p nil)
   (superseded-by nil)
@@ -17,7 +21,9 @@ SUPERSEDED-BY-STORE the successor's."
   standing
   extent
   store
-  (superseded-by-store nil))
+  (superseded-by-store nil)
+  (outdated-by nil)
+  (outdated-by-store nil))
 
 (defun %retracted-at (claim)
   (let ((e (st:claim-transaction-extent claim)))
@@ -57,6 +63,83 @@ a lower-trust store never supersedes a higher one)."
                                             (%start-instant best))))
         (setf best c)))))
 
+(defun %group-key (claim)
+  "The currency group (#82): one (subject relation), every producer."
+  (list (st:claim-subject-namespace claim)
+        (st:claim-subject-key claim)
+        (st:claim-relation claim)))
+
+(defun %leads-p (a b owner)
+  "A is the better leader of a group: a later validity start, else the
+more trusted store, else the lower identity key -- a total order, so
+the leader never depends on traversal order (#82)."
+  (let ((sa (%start-instant a)) (sb (%start-instant b))
+        (pa (gethash a owner)) (pb (gethash b owner)))
+    (cond ((local-time:timestamp> sa sb) t)
+          ((local-time:timestamp< sa sb) nil)
+          ((/= pa pb) (< pa pb))
+          (t (and (string< (st:claim-identity-key a)
+                           (st:claim-identity-key b))
+                  t)))))
+
+(defun %group-leader (group series owner limit)
+  "The leader of GROUP -- one (subject relation) across producers --
+for a candidate in scope position LIMIT: the latest-starting belief
+among those current in their own series and living no later than LIMIT
+in scope order.  A retracted, closed or superseded belief never leads
+(#82).  The trust rule is applied HERE, per candidate, exactly as
+%SUCCESSOR applies it: a leader picked globally and vetoed afterwards
+would let a lower-trust store's later belief mask a legitimate
+outdater in the candidate's own store."
+  (let ((best nil))
+    (dolist (c group best)
+      (when (and (<= (gethash c owner) limit)
+                 (st:claim-current-p c)
+                 (%open-p c)
+                 (null (%successor c (gethash (%series-key c) series)
+                                   owner))
+                 (or (null best) (%leads-p c best owner)))
+        (setf best c)))))
+
+(defun %outdating (leader claim)
+  "LEADER when it outdates CLAIM: a strictly later validity start.
+Equal starts are a disagreement, not an outdating.  The trust rule is
+already in %GROUP-LEADER's LIMIT."
+  (and leader
+       (not (eq leader claim))
+       (local-time:timestamp< (%start-instant claim)
+                              (%start-instant leader))
+       leader))
+
+(defun outdated-by (claim graph)
+  "The belief in GRAPH that outdates CLAIM -- the leader of its
+(subject relation) group across producers (#82) -- or NIL.  For a
+caller holding one claim rather than a RECALL row: one store, so every
+claim is at scope position 0 and the trust rule cannot bite, at the
+cost of one CLAIMS-TOUCHING on the subject.  Trap: a retracted, closed
+or superseded CLAIM is never outdated, only replaced in its own
+series."
+  (let ((series (make-hash-table :test 'equal))
+        (owner (make-hash-table :test 'eq))
+        (group '()))
+    (dolist (c (st:claims-touching graph 'belief
+                                   (st:claim-subject-namespace claim)
+                                   (st:claim-subject-key claim)
+                                   :role :subject :current t))
+      (setf (gethash c owner) 0)
+      (push c (gethash (%series-key c) series))
+      (when (string= (st:claim-relation claim) (st:claim-relation c))
+        (push c group)))
+    ;; The group's own object for CLAIM, not the caller's: EQ on two
+    ;; reads of one node holds only while the engine's cache does.
+    (let ((self (find (st:claim-identity-key claim) group
+                      :key #'st:claim-identity-key :test #'string=)))
+      (and self
+           (%open-p self)
+           (null (%successor self (gethash (%series-key self) series)
+                             owner))
+           (%outdating (%group-leader group series owner 0) self)))))
+
 (defun %object-key-for-order (claim)
   (if (typep claim 'belief-binary) (st:claim-object-key claim) ""))
 
@@ -76,6 +159,16 @@ object key ascending."
   "T when claim A sorts before claim B under RECALL's order (SS6)."
   (%before-p a b))
 
+(defun %producer-match-p (producer claim)
+  "PRODUCER selects CLAIM: a name ending in \"/\" is a PREFIX, so
+\"<agent>/<host>/\" answers for every instance on that host (#82);
+any other name must match exactly."
+  (let ((held (st:claim-producer claim))
+        (n (length producer)))
+    (if (and (plusp n) (char= #\/ (char producer (1- n))))
+        (and (<= n (length held)) (string= producer held :end2 n))
+        (string= producer held))))
+
 (defun %recall-in (graph subject relation producer at include-retracted)
   "Today's single-store selection for GRAPH: (values WANTED ALL).  The
 :AT membership test is EQL on claim objects, sound only within one
@@ -92,7 +185,7 @@ store (recon E4), so it stays here, before the union."
                     (and (or (null relation)
                              (string= relation (st:claim-relation c)))
                          (or (null producer)
-                             (string= producer (st:claim-producer c)))
+                             (%producer-match-p producer c))
                          (or include-retracted (st:claim-current-p c))
                          (or (null at) (member c at-window))))
                   all)))
@@ -102,15 +195,18 @@ store (recon E4), so it stays here, before the union."
                                   (scope (list graph)))
   "BELIEF-RECORDs about SUBJECT over SCOPE, ordered newest validity
 first (SS6; SS4 for the scope).  RELATION and PRODUCER narrow the
-series; AT keeps only beliefs valid at that instant; retracted claims
-are excluded unless INCLUDE-RETRACTED.  Each record names its store;
-supersession is computed over the whole scope under the trust rule.
+series -- a PRODUCER ending in \"/\" is a prefix (#82); AT keeps only
+beliefs valid at that instant; retracted claims are excluded unless
+INCLUDE-RETRACTED.  Each record names its store; supersession and
+OUTDATED-BY are computed over the whole scope under the trust rule,
+the second across producers, and neither is narrowed by the filters.
 Nothing recorded returns NIL -- which is not an absence standing."
   (%check-endpoint :subject subject)
   ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
   (check-scope scope :write-store graph)
   (with-scope-snapshots (scope)
     (let ((series (make-hash-table :test 'equal))
+          (groups (make-hash-table :test 'equal))
           (owner (make-hash-table :test 'eq))
           (rows '()))
       ;; Store-major in scope order, then a stable sort: a genuine
@@ -120,27 +216,41 @@ Nothing recorded returns NIL -- which is not an absence standing."
             do (multiple-value-bind (wanted all)
                    (%recall-in g subject relation producer at
                                include-retracted)
-                 ;; Successors are found within the full series, so a
-                 ;; claim outside the AT window can still be named as
-                 ;; what superseded one inside.
+                 ;; Successors and leaders are found within the full
+                 ;; series, so a claim outside the AT window -- or
+                 ;; outside the PRODUCER filter, which is the point of
+                 ;; the group (#82) -- can still be named.
                  (dolist (c all)
                    (setf (gethash c owner) pos)
-                   (push c (gethash (%series-key c) series)))
+                   (push c (gethash (%series-key c) series))
+                   (push c (gethash (%group-key c) groups)))
                  (dolist (c (sort (copy-list wanted) #'%before-p))
                    (push (cons g c) rows))))
-      (loop for (g . c) in (stable-sort (nreverse rows) #'%before-p
-                                        :key #'cdr)
-            for succ = (%successor c (gethash (%series-key c) series)
-                                   owner)
-            collect (make-belief-record
-                     :claim c
-                     :current-p (and (st:claim-current-p c) (%open-p c)
-                                     (null succ))
-                     :superseded-by succ
-                     :superseded-by-store (and succ
-                                               (nth (gethash succ owner)
+      ;; The leader is per candidate, over the stores at or before the
+      ;; candidate's own (#82 fix round, finding 1).
+      (flet ((leader-for (c)
+               (%outdating (%group-leader (gethash (%group-key c) groups)
+                                          series owner (gethash c owner))
+                           c)))
+        (loop for (g . c) in (stable-sort (nreverse rows) #'%before-p
+                                          :key #'cdr)
+              for succ = (%successor c (gethash (%series-key c) series)
+                                     owner)
+              for current = (and (st:claim-current-p c) (%open-p c)
+                                 (null succ))
+              for leader = (and current (leader-for c))
+              collect (make-belief-record
+                       :claim c
+                       :current-p current
+                       :superseded-by succ
+                       :superseded-by-store (and succ
+                                                 (nth (gethash succ owner)
+                                                      scope))
+                       :outdated-by leader
+                       :outdated-by-store (and leader
+                                               (nth (gethash leader owner)
                                                     scope))
-                     :retracted-at (%retracted-at c)
-                     :standing (st:claim-standing c)
-                     :extent (st:claim-extent c)
-                     :store g)))))
+                       :retracted-at (%retracted-at c)
+                       :standing (st:claim-standing c)
+                       :extent (st:claim-extent c)
+                       :store g))))))

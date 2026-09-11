@@ -96,3 +96,117 @@ a relation nobody wrote: NIL, which is not :UNCOVERED and not
     (%seed-series g)
     (is (= 4 (length (mem:recall g +subj+))))
     (is (= 0 (length (mem:recall g +subj+ :producer "someone/else"))))))
+
+;;; Cross-producer currency (#82): several instances of one agent share
+;;; a store, each writing under its own producer.
+
+(defparameter +px+ "agent/host/x")
+(defparameter +py+ "agent/host/y")
+(defparameter +pz+ "agent/host/z")
+
+(defun %belief-as (g producer object start &key (subject +subj+))
+  "A CI-STATUS belief on SUBJECT from PRODUCER, valid from START."
+  (gdb:with-transaction (:graph g)
+    (mem:record-belief g subject "ci-status" object
+                       :producer producer :standing :observed
+                       :extent (%open-from (%ts start)))))
+
+(defun %verdict (records key)
+  (find key records :test #'string=
+        :key (lambda (r) (st:claim-object-key
+                          (mem:belief-record-claim r)))))
+
+(test a-later-belief-from-another-producer-outdates-the-earlier-one
+  "#82: supersession is per producer, so X's belief stays current in
+its own series; the record names Y's later belief as what outdates it."
+  (with-memory-graph (g)
+    (%belief-as g +px+ '(:verdict . "green") "2026-09-01T08:00:00Z")
+    (%belief-as g +py+ '(:verdict . "red") "2026-09-02T08:00:00Z")
+    (let* ((rs (mem:recall g +subj+ :relation "ci-status"))
+           (x (%verdict rs "green"))
+           (y (%verdict rs "red")))
+      (is (= 2 (length rs)))
+      (is (eq t (mem:belief-record-current-p x))
+          "current in its own series: nothing superseded it")
+      (is (null (mem:belief-record-superseded-by x))
+          "control: supersession is per producer and never fired")
+      (let ((leader (mem:belief-record-outdated-by x)))
+        (is (not (null leader)) "X is outdated by Y's later belief")
+        (is (string= "red" (st:claim-object-key leader)))
+        (is (string= +py+ (st:claim-producer leader)))
+        (is (eq g (mem:belief-record-outdated-by-store x))))
+      (is (null (mem:belief-record-outdated-by y))
+          "the leader is outdated by nobody"))))
+
+(test two-producers-starting-at-the-same-instant-are-a-disagreement
+  "#82: equal validity starts -- neither leads, so neither is outdated."
+  (with-memory-graph (g)
+    (%belief-as g +px+ '(:verdict . "green") "2026-09-01T08:00:00Z")
+    (%belief-as g +py+ '(:verdict . "red") "2026-09-01T08:00:00Z")
+    (let ((rs (mem:recall g +subj+ :relation "ci-status")))
+      (is (= 2 (length rs)))
+      (is (every #'mem:belief-record-current-p rs))
+      (is (every (lambda (r) (null (mem:belief-record-outdated-by r))) rs)
+          "a disagreement, not an outdating"))))
+
+(test retracting-the-leader-un-outdates-the-earlier-belief
+  "#82: currency is derived on read, so withdrawing Y's belief restores
+X's without anyone rewriting it."
+  (with-memory-graph (g)
+    (%belief-as g +px+ '(:verdict . "green") "2026-09-01T08:00:00Z")
+    (let ((y (%belief-as g +py+ '(:verdict . "red")
+                         "2026-09-02T08:00:00Z")))
+      (is (not (null (mem:belief-record-outdated-by
+                      (%verdict (mem:recall g +subj+ :relation "ci-status")
+                                "green"))))
+          "premise: outdated while Y stands")
+      (gdb:with-transaction (:graph g) (mem:retract-belief y))
+      (let ((rs (mem:recall g +subj+ :relation "ci-status")))
+        (is (= 1 (length rs)))
+        (is (null (mem:belief-record-outdated-by (first rs)))
+            "a retracted claim never leads")))))
+
+(test a-producer-ending-in-a-slash-filters-by-prefix
+  "#82: <agent>/<host>/ answers for every instance on that host; any
+other name still has to match exactly."
+  (with-memory-graph (g)
+    (%belief-as g +px+ '(:verdict . "green") "2026-09-01T08:00:00Z")
+    (%belief-as g +py+ '(:verdict . "red") "2026-09-02T08:00:00Z")
+    (flet ((n (producer)
+             (length (mem:recall g +subj+ :relation "ci-status"
+                                 :producer producer))))
+      (is (= 2 (n "agent/host/")) "the prefix answers for both")
+      (is (= 1 (n +px+)) "an exact name is still exact")
+      (is (= 0 (n "agent/host"))
+          "no trailing slash: an exact name nobody writes under")
+      (is (= 0 (n "agent/other/")) "control: another host's prefix"))))
+
+(test an-own-series-superseded-belief-neither-leads-nor-is-outdated
+  "#82: only a belief current in its own series takes part.  Y holds
+blue from 09-01; X records green from 09-02, supersedes it with red
+from 09-04, then retracts red -- leaving green with a CLOSED validity
+and the latest start of anything still standing.  It must not lead
+over blue, and having been replaced in its own series it is not
+outdated either."
+  (with-memory-graph (g)
+    (%belief-as g +py+ '(:verdict . "blue") "2026-09-01T08:00:00Z")
+    (%belief-as g +px+ '(:verdict . "green") "2026-09-02T08:00:00Z")
+    (let ((red (%belief-as g +px+ '(:verdict . "red")
+                           "2026-09-04T08:00:00Z")))
+      (is (not (null (mem:belief-record-outdated-by
+                      (%verdict (mem:recall g +subj+ :relation "ci-status")
+                                "blue"))))
+          "control: blue is outdated while red stands")
+      (gdb:with-transaction (:graph g) (mem:retract-belief red)))
+    (let* ((rs (mem:recall g +subj+ :relation "ci-status"))
+           (blue (%verdict rs "blue"))
+           (green (%verdict rs "green")))
+      (is (= 2 (length rs)))
+      (is (null (mem:belief-record-outdated-by blue))
+          "green starts later but its validity is closed: it cannot lead")
+      (is-false (mem:belief-record-current-p green)
+                "superseded in X's own series")
+      (is (null (mem:belief-record-outdated-by green))
+          "already replaced in its own series, not also outdated")
+      (is (null (mem:outdated-by (mem:belief-record-claim green) g))
+          "and the single-claim helper agrees"))))
