@@ -175,14 +175,14 @@ words, then one line per belief that is current in recall's sense --
 not retracted, its validity still open, and not outdated by another
 producer's later belief (#82) -- the endpoint's own beliefs as subject
 first, then as object, newest validity first, capped at `*profile-cap*`
-lines (default 32). An absence's (`record-absence`)
-default extent is an instant, so it is never open and never a profile
+lines (default 32). An absence's (`record-absence`) default extent is
+an instant, so the absence itself is never open and never a profile
 line; an absence given an explicit open `:extent` would be a profile
-line, and `record-absence` never touches its own (subject) endpoint
-either way. It does touch the **object** endpoint of the belief it
-closes (#86), same as the supersession `record-belief` performs: that
-belief leaves every profile it led once its validity closes. An
-endpoint with no current belief has no profile.
+line. When the absence closes a predecessor (#86), it touches that
+belief's subject *and* object endpoints, same as the supersession
+`record-belief` performs: the belief leaves every profile it led once
+its validity closes. An absence that finds no predecessor touches
+nothing. An endpoint with no current belief has no profile.
 
 This is the text the semantic endpoint index (#78) embeds. Every
 belief write -- `record-belief`'s create and the supersession it may
@@ -284,17 +284,12 @@ one pass is not promised to empty it.
 
 **Who notifies.** `record-belief`, `record-absence` and `retract-belief`
 do not: they know nothing of a worker, and a memory image with no
-indexer must not pay for one. The agent tools do -- `conclude` and
-`retract` call `notify-endpoint-indexer` once their transaction has
-committed; `conclude-absence` does not, on the older premise that an
-absence touches no endpoint, which #86 narrowed -- an absence that
-closes a predecessor now touches that belief's object endpoint the
-same as a supersession, so a store driven only through
-`conclude-absence` waits for the worker's next sweep to pick that
-touch up rather than being notified promptly. A program that writes
-through `record-belief` or `record-absence` directly is therefore
-responsible for its own notify; without one the endpoint waits for the
-worker's next sweep, and stays reachable lexically meanwhile. The agent
+indexer must not pay for one. The agent tools do -- `conclude`,
+`conclude-absence` and `retract` each call `notify-endpoint-indexer`
+once their transaction has committed. A program that writes through
+`record-belief` or `record-absence` directly is therefore responsible
+for its own notify; without one the endpoint waits for the worker's
+next sweep, and stays reachable lexically meanwhile. The agent
 side of this -- `make-agent-tools`' `:embedder`, and how `retrieve`
 uses the index -- is in `docs/agent-tools.md`.
 

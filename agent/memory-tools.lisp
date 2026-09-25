@@ -218,6 +218,9 @@ Validated and traced like conclude."
                :evidence (%evidence-pairs scope evidence)
                :rule rule :rule-version rule-version
                :scope (scope-stores scope))))
+       ;; An absence that closes a predecessor touches endpoints too
+       ;; (#86), same reasoning as CONCLUDE above.
+       (mem:notify-endpoint-indexer)
        (%decision-json scope d)))))
 
 (defun %retract-tool (scope)

@@ -246,11 +246,12 @@ the predecessor instead if it was wrong."
                  :predecessor pred :start start)
           (progn
             (%close-validity pred start)
-            ;; The predecessor's object endpoint loses a line (#78,
-            ;; carried to absences by #86).
-            (touch-endpoints graph
-                             (list (cons (st:claim-object-namespace pred)
-                                         (st:claim-object-key pred))))))))
+            ;; The predecessor's subject and object endpoints both
+            ;; lose a line (#78, carried to absences by #86).
+            (touch-endpoints
+             graph
+             (list subject (cons (st:claim-object-namespace pred)
+                                  (st:claim-object-key pred))))))))
   (make-belief-unary
    :graph graph
    :subject-namespace (car subject) :subject-key (cdr subject)
