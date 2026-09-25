@@ -28,6 +28,14 @@ standing says what happened when the agent looked: `:searched-empty`
 `:uncovered` (nothing has looked). Each is a write; a read that finds
 *nothing recorded* returns NIL, which is none of them.
 
+Recording an absence also closes the producer's current open belief on
+that `(subject, relation)`, just before the absence's instant — "I
+looked and found nothing" ends what the producer last asserted there,
+exactly as a superseding belief does (#86), so a validity-time read
+agrees with `:current`. An absence dated at or before that belief's
+start is refused the same way a bad successor is (below); retract the
+belief instead if it was wrong.
+
 ```lisp
 ;; mem = cl-llm.memory, gdb = graph-db
 (gdb:with-transaction (:graph g)
@@ -167,11 +175,14 @@ words, then one line per belief that is current in recall's sense --
 not retracted, its validity still open, and not outdated by another
 producer's later belief (#82) -- the endpoint's own beliefs as subject
 first, then as object, newest validity first, capped at `*profile-cap*`
-lines (default 32). An absence's (`record-absence`)
-default extent is an instant, so it is never open and never a profile
+lines (default 32). An absence's (`record-absence`) default extent is
+an instant, so the absence itself is never open and never a profile
 line; an absence given an explicit open `:extent` would be a profile
-line, and `record-absence` never touches its endpoint either way. An
-endpoint with no current belief has no profile.
+line. When the absence closes a predecessor (#86), it touches that
+belief's subject *and* object endpoints, same as the supersession
+`record-belief` performs: the belief leaves every profile it led once
+its validity closes. An absence that finds no predecessor touches
+nothing. An endpoint with no current belief has no profile.
 
 This is the text the semantic endpoint index (#78) embeds. Every
 belief write -- `record-belief`'s create and the supersession it may
@@ -271,14 +282,14 @@ mid-drain sets it again and is picked up by the next pass rather than
 lost: `drain-endpoint-vectors` takes each store's dirty set once, and
 one pass is not promised to empty it.
 
-**Who notifies.** `record-belief` and `retract-belief` do not: they know
-nothing of a worker, and a memory image with no indexer must not pay
-for one. The agent tools do -- `conclude` and `retract` call
-`notify-endpoint-indexer` once their transaction has committed, and
-`conclude-absence` does not, because an absence touches no endpoint. A
-program that writes through `record-belief` directly is therefore
-responsible for its own notify; without one the endpoint waits for the
-worker's next sweep, and stays reachable lexically meanwhile. The agent
+**Who notifies.** `record-belief`, `record-absence` and `retract-belief`
+do not: they know nothing of a worker, and a memory image with no
+indexer must not pay for one. The agent tools do -- `conclude`,
+`conclude-absence` and `retract` each call `notify-endpoint-indexer`
+once their transaction has committed. A program that writes through
+`record-belief` or `record-absence` directly is therefore responsible
+for its own notify; without one the endpoint waits for the worker's
+next sweep, and stays reachable lexically meanwhile. The agent
 side of this -- `make-agent-tools`' `:embedder`, and how `retrieve`
 uses the index -- is in `docs/agent-tools.md`.
 

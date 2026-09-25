@@ -324,8 +324,10 @@ after its transaction commits."
         (setf (fdefinition 'mem:notify-endpoint-indexer) old
               (fdefinition 'rag:embed) old-embed)))))
 
-(test conclude-absence-does-not-notify-the-indexer
-  "#78 SS4.2: an absence touches no endpoint, so it wakes nothing."
+(test conclude-absence-notifies-the-indexer-too
+  "#86: an absence can close a predecessor and touch its endpoints, so
+CONCLUDE-ABSENCE wakes the worker exactly as CONCLUDE does, whether or
+not this particular absence touched anything."
   (with-stores (w p)
     (let* ((notified 0)
            (tools (agent:make-agent-tools (list w p) :producer +p+
@@ -343,7 +345,7 @@ after its transaction commits."
                              "standing" "searched-empty")))
                (is (string= "concluded" (json:jget r "outcome"))
                    "control: the absence was recorded")
-               (is (= 0 notified) "an absence woke the indexer ~a times"
+               (is (= 1 notified) "an absence woke the indexer ~a times"
                    notified)))
         (setf (fdefinition 'mem:notify-endpoint-indexer) old)))))
 

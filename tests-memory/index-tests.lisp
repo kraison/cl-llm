@@ -178,6 +178,29 @@ i.e. between the render and the store transaction (#78 SS4.3 step 2)."
         (is (= 2 (length (mem:nearest-endpoints g q :k 5
                                                 :model "m"))))))))
 
+(test an-absence-that-closes-a-predecessor-dirties-both-endpoints
+  "#86: RECORD-ABSENCE closing a predecessor loses it from both the
+subject and the object endpoint's profile, same as a supersession.
+Each endpoint is kept alive by a belief on a different relation, so it
+still has a current line and can show up as dirty rather than as an
+endpoint with no profile at all."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (%pbelief g '(:repo . "cl-llm") "root-cause" '(:cause . "flaky"))
+    (%pbelief g '(:decision . "hold") "decided-because"
+              '(:verdict . "green"))
+    (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 4)
+                                         :model "m")
+    (is (null (mem:dirty-endpoints g "m")) "clean after the drain")
+    (gdb:with-transaction (:graph g)
+      (mem:record-absence g '(:repo . "cl-llm") "ci-status"
+                          :producer +p+ :standing :searched-empty))
+    (let ((dirty (mem:dirty-endpoints g "m")))
+      (is (member '(:repo . "cl-llm") dirty :test #'equal)
+          "the subject endpoint the closed belief led")
+      (is (member '(:verdict . "green") dirty :test #'equal)
+          "the object endpoint the closed belief led"))))
+
 (test a-model-change-re-embeds-everything
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))

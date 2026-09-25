@@ -170,9 +170,11 @@ default)."
   "For a (:BELIEF ...) PROPOSAL, (values PRIOR STORE): the current open
 binary claim of the same series, across SCOPE, whose validity start is
 latest but not after the proposal's; the first store in scope order on
-a tie.  NIL for an absence, which has no series (recon C3), and when no
-prior governs.  Computed here, not by %CURRENT-PREDECESSOR, which is
-unambiguous only inside one store.  Caller holds the snapshots."
+a tie.  NIL for an absence: this cross-store pre-read still ignores it
+(recon C3), though RECORD-ABSENCE now closes a prior in its own series
+within the write store (#86).  Also NIL when no prior governs.
+Computed here, not by %CURRENT-PREDECESSOR, which is unambiguous only
+inside one store.  Caller holds the snapshots."
   (destructuring-bind (kind subject relation &rest more) proposal
     (when (eq kind :belief)
       (let ((start (%proposal-start more))

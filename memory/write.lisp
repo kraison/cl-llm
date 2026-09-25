@@ -225,13 +225,33 @@ WITH-TRANSACTION."
                                      :standing :asserted)))
   "Record that PRODUCER looked for SUBJECT RELATION and STANDING says
 what happened: :SEARCHED-EMPTY, :INDETERMINATE or :UNCOVERED.  EXTENT is
-the search itself, an instant by default.  Returns the BELIEF-UNARY."
+the search itself, an instant by default.  Closes the producer's open
+predecessor on (SUBJECT, RELATION), if any, just before EXTENT's start
+-- \"nothing found\" ends what that producer last asserted there,
+exactly as a superseding belief would (#86).  Returns the BELIEF-UNARY.
+Trap: an EXTENT starting at or before that predecessor is refused with
+BELIEF-SUCCESSOR-BEFORE-PREDECESSOR, same as RECORD-BELIEF; RETRACT-BELIEF
+the predecessor instead if it was wrong."
   (%check-endpoint :subject subject)
   (%check-relation relation)
   (%check-producer producer)
   (unless (member standing '(:searched-empty :indeterminate :uncovered))
     (%arg-error :standing standing
                 "one of :searched-empty :indeterminate :uncovered"))
+  (let ((start (te:bound-earliest (te:extent-start extent)))
+        (pred (%current-predecessor graph producer subject relation)))
+    (when pred
+      (if (not (local-time:timestamp< (%start-instant pred) start))
+          (error 'belief-successor-before-predecessor
+                 :predecessor pred :start start)
+          (progn
+            (%close-validity pred start)
+            ;; The predecessor's subject and object endpoints both
+            ;; lose a line (#78, carried to absences by #86).
+            (touch-endpoints
+             graph
+             (list subject (cons (st:claim-object-namespace pred)
+                                  (st:claim-object-key pred))))))))
   (make-belief-unary
    :graph graph
    :subject-namespace (car subject) :subject-key (cdr subject)

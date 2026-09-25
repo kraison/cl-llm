@@ -181,6 +181,89 @@ other name still has to match exactly."
           "no trailing slash: an exact name nobody writes under")
       (is (= 0 (n "agent/other/")) "control: another host's prefix"))))
 
+;;; An absence closes the producer's prior belief (#86).
+
+(test an-absence-closes-the-producer-s-prior-belief
+  "#86: an absence closes what it found nothing to replace, exactly as
+a superseding belief would, so a validity-time read agrees with the
+:CURRENT flag."
+  (with-memory-graph (g)
+    (let* ((t1 (%ts "2026-09-01T08:00:00Z"))
+           (t2 (%ts "2026-09-02T08:00:00Z"))
+           (extent (te:make-instant (te:exact-bound t2)
+                                    :semantics :validity
+                                    :standing :asserted)))
+      (gdb:with-transaction ((graph-db::transaction-manager g))
+        (mem:record-belief g +subj+ "ci-status" '(:verdict . "green")
+                           :producer +p+ :standing :observed
+                           :extent (%open-from t1)))
+      (gdb:with-transaction ((graph-db::transaction-manager g))
+        (mem:record-absence g +subj+ "ci-status" :producer +p+
+                            :standing :searched-empty :extent extent))
+      (let ((green (find-if (lambda (c) (and (typep c 'mem:belief-binary)
+                                             (string= "green"
+                                                      (st:claim-object-key
+                                                       c))))
+                            (%touching g))))
+        (is (local-time:timestamp=
+             (local-time:timestamp- t2 1 :nsec)
+             (te:bound-latest (te:extent-end (st:claim-extent green))))
+            "closed 1 ns before the absence's instant"))
+      (let* ((rs (mem:recall g +subj+ :relation "ci-status"))
+             (belief (find-if (lambda (r)
+                                (typep (mem:belief-record-claim r)
+                                       'mem:belief-binary))
+                              rs)))
+        (is-false (mem:belief-record-current-p belief)
+                  "superseded, per :CURRENT too"))
+      (is (equal '("green")
+                 (%objects (mem:recall g +subj+ :relation "ci-status"
+                                      :at (local-time:timestamp+
+                                           t1 12 :hour))))
+          "still held between the belief's start and the absence")
+      (is (null (remove-if-not
+                 (lambda (r) (typep (mem:belief-record-claim r)
+                                    'mem:belief-binary))
+                 (mem:recall g +subj+ :relation "ci-status"
+                            :at (local-time:timestamp+ t2 1 :day))))
+          "closed: no binary belief holds after the absence"))))
+
+(test an-absence-before-the-prior-belief-s-start-is-refused
+  "#86: an absence must not precede what it would close -- that is a
+correction, via RETRACT-BELIEF, not an absence."
+  (with-memory-graph (g)
+    (let ((t1 (%ts "2026-09-01T08:00:00Z"))
+          (t2 (%ts "2026-09-02T08:00:00Z")))
+      (gdb:with-transaction ((graph-db::transaction-manager g))
+        (mem:record-belief g +subj+ "ci-status" '(:verdict . "green")
+                           :producer +p+ :standing :observed
+                           :extent (%open-from t2)))
+      (gdb:with-transaction ((graph-db::transaction-manager g))
+        (signals mem:belief-successor-before-predecessor
+          (mem:record-absence g +subj+ "ci-status" :producer +p+
+                              :standing :searched-empty
+                              :extent (te:make-instant
+                                       (te:exact-bound t1)
+                                       :semantics :validity
+                                       :standing :asserted)))))))
+
+(test an-absence-leaves-another-producer-s-belief-open
+  "#86: only the producer's own predecessor closes; cross-producer
+currency stays OUTDATED-BY (#82), not a closed validity."
+  (with-memory-graph (g)
+    (%belief-as g +px+ '(:verdict . "green") "2026-09-01T08:00:00Z")
+    (gdb:with-transaction (:graph g)
+      (mem:record-absence g +subj+ "ci-status" :producer +py+
+                          :standing :searched-empty))
+    (let* ((rs (mem:recall g +subj+ :relation "ci-status"
+                           :producer +px+))
+           (x (first rs)))
+      (is (= 1 (length rs)))
+      (is-true (mem:belief-record-current-p x))
+      (is (te:bound-unknown-p
+           (te:extent-end (st:claim-extent (mem:belief-record-claim x))))
+          "producer A's belief validity is untouched"))))
+
 (test an-own-series-superseded-belief-neither-leads-nor-is-outdated
   "#82: only a belief current in its own series takes part.  Y holds
 blue from 09-01; X records green from 09-02, supersedes it with red
