@@ -96,6 +96,11 @@ claim-extent` / save). Both claims remain. "What superseded it" is
 **computed** — the next claim in the series by validity start — never
 stored, so it cannot go stale. This is the Allen-relations rule applied
 to supersession, and the same choice sitrep made on the other axis.
+`record-absence` performs the identical closure on the producer's
+current predecessor, just before the absence's instant: "looked, found
+nothing" outdates what that producer last asserted there exactly as a
+new value would, so a validity-time reader never disagrees with
+`:current` (#86).
 
 **Correction** (transaction axis). `retract-belief` calls `retract-claim`:
 the transaction extent closes, the validity extent is untouched — the
@@ -124,6 +129,9 @@ argument, not the slot.
                 &key producer standing extent)
   ;; => the new unary claim.  STANDING must be an absence standing.
   ;; EXTENT defaults to an instant at now, :semantics :validity.
+  ;; Closes the producer's current predecessor on (SUBJECT, RELATION)
+  ;; just before EXTENT's start, if one exists (#86) -- same signal,
+  ;; BELIEF-SUCCESSOR-BEFORE-PREDECESSOR, on an earlier-dated absence.
 
 (retract-belief claim &key (at (local-time:now)))
   ;; => CLAIM, transaction extent closed.  Signals on a claim already
