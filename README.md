@@ -149,7 +149,9 @@ Everything signals under `cl-llm:llm-error`: `llm-http-error`, `llm-api-error`,
 `llm-rate-limit-error`, `llm-auth-error`, `llm-timeout-error`, `llm-parse-error`,
 `llm-tool-error`. 429 and 5xx are retried with exponential backoff honoring
 `Retry-After`, bounded by `*retries*`. A `retry-request` restart is established
-around every request.
+around every request. `*timeout*` bounds each request; `*connect-timeout*`,
+when bound, bounds the TCP connect alone, so a request timeout sized for a
+slow answer need not be what a silent host costs you.
 
 ## Retrieval (RAG)
 
