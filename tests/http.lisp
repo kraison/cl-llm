@@ -153,6 +153,19 @@ shadow the existing, more specific TIMEOUT-ERROR clause."
   (is (equal '(:read-timeout 5 :connect-timeout 5)
              (http::timeout-request-args 5))))
 
+(test timeout-request-args-takes-a-connect-timeout-of-its-own
+  ;; A request timeout sized for a slow answer (minutes, for a cold
+  ;; model or a big batch) is far too long to wait for a host that
+  ;; never answers the SYN: a sleeping laptop stalls every request for
+  ;; the whole of it.  *CONNECT-TIMEOUT* bounds the connect alone.
+  (let ((http::*connect-timeout* 5))
+    (is (equal '(:read-timeout 300 :connect-timeout 5)
+               (http::timeout-request-args 300))))
+  (let ((http::*connect-timeout* nil))
+    (is (equal '(:read-timeout 300 :connect-timeout 300)
+               (http::timeout-request-args 300))
+        "unset, the connect waits as long as the request did before")))
+
 ;;; -- Finding 4: forgotten WITH-FAKE-DRIVER must fail loudly ------------
 
 (test suite-default-driver-is-the-guard

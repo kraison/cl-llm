@@ -46,6 +46,7 @@
   (:export #:driver
            #:dexador-driver
            #:*driver*
+           #:*connect-timeout*
            #:perform-request
            #:perform-stream-request))
 
@@ -61,6 +62,7 @@
                 #:llm-error-status #:llm-error-body #:llm-error-url #:llm-error-code
                 #:llm-error-type #:llm-error-message #:llm-error-retry-after
                 #:llm-error-payload #:llm-error-tool-name #:llm-error-underlying)
+  (:import-from #:cl-llm.http #:*connect-timeout*)
   (:export
    ;; conditions (genuinely re-exported from cl-llm.conditions via :import-from
    ;; above -- these ARE the cl-llm.conditions symbols, not distinct ones)
@@ -71,6 +73,7 @@
    #:llm-error-payload #:llm-error-tool-name #:llm-error-underlying
    #:*retries*
    #:*timeout*
+   #:*connect-timeout*                  ; cl-llm.http's symbol, as above
    #:*max-tokens*
    ;; content parts
    #:content-part #:text-part #:tool-use-part #:tool-result-part

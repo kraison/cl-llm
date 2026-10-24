@@ -55,9 +55,18 @@ expect."
     ((listp headers) headers)
     (t nil)))
 
+(defvar *connect-timeout* nil
+  "Seconds to wait for the TCP connect alone, or NIL to wait as long as
+the request timeout.  Bind it when the request timeout is sized for a
+slow answer (a cold model, a big batch) but the host may be silent (a
+sleeping laptop drops the SYN): the connect then fails in seconds and
+a fallback can take over, instead of every request stalling for the
+whole request timeout.")
+
 (defun timeout-request-args (timeout)
   "Build the :READ-TIMEOUT/:CONNECT-TIMEOUT keyword arguments to splice
 into a DEX:REQUEST call, omitting both entirely when TIMEOUT is NIL.
+The connect timeout is *CONNECT-TIMEOUT* when set, else TIMEOUT.
 
 This is not a no-op simplification: DEX:REQUEST only applies its own
 defaults (*DEFAULT-READ-TIMEOUT*/*DEFAULT-CONNECT-TIMEOUT*, both 10
@@ -67,7 +76,8 @@ mechanism outright, and with this project's hard no-threads constraint an
 unbounded blocking read would hang the whole process. Do not simplify
 this back to always passing the keywords."
   (when timeout
-    (list :read-timeout timeout :connect-timeout timeout)))
+    (list :read-timeout timeout
+          :connect-timeout (or *connect-timeout* timeout))))
 
 (defmacro with-translated-errors ((url) &body body)
   "Translate dexador's non-2xx conditions into return values, both
