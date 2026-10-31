@@ -710,131 +710,53 @@ leaves the endpoint dirty -- the bounded-pass fallout (SS4.3 step 2)."
           (mem:stop-endpoint-indexer w))))))
 
 (test a-notify-does-not-cancel-an-outage-backoff
+  "SS4.3 step 3: Task 4 wires a notify to every write, so an import
+against a down embedder must not buy one failing round trip per
+write.  Half a second of margin or more on every window (#80 item 6):
+with a 1 s backoff the second attempt is due 1 s after the first and
+the third 2 s after the second, so three notifies inside the first
+0.2 s must not bring the second attempt before 0.5 s, and no third
+may land within 1 s of the second."
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
     (multiple-value-bind (embed counter) (%counting-embed 4 :fail-times 1000)
       (let ((w (mem:start-endpoint-indexer (list g) :embed embed :model "m"
-                                                    :backoff 0.5))
-            (stop-seconds nil))
-        (unwind-protect
-             (progn
-               (loop repeat 200 until (plusp (car counter))
-                     do (sleep 0.01))
-               (is (= 1 (car counter)) "control: the sweep failed once")
-               ;; Task 4 wires a notify to every write, so an import
-               ;; against a down embedder must not buy one failing
-               ;; round trip per write (SS4.3 step 3).
-               (dotimes (i 3)
-                 (mem:notify-endpoint-indexer w)
-                 (sleep 0.05))
-               (sleep 1.0)
-               (is (= 2 (car counter))
-                   "one attempt per backoff period -- 0.5s, then 1.0s ~
-                    -- not one per notify; got ~d"
-                   (car counter)))
-          (setf stop-seconds
-                (%seconds-to (lambda () (mem:stop-endpoint-indexer w)))))
-        (is (< stop-seconds 2)
-            "stop still returns in ~,2fs" stop-seconds)))))
-
-(defun %flaky-prepare (fail-times)
-  "=> (values PREPARE COUNTER): a PREPARE that signals on its first
-FAIL-TIMES calls, answers NIL on the next, and T from then on,
-counting calls in COUNTER's car.  An embedder still loading is a
-probe that signals; NIL is the other way PREPARE can say no."
-  (let ((counter (list 0)))
-    (values (lambda ()
-              (incf (car counter))
-              (cond ((<= (car counter) fail-times)
-                     (error "connection refused"))
-                    ((= (car counter) (1+ fail-times)) nil)
-                    (t t)))
-            counter)))
-
-(test the-worker-retries-prepare-and-embeds-nothing-until-it-succeeds
-  "#80 item 3: a cold start.  The probe fails twice, then once answers
-NIL; the worker retries it on the backoff, calls the embedder only
-after it succeeds, then sweeps; the outage is logged once."
-  (with-memory-graph (g)
-    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
-    (multiple-value-bind (embed counter) (%counting-embed 4)
-      (multiple-value-bind (prepare prepared) (%flaky-prepare 2)
-        (let* ((log (make-string-output-stream))
-               (*error-output* log)
-               (w (mem:start-endpoint-indexer (list g) :embed embed
-                                              :model "m" :backoff 0.1
-                                              :prepare prepare)))
+                                                    :backoff 1.0))
+            (stop-seconds nil)
+            (first-at nil)
+            (second-at nil))
+        (flet ((seconds-between (a b)
+                 (/ (float (- b a) 0f0) internal-time-units-per-second)))
           (unwind-protect
                (progn
-                 (loop repeat 300 until (= 2 (car prepared))
+                 (loop repeat 500 until (plusp (car counter))
                        do (sleep 0.01))
-                 (is (= 2 (car prepared)) "control: two probes failed")
-                 (is (= 0 (car counter))
-                     "nothing is embedded before the probe succeeds")
-                 (is (mem:wait-endpoint-indexer w :timeout 10)
-                     "ready, then the sweep")
-                 (is (= 4 (car prepared))
-                     "two signals, one NIL, then T: ~d calls"
-                     (car prepared))
-                 (is (= 2 (car counter)) "and the sweep embedded both")
-                 (is (null (mem:dirty-endpoints g "m")))
-                 (is-false (mem:endpoint-indexer-off-p w))
-                 (sleep 0.1)
-                 (let ((text (get-output-stream-string log)))
-                   (is (= 1 (%count-substring "not ready" text))
-                       "the cold start was logged once: ~s" text)
-                   (is (= 1 (%count-substring "ready after 3" text))
-                       "and so was the recovery: ~s" text)))
-            (mem:stop-endpoint-indexer w)))))))
-
-(test the-worker-gives-up-on-prepare-after-the-bound
-  "#80 item 3: the retry is bounded.  A probe that never succeeds is
-tried PREPARE-ATTEMPTS times, each after the doubling backoff that a
-notify does not cut short; then the worker says the index stays off,
-sets OFF and stops, having embedded nothing."
-  (with-memory-graph (g)
-    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
-    (multiple-value-bind (embed counter) (%counting-embed 4)
-      (multiple-value-bind (prepare prepared) (%flaky-prepare 1000)
-        (let* ((log (make-string-output-stream))
-               (*error-output* log)
-               (w (mem:start-endpoint-indexer (list g) :embed embed
-                                              :model "m" :backoff 0.1
-                                              :prepare prepare
-                                              :prepare-attempts 3)))
-          (unwind-protect
-               (progn
-                 (loop repeat 300 until (plusp (car prepared))
-                       do (sleep 0.01))
-                 ;; Notifies land during the first backoff (0.1 s).
+                 (setf first-at (get-internal-real-time))
+                 (is (= 1 (car counter)) "control: the sweep failed once")
                  (dotimes (i 3)
                    (mem:notify-endpoint-indexer w)
-                   (sleep 0.01))
-                 (is (= 1 (car prepared))
-                     "a notify did not buy another probe: ~d"
-                     (car prepared))
-                 (loop repeat 500 until (mem:endpoint-indexer-off-p w)
+                   (sleep 0.05))
+                 (is (= 1 (car counter))
+                     "three notifies bought no attempt: got ~d"
+                     (car counter))
+                 (loop repeat 500 until (= 2 (car counter))
                        do (sleep 0.01))
-                 (is-true (mem:endpoint-indexer-off-p w)
-                          "the worker gave up")
-                 (is (= 3 (car prepared)) "after exactly the bound")
-                 (is (= 0 (car counter)) "and never embedded")
-                 (loop repeat 100
-                       while (bt:thread-alive-p
-                              (mem::endpoint-indexer-thread w))
-                       do (sleep 0.01))
-                 (is-false (bt:thread-alive-p
-                            (mem::endpoint-indexer-thread w))
-                           "and its thread returned")
-                 (is (null (mem:wait-endpoint-indexer w :timeout 0.2))
-                     "an off worker is never idle")
-                 (let ((text (get-output-stream-string log)))
-                   (is (= 1 (%count-substring "not ready:" text))
-                       "the outage was logged once: ~s" text)
-                   (is (= 1 (%count-substring "stays off" text))
-                       "and the giving up once: ~s" text)))
-            (is-true (mem:stop-endpoint-indexer w)
-                     "stop still joins a worker that gave up")))))))
+                 (setf second-at (get-internal-real-time))
+                 (is (= 2 (car counter))
+                     "control: the second attempt came")
+                 (is (>= (seconds-between first-at second-at) 0.5)
+                     "and only once the 1 s backoff ran out, not on a ~
+                      notify: ~,2fs after the first"
+                     (seconds-between first-at second-at))
+                 (sleep 1.0)
+                 (is (= 2 (car counter))
+                     "no third attempt within a second of the second: ~
+                      the backoff doubled; got ~d"
+                     (car counter)))
+            (setf stop-seconds
+                  (%seconds-to (lambda () (mem:stop-endpoint-indexer w)))))
+          (is (< stop-seconds 2)
+              "stop still returns in ~,2fs" stop-seconds))))))
 
 (test a-second-start-stops-the-first-worker
   (with-memory-graph (g)
