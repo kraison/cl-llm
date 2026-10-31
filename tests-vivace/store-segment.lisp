@@ -1,13 +1,9 @@
 ;;;; tests-vivace/store-segment.lisp
-;;; RUN THIS SUITE WITH A LARGER HEAP: sbcl --dynamic-space-size 4096.
-;;; The vivace suite already retained ~870MB before this file existed -- 87% of
-;;; SBCL's 1GB default -- so adding these tests exhausted the heap on roughly
-;;; two runs in three.  At 4096 it is 3/3 green.  Bounding graph-db's buffer
-;;; pool does NOT fix it (tried both per-graph :buffer-pool-size and a
-;;; suite-wide SET-BUFFER-POOL-SIZE, which trims live buffers rather than just
-;;; lowering a ceiling; still flaky), so the retention is elsewhere and is
-;;; tracked separately.  :BUFFER-POOL-SIZE 1000 below matches what graph-db's
-;;; own tests pass and keeps these tests from making the peak worse.
+;;; The :BUFFER-POOL-SIZE 1000 arguments below are moot: graph-db's pool is
+;;; one process-wide resource sized by the FIRST graph opened, which is why
+;;; passing it here never moved #11's peak.  The suite's fixtures now pin it
+;;; (suite.lisp) and tests-vivace/heap.lisp guards the heap; the arguments
+;;; stay only to match what graph-db's own tests pass.
 
 (in-package #:cl-llm.rag.vivace/tests)
 (in-suite :cl-llm-rag-vivace)

@@ -27,10 +27,24 @@ GDB:*SYSTEM-DIRECTORY*.  The caller deletes it: %DELETE-SYSTEM-DIRECTORY."
    (uiop:delete-directory-tree (pathname gdb:*system-directory*)
                                :validate t :if-does-not-exist :ignore)))
 
+(defparameter *test-buffer-pool-size* 1000
+  "Size the suite starts graph-db's buffer pool at (#11).  The pool is one
+process-wide resource, sized by whichever graph opens FIRST and held for
+the life of the image: at MAKE-GRAPH's default of 100000 it pre-fills
+~300 MB of buffers, and a :BUFFER-POOL-SIZE on any later graph is ignored.")
+
+(defun %ensure-test-buffer-pool ()
+  "Start graph-db's buffer pool at *TEST-BUFFER-POOL-SIZE* unless a pool is
+already running, whose size then stays.  Returns the size in force."
+  (gdb::ensure-buffer-pool *test-buffer-pool-size*)
+  gdb:*buffer-pool-size*)
+
 (defmacro with-system-directory (() &body body)
   "Run BODY with GDB:*SYSTEM-DIRECTORY* bound to a fresh temp directory,
-deleted afterwards however BODY exits.  Graphs made inside share it, so a
+deleted afterwards however BODY exits, after pinning the buffer pool small
+(%ENSURE-TEST-BUFFER-POOL).  Graphs made inside share the directory, so a
 close-and-reopen within BODY keeps its type ids."
   `(let ((gdb:*system-directory* (%temp-system-directory)))
+     (%ensure-test-buffer-pool)
      (unwind-protect (progn ,@body)
        (%delete-system-directory))))
