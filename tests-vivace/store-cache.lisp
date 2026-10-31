@@ -36,6 +36,39 @@
                                        (rag:store-search store (rag:embed emb q) 3)))))))
       (is (equal (rankings :scan) (rankings :cache))))))
 
+(test scan-and-cache-return-every-chunk-when-k-covers-the-corpus
+  "REGRESSION (#9).  With K at least the corpus size, every query returns
+EVERY chunk from both strategies, and in the same order -- checked over
+several fresh graphs, because on ECL the typed vertex scan visits chunks in a
+different order per graph (the type index is an EQUALP hash set of random
+ids there; SBCL yields insertion order), which is what made the original
+failure flaky.  The cause was (subseq (stable-sort hits ...) 0 (min k (length
+hits))) in both searches: LENGTH read from the binding the destructive sort
+had just relinked, so each query returned a correct-order PREFIX of random
+length (the #17 pattern).  The top-k collector replaced that; this pins it."
+  (let ((emb (rag:make-mock-embedder))
+        (queries '("anti-tank mine" "butterfly" "fragmentation bounding"))
+        (n (length *corpus*)))
+    (flet ((rankings (strategy)
+             (with-temp-graph (g)
+               (let ((store (v:make-graph-store g :strategy strategy)))
+                 (load-corpus store emb)
+                 (loop for q in queries
+                       collect (mapcar (lambda (h)
+                                         (rag:chunk-document-id
+                                          (rag:hit-chunk h)))
+                                       (rag:store-search
+                                        store (rag:embed emb q) n)))))))
+      (dotimes (round 4)
+        (let ((scan (rankings :scan))
+              (cache (rankings :cache)))
+          (is (every (lambda (r) (= n (length r))) scan)
+              "round ~d: the scan store dropped hits: ~s" round scan)
+          (is (every (lambda (r) (= n (length r))) cache)
+              "round ~d: the cache store dropped hits: ~s" round cache)
+          (is (equal scan cache)
+              "round ~d: scan ~s but cache ~s" round scan cache))))))
+
 (test scan-and-cache-agree-on-tied-scores
   "Exact-tie parity: two chunks with IDENTICAL embeddings (so store-search
 must break the tie itself) must rank identically for the scan strategy (live
