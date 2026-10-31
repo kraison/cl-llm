@@ -62,12 +62,19 @@ first: the first graph of an image pays ~4 MB once (caches, the pool)."
 (test suite-retention-fits-the-default-heap
   "CANARY for #11, defined last so the rest of the suite has run before it:
 what the run leaves live after a full GC must fit well inside SBCL's
-default 1 GB heap, and graph-db's pool must be the small one the fixtures
-pin -- a graph opened before the pin sizes it at 100000, ~300 MB.  Run
-alone this test proves nothing; it bites only after the rest."
-  (is (<= gdb:*buffer-pool-size* *test-buffer-pool-size*)
-      "graph-db's buffer pool is ~:D, not the ~:D the suite pins (#11)"
-      gdb:*buffer-pool-size* *test-buffer-pool-size*)
+default 1 GB heap, and when the fixtures were the ones to start graph-db's
+pool it must be the small one they pin -- a graph opened before the pin
+sizes it at 100000, ~300 MB.  A pool already running before the suite
+needed one is kept at its own size (%ENSURE-TEST-BUFFER-POOL), so that
+case is reported as a skip, not judged.  Run alone this test proves
+nothing; it bites only after the rest."
+  (if *buffer-pool-started-here*
+      (is (<= gdb:*buffer-pool-size* *test-buffer-pool-size*)
+          "graph-db's buffer pool is ~:D, not the ~:D the suite pins (#11)"
+          gdb:*buffer-pool-size* *test-buffer-pool-size*)
+      (skip "graph-db's buffer pool (~:D) was running before the suite ~
+             started one; its size is not the suite's to judge"
+            gdb:*buffer-pool-size*))
   #-sbcl (skip "heap accounting here is SBCL-specific")
   #+sbcl
   (let ((live (%retained-bytes)))

@@ -21,10 +21,19 @@ process-wide resource, sized by whichever graph opens FIRST and held for
 the life of the image: at MAKE-GRAPH's default of 100000 it pre-fills
 ~300 MB of buffers, and a :BUFFER-POOL-SIZE on any later graph is ignored.")
 
+(defvar *buffer-pool-started-here* nil
+  "T once %ENSURE-TEST-BUFFER-POOL started graph-db's pool itself.  NIL
+while the pool in use is one that was already running when the suite
+first needed a graph, e.g. an application's in a long-lived image.")
+
 (defun %ensure-test-buffer-pool ()
   "Start graph-db's buffer pool at *TEST-BUFFER-POOL-SIZE* unless a pool is
-already running, whose size then stays.  Returns the size in force."
-  (gdb::ensure-buffer-pool *test-buffer-pool-size*)
+already running: GDB::ENSURE-BUFFER-POOL then keeps that pool at its own
+size, which the suite does not trim (SET-BUFFER-POOL-SIZE would drop an
+application's live buffers).  Returns the size in force."
+  (unless (gdb::buffer-pool-running-p)
+    (gdb::ensure-buffer-pool *test-buffer-pool-size*)
+    (setf *buffer-pool-started-here* t))
   gdb:*buffer-pool-size*)
 
 (defun %temp-system-directory ()
