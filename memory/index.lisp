@@ -120,9 +120,12 @@ it dirty for the next one (SS4.3 step 2).")
   "Clear the vector of every live vertex of the endpoint that holds
 one; => T when it wrote, NIL when there was nothing to clear (and then
 no transaction was opened).  Nothing is current, so nothing may stay
-searchable (SS4.1)."
-  (when (find-if #'endpoint-vector-value
-                 (%endpoint-vectors-of graph namespace key))
+searchable (SS4.1).  The pre-check reads under a snapshot (#80 item
+5); the transaction looks the vertices up again, so a vector stored
+between the two is cleared, not missed."
+  (when (with-scope-snapshots ((list graph))
+          (find-if #'endpoint-vector-value
+                   (%endpoint-vectors-of graph namespace key)))
     (gdb:with-transaction (:graph graph)
       (dolist (ev (%endpoint-vectors-of graph namespace key) t)
         (when (endpoint-vector-value ev)

@@ -456,6 +456,79 @@ removes them in one transaction and leaves their endpoints dirty."
                                                     :model "m")))
       (is-false (mem:dirty-endpoints g "m")))))
 
+(test a-profile-that-vanishes-mid-pass-ends-with-no-vector
+  "#80 item 5: the retraction lands inside the embed call, so the
+re-render finds nothing current.  The pass is not stored, the next
+pass renders NIL and clears instead of embedding, and the drain ends
+with the endpoint vector-less and clean after one embedder call."
+  (with-memory-graph (g)
+    (let* ((b (%pbelief g '(:repo . "cl-llm") "ci-status"
+                        '(:verdict . "green")))
+           (log (make-%embed-log))
+           (embed (%racing-embed
+                   log
+                   (lambda ()
+                     (gdb:with-transaction (:graph g)
+                       (mem:retract-belief b))))))
+      (multiple-value-bind (n unsettled)
+          (mem:drain-endpoint-vectors (list g) :embed embed :model "m")
+        (is (= 0 n) "nothing was stored")
+        (is (null unsettled) "and nothing ran out of passes"))
+      (is-true (%log-raced log)
+               "control: the retraction fired inside an embed call")
+      (is (= 1 (%log-calls log))
+          "the vanished profile was not embedded again: ~d calls"
+          (%log-calls log))
+      (dolist (ep '((:repo . "cl-llm") (:verdict . "green")))
+        (let ((ev (mem:endpoint-vector-of g (car ep) (cdr ep))))
+          (is-true ev "~a keeps its vertex" ep)
+          (is-false (mem:endpoint-vector-value ev)
+                    "~a holds no vector" ep)))
+      (is (null (mem:dirty-endpoints g "m"))
+          "nothing current, so nothing dirty")
+      (is (null (mem:nearest-endpoints g (%unit-query 4) :k 5
+                                       :model "m"))))))
+
+(test clearing-an-endpoint-with-nothing-current-drops-a-stale-vector
+  "#80 item 5: %CLEAR-ONE-ENDPOINT's write path.  A vector no write
+cleared -- a duplicate vertex, or one from before the touch existed --
+on an endpoint with nothing current is dropped from every live vertex
+in one transaction; a second call finds nothing and opens none."
+  (with-memory-graph (g)
+    ;; Two live vertices for one endpoint, both with a vector, and no
+    ;; belief at all on it.
+    (gdb:with-transaction (:graph g)
+      (dotimes (i 2)
+        (mem::make-endpoint-vector :graph g :ev-namespace :repo
+                                   :ev-key "ghost" :ev-model "m"
+                                   :embedding (%unit-query 4))))
+    (is (= 2 (count-if #'mem:endpoint-vector-value
+                       (mem::%endpoint-vectors-of g :repo "ghost")))
+        "control: two stale vectors")
+    (is (= 1 (length (mem:nearest-endpoints g (%unit-query 4) :k 5
+                                            :model "m")))
+        "control: and the ghost is searchable")
+    (let ((old (fdefinition 'graph-db::call-with-transaction))
+          (transactions 0)
+          (first nil) (second nil))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'graph-db::call-with-transaction)
+                   (lambda (fn tm)
+                     (incf transactions)
+                     (funcall old fn tm)))
+             (setf first (mem::%clear-one-endpoint g :repo "ghost")
+                   second (mem::%clear-one-endpoint g :repo "ghost")))
+        (setf (fdefinition 'graph-db::call-with-transaction) old))
+      (is (eq t first) "the first call wrote")
+      (is (null second) "the second had nothing to clear")
+      (is (= 1 transactions) "and opened no transaction for it"))
+    (is (= 0 (count-if #'mem:endpoint-vector-value
+                       (mem::%endpoint-vectors-of g :repo "ghost")))
+        "every live vertex was cleared")
+    (is (null (mem:nearest-endpoints g (%unit-query 4) :k 5
+                                     :model "m")))))
+
 (test a-touch-between-re-render-and-commit-never-leaves-a-stale-vector
   "WINDOW 2: the interleaved write commits from inside %STORE-VECTOR --
 after the drain transaction's re-render, before its commit -- so the
