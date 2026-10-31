@@ -357,10 +357,14 @@ URL, served by %SERVE-EMBEDDINGS on its own thread; stopped afterwards."
   "#84: SIGTERM delivered to the image's listener thread -- the last
 thread START makes while the index is off -- exits 0 within %WAIT's
 grace and leaves no .dirty marker, with SWANK up and the listener on.
-SBCL's own handler EXITs on the receiving thread and its unwind runs
-the hook there, where STOP joins that same thread; the image forwards
-the exit to the main thread instead.  Controls: the marker's presence
-while the image runs, and that a thread was found and signalled."
+A regression check of the forward on this path, not the test that
+caught the issue: under SBCL's own handler this delivery was already
+clean, because the hook then ran STOP on the listener thread, where
+STOP-LISTENER's join of that thread (itself) is under IGNORE-ERRORS
+and nothing else in STOP waits on it, so CLOSE-GRAPH ran there and
+cleared the marker all the same.  The delivery that was not clean is
+the indexer's, below.  Controls: the marker's presence while the image
+runs, and that a thread was found and signalled."
   (with-scratch-root (root)
     (let ((process (%launch-image root "CL_LLM_MEMORY_MCP_PORT=0")))
       (unwind-protect
