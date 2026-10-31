@@ -62,6 +62,9 @@ on disk: a store reopened without it silently resumes its own counter
 run -- unconfigured, misconfigured, or the probe failed (#78 SS5).")
 (defvar *indexer* nil
   "The endpoint indexer worker; NIL whenever *EMBEDDER* is.")
+(defvar *exiting* nil
+  "T once a stop has begun, by STOP or by the SIGTERM handler, which
+then does nothing more (#84).")
 
 (defun %env (name &optional default)
   (let ((v (sb-ext:posix-getenv name)))
@@ -198,7 +201,11 @@ fails says so on stderr.  The worker writes to the store, so it is
 joined first -- under a bound, so a hung embedder cannot hold the exit.
 The exit hook; a SIGTERM reaches it on the main thread through
 %EXIT-FROM-THE-MAIN-THREAD (#84), so a stop from the shell or systemd
-leaves no .dirty marker."
+leaves no .dirty marker; one stderr line says it began, when there was
+anything to stop, and from then on a SIGTERM is ignored (*EXITING*)."
+  (setf *exiting* t)
+  (when (or *indexer* *listener* *graph* *clock*)
+    (%note "stopping"))
   (when *indexer*
     ;; The embedder's own bound (MCP:%BOUNDED-EMBED, 30 s) plus a
     ;; margin: past that the worker is abandoned rather than allowed to
@@ -237,13 +244,20 @@ joins (#84; the E5 measurement in docs/superpowers/notes/
 2026-09-06-memory-mcp-engine-api-facts.md was single-threaded).
 Interrupting the main thread makes every delivery the one measured:
 its unwind runs the hook once, with every other thread still up.  A
-main thread already gone falls back to exiting here."
+main thread already gone falls back to exiting here.  Once a stop has
+begun, by this handler or by STOP, a SIGTERM does nothing: a second
+EXIT on the main thread is an abort to SBCL, and two signals a moment
+apart -- systemd's, timeout(1)'s -- would cut CLOSE-GRAPH short and
+leave the .dirty marker."
   (declare (ignore signal info context))
-  (let ((main (sb-thread:main-thread)))
-    (if (eq main sb-thread:*current-thread*)
-        (sb-ext:exit)
-        (handler-case (sb-thread:interrupt-thread main #'sb-ext:exit)
-          (sb-thread:interrupt-thread-error () (sb-ext:exit))))))
+  ;; The old value: NIL means this signal begins the stop; anything
+  ;; else, one is already under way.
+  (unless (sb-ext:compare-and-swap (symbol-value '*exiting*) nil t)
+    (let ((main (sb-thread:main-thread)))
+      (if (eq main sb-thread:*current-thread*)
+          (sb-ext:exit)
+          (handler-case (sb-thread:interrupt-thread main #'sb-ext:exit)
+            (sb-thread:interrupt-thread-error () (sb-ext:exit)))))))
 ;; With the hook, before START: the store is never open without both.
 (sb-sys:enable-interrupt sb-unix:sigterm #'%exit-from-the-main-thread)
 

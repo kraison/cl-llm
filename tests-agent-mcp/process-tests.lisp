@@ -231,19 +231,25 @@ ASSIGNMENTS ahead of the solo variables; SWANK on an ephemeral port."
                       :input nil :output :stream :error :stream
                       :wait nil))
 
+(defun %await-line (stream process needle &key (grace 120) (poll 0.2))
+  "The first line of PROCESS's STREAM holding NEEDLE, or NIL when none
+arrives within GRACE seconds or the process exits first; POLL is the
+sleep between looks, so a short window wants a short one."
+  (let ((deadline (+ (get-universal-time) grace)))
+    (loop while (< (get-universal-time) deadline)
+          do (if (listen stream)
+                 (let ((line (read-line stream nil nil)))
+                   (cond ((null line) (return nil))
+                         ((search needle line) (return line))))
+                 (if (sb-ext:process-alive-p process)
+                     (sleep poll)
+                     (return nil))))))
+
 (defun %banner (process &key (grace 120))
   "The image's banner line, or NIL when none arrives within GRACE
 seconds (the child builds from FASLs; a cold cache is slow)."
-  (let ((out (sb-ext:process-output process))
-        (deadline (+ (get-universal-time) grace)))
-    (loop while (< (get-universal-time) deadline)
-          do (if (listen out)
-                 (let ((line (read-line out nil nil)))
-                   (cond ((null line) (return nil))
-                         ((search "memory image:" line) (return line))))
-                 (if (sb-ext:process-alive-p process)
-                     (sleep 0.2)
-                     (return nil))))))
+  (%await-line (sb-ext:process-output process) process "memory image:"
+               :grace grace))
 
 (test an-empty-mcp-port-turns-the-listener-off
   "#75: CL_LLM_MEMORY_MCP_PORT set but EMPTY runs the image without the
@@ -453,6 +459,84 @@ in the probe, and the marker is present then."
                             (sleep 0.1))
                    "control: the probe reached the fake")
                (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+               (sb-ext:process-kill process sb-unix:sigterm)
+               (is (eql 0 (%wait process)) "exit 0 within the grace")
+               (is (not (%dirty-p (%sub root "store/")))))
+          (%reap process))))))
+
+(test a-second-sigterm-during-the-stop-is-ignored
+  "#84: a second SIGTERM while the image is already stopping -- after
+its `stopping` line, inside STOP-LISTENER's join or CLOSE-GRAPH -- is
+ignored: exit 0, no .dirty marker, a store that reopens.  Without the
+guard the second signal EXITs again on the main thread, which SBCL
+takes as an abort: exit 1 and the marker left, as two kill -TERM a
+moment apart from systemd or timeout(1) would leave it.  Controls: the
+marker is present when the first signal lands, and the stop line
+arrives."
+  (with-scratch-root (root)
+    (let ((process (%launch-image root "CL_LLM_MEMORY_MCP_PORT=0")))
+      (unwind-protect
+           (progn
+             (is (stringp (%banner process))
+                 "no banner: ~a" (%stderr process))
+             (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+             (sb-ext:process-kill process sb-unix:sigterm)
+             (is (stringp (%await-line (sb-ext:process-error process)
+                                       process "memory image: stopping"
+                                       :grace 15 :poll 0.01))
+                 "control: the stop began")
+             (sb-ext:process-kill process sb-unix:sigterm)
+             (is (eql 0 (%wait process)) "exit 0 within the grace")
+             (is (not (%dirty-p (%sub root "store/"))))
+             (let* ((gdb:*system-directory* (%sub root "sys/"))
+                    (g (gdb:open-graph :cl-llm-memory (%sub root "store/")
+                                       :buffer-pool-size 1000)))
+               (is (gdb::graph-open-p g))
+               (let ((gdb:*graph* g)) (gdb:close-graph g :snapshot-p nil))))
+        (%reap process)))))
+
+(test a-second-sigterm-during-the-solo-stop-is-ignored
+  "#84: the same for the solo server, mid-session.  Its stop is over
+in a few tens of milliseconds on a fresh store, too short a window to
+hit from outside, so the worker holds it open: a conclude gives the
+indexer endpoints to embed, and the fake answers each in 3 s, so STOP
+waits inside STOP-ENDPOINT-INDEXER for the embedding in flight.
+SIGTERM, the `stopping` line, SIGTERM again; exit 0 and no .dirty
+marker, where the second signal used to abort the stop.  Controls: the
+fake has taken the indexer's request before the first signal, and the
+marker is present then."
+  (with-scratch-root (root)
+    (with-embeddings-fake (url :delay 3 :state fake)
+      (let ((process (%launch-solo
+                      root :assignments
+                      (list (format nil "CL_LLM_MEMORY_EMBED_URL=~a" url)
+                            "CL_LLM_MEMORY_EMBED_MODEL=fake"
+                            "CL_LLM_MEMORY_EMBED_FLOOR=0.5"))))
+        (unwind-protect
+             (progn
+               (%child-rpc process "initialize"
+                           '(("protocolVersion" . "2025-06-18")
+                             ("clientInfo" . (("name" . "t")
+                                              ("version" . "0")))))
+               (%child-rpc process "tools/call"
+                           '(("name" . "conclude")
+                             ("arguments"
+                              . (("subject-namespace" . "repo")
+                                 ("subject-key" . "cl-llm")
+                                 ("relation" . "a")
+                                 ("object-namespace" . "v")
+                                 ("object-key" . "1") ("rule" . "r")))))
+               ;; The probe was the first request; the indexer's is next.
+               (is (loop repeat 100
+                         do (when (> (cdr fake) 1) (return t))
+                            (sleep 0.1))
+                   "control: the indexer is embedding")
+               (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+               (sb-ext:process-kill process sb-unix:sigterm)
+               (is (stringp (%await-line (sb-ext:process-error process)
+                                         process "memory mcp: stopping"
+                                         :grace 15))
+                   "control: the stop began")
                (sb-ext:process-kill process sb-unix:sigterm)
                (is (eql 0 (%wait process)) "exit 0 within the grace")
                (is (not (%dirty-p (%sub root "store/")))))

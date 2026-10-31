@@ -39,6 +39,9 @@
 run -- unconfigured, misconfigured, or the probe failed (#78 SS5).")
 (defvar *indexer* nil
   "The endpoint indexer worker; NIL whenever *EMBEDDER* is.")
+(defvar *exiting* nil
+  "T once a stop has begun, by STOP or by the SIGTERM handler, which
+then does nothing more (#84).")
 
 (defun %home (relative)
   (namestring (merge-pathnames relative (user-homedir-pathname))))
@@ -58,7 +61,11 @@ under a bound -- then close every store and the clock; never signals,
 but a close that fails says so on stderr (MCP:CLOSE-SCOPE);
 idempotent.  The exit hook, reached on the main thread on SIGTERM
 (%EXIT-FROM-THE-MAIN-THREAD, #84), so a stop leaves no .dirty marker
-(SS6)."
+(SS6); one stderr line says it began, when there was anything to stop,
+and from then on a SIGTERM is ignored (*EXITING*)."
+  (setf *exiting* t)
+  (when (or *indexer* *stores* *clock*)
+    (%note "stopping"))
   (when *indexer*
     ;; The embedder's own bound (MCP:%BOUNDED-EMBED, 30 s) plus a
     ;; margin: past that the worker is abandoned rather than allowed to
@@ -149,13 +156,16 @@ where nothing opened."
 (defun %exit-from-the-main-thread (signal info context)
   "The SIGTERM handler: EXIT on the main thread, whichever thread the
 kernel delivered the signal to, so the hook runs STOP there and never
-on the worker STOP joins (#84; the long form is memory-image.lisp's)."
+on the worker STOP joins; nothing once a stop has begun, so a second
+SIGTERM cannot abort the close (#84; the long form is
+memory-image.lisp's)."
   (declare (ignore signal info context))
-  (let ((main (sb-thread:main-thread)))
-    (if (eq main sb-thread:*current-thread*)
-        (sb-ext:exit)
-        (handler-case (sb-thread:interrupt-thread main #'sb-ext:exit)
-          (sb-thread:interrupt-thread-error () (sb-ext:exit))))))
+  (unless (sb-ext:compare-and-swap (symbol-value '*exiting*) nil t)
+    (let ((main (sb-thread:main-thread)))
+      (if (eq main sb-thread:*current-thread*)
+          (sb-ext:exit)
+          (handler-case (sb-thread:interrupt-thread main #'sb-ext:exit)
+            (sb-thread:interrupt-thread-error () (sb-ext:exit)))))))
 
 ;; Before START, as in memory-image.lisp (#84): a SIGTERM while START
 ;; holds the scope open -- in the embedder's probe, say -- exits through

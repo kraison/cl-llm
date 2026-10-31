@@ -651,7 +651,9 @@ SIGTERM, so a clean stop leaves no marker. The image handles SIGTERM
 itself and exits from the main thread whichever thread the kernel
 delivered it to, so the hook never runs on the listener or indexer
 thread it has to join (kraison/cl-llm#84); the solo server does the
-same. Its package,
+same. Once the stop has begun (one `stopping` line on stderr) a second
+SIGTERM is ignored, so a pair of them a moment apart cannot cut the
+close short. Its package,
 `cl-llm.memory-image`, holds `*graph*` (also bound as `gdb:*graph*`)
 and `*producer*`, with local nicknames `mem`, `gdb`, `st` and `agent`.
 
