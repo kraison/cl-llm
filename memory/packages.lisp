@@ -32,7 +32,8 @@
    #:nearest-endpoints #:dirty-endpoints #:materialise-endpoint-vectors
    #:*materialise-batch*
    #:drain-endpoint-vectors #:rebuild-endpoint-vectors
-   #:reset-endpoint-segment #:*embed-passes*
+   #:reset-endpoint-segment #:clear-foreign-endpoint-vectors
+   #:*embed-passes*
    ;; the indexer worker (#78 SS4.3)
    #:*endpoint-indexer* #:endpoint-indexer #:start-endpoint-indexer
    #:notify-endpoint-indexer #:wait-endpoint-indexer

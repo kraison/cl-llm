@@ -123,7 +123,14 @@ store another image left dirty."
             (let ((d (mcp:probe-embedding-dimension ee)))
               (when (mem:reset-endpoint-segment *graph* d)
                 (%note "semantic index: segment reset to dimension ~d"
-                       d)))
+                       d))
+              ;; Another model's vectors would crowd the top-k until
+              ;; the sweep reached them (#80 item 2).
+              (let ((n (mem:clear-foreign-endpoint-vectors
+                        *graph* (agent:endpoint-embedder-model ee))))
+                (when (plusp n)
+                  (%note "semantic index: cleared ~d vector~:p of ~
+another model" n))))
             (setf *embedder* ee)))
       (error (c)
         (%note "semantic index off: ~a" (mcp:index-off-reason c))

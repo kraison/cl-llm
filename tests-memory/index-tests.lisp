@@ -296,6 +296,46 @@ endpoint with no profile at all."
                                          :model "b")))
     (is (null (mem:dirty-endpoints g "b")))))
 
+(test another-models-vectors-poison-the-top-k-until-cleared
+  "#80 item 2: the segment answers K hits before the model filter, so
+until the drain reaches every endpoint a previous model's vectors
+crowd the current one's out of the top-k.  The start-time clear
+removes them in one transaction and leaves their endpoints dirty."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    ;; Model A's vectors are the unit query itself (cosine 1); model
+    ;; B's are 45 degrees off, so A always ranks above B.
+    (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 4)
+                                         :model "a")
+    (let ((b-embed (%near-far-embed 4 "nothing starts with this"))
+          (q (%unit-query 4)))
+      ;; Switch to B, but stop the drain after its first endpoint, as a
+      ;; restart or a stop mid-sweep would: repo is under B now and
+      ;; verdict:green still under A.
+      (let ((n 0))
+        (is (= 1 (mem:drain-endpoint-vectors
+                  (list g) :embed b-embed :model "b"
+                           :stop-p (lambda () (> (incf n) 1))))))
+      (is (string= "b" (mem:ev-model (mem:endpoint-vector-of g :repo
+                                                             "cl-llm"))))
+      (is (string= "a" (mem:ev-model (mem:endpoint-vector-of g :verdict
+                                                             "green")))
+          "control: the two models share the segment")
+      (is (null (mem:nearest-endpoints g q :k 1 :model "b"))
+          "the top-1 is A's vector, filtered out: an empty dense fill")
+      (is (= 1 (mem:clear-foreign-endpoint-vectors g "b")))
+      (is (= 0 (mem:clear-foreign-endpoint-vectors g "b"))
+          "nothing foreign is left")
+      (is (equal '((:repo . "cl-llm"))
+                 (mapcar #'car (mem:nearest-endpoints g q :k 1
+                                                      :model "b")))
+          "B's own vector is the top-1 now")
+      (is-true (mem:endpoint-vector-value
+                (mem:endpoint-vector-of g :repo "cl-llm"))
+               "B's vector was kept")
+      (is (equal '((:verdict . "green")) (mem:dirty-endpoints g "b"))
+          "the cleared endpoint is dirty for the sweep, as before"))))
+
 (test rebuild-re-embeds-clean-endpoints-too
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))

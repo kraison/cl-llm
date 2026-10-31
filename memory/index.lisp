@@ -192,20 +192,35 @@ promised to empty the set."
             (:unsettled (push ep unsettled))))))
     (values n (nreverse unsettled))))
 
-(defun %clear-endpoint-vectors (graph)
-  "Clear the vector and model of every live ENDPOINT-VECTOR of GRAPH,
-in one transaction; => the number cleared.  Collects the vertices
-first, then writes: MAP-VERTICES scans under a read pin."
+(defun %clear-endpoint-vectors (graph &optional keep-model)
+  "Clear the vector and model of every live ENDPOINT-VECTOR of GRAPH
+-- with KEEP-MODEL, of every one another model wrote -- in one
+transaction; => the number cleared.  Collects the vertices first, then
+writes: MAP-VERTICES scans under a read pin."
   (gdb:with-transaction (:graph graph)
     (let ((evs (gdb:map-vertices #'identity graph :collect-p t
                                  :vertex-type 'endpoint-vector))
           (n 0))
       (dolist (ev evs n)
-        (when (endpoint-vector-value ev)
+        (when (and (endpoint-vector-value ev)
+                   (not (and keep-model
+                             (string= keep-model (ev-model ev)))))
           (let ((c (gdb:copy ev)))
             (setf (embedding c) nil (ev-model c) "")
             (gdb:save c)
             (incf n)))))))
+
+(defun clear-foreign-endpoint-vectors (graph model)
+  "Clear every vector of GRAPH that a model other than MODEL wrote, in
+one transaction; => the number cleared.  Until the drain reaches them
+such vectors stay in the segment, and VECTOR-SEARCH takes its K hits
+before NEAREST-ENDPOINTS filters by model: a cross-model cosine is
+noise, so they crowd the current model's hits out and a dense fill
+comes back empty (#80 item 2).  Their endpoints are dirty under MODEL
+before and after, so the sweep re-embeds them: this trades a poisoned
+top-k for a lexical-only endpoint until it does.  Must run before
+anything can search -- at start, with RESET-ENDPOINT-SEGMENT."
+  (%clear-endpoint-vectors graph model))
 
 (defun rebuild-endpoint-vectors (stores &key embed model)
   "Clear every vector in STORES, then DRAIN-ENDPOINT-VECTORS, whose

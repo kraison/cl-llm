@@ -266,7 +266,14 @@ A *dimension* change is not something the drain can absorb: an empty
 segment keeps its dimension, and the engine's only drop is unsafe
 against a concurrent search. `reset-endpoint-segment` clears every
 vector and drops the segment, returning `T` when it reset; it must run
-at start, before anything can search (spec SS4.3).
+at start, before anything can search (spec SS4.3). A *model* change
+is one the drain does absorb, but not soon enough for the top-k: the
+segment answers its `k` nearest before `nearest-endpoints` filters by
+model, and a cross-model cosine is noise, so the previous model's
+vectors crowd the current one's out until the sweep has reached every
+endpoint. `clear-foreign-endpoint-vectors` drops them in one
+transaction, returning the count; the entry points run it at start
+beside the reset (#80).
 
 ### The worker
 
@@ -840,7 +847,9 @@ GPU box elsewhere on the tailnet serves both modes.
 <model> floor <f> (key: <source>)` or `index off`; the solo server
 writes the same to stderr, prefixed `memory mcp:`, and neither is
 silent about a reset -- `semantic index: segment reset to dimension
-<n>` means every vector in that store was just dropped. A failure is
+<n>` means every vector in that store was just dropped, and `semantic
+index: cleared <n> vectors of another model` that a model change did
+the same to the previous model's. A failure is
 one line, `semantic index off: ...`, distinguishing an embedder that
 would not answer from an engine error while resetting.
 
@@ -890,9 +899,12 @@ should not -- and put the floor in the gap between them.
 
 **A model change re-embeds.** Every vector records the model that made
 it, and `nearest-endpoints` ignores another model's. Point
-`CL_LLM_MEMORY_EMBED_MODEL` at a different model and the whole store is
-re-embedded in the background over the next drains; the tools serve
-lexically until it catches up, and no query blocks.
+`CL_LLM_MEMORY_EMBED_MODEL` at a different model and the next start
+drops the previous model's vectors in one transaction (`semantic
+index: cleared <n> vectors of another model`) -- left in the segment
+they would crowd the new model's out of every top-k -- and the whole
+store is re-embedded in the background over the next drains; the tools
+serve lexically until it catches up, and no query blocks.
 
 **A dimension change resets.** The vector segment holds one dimension.
 Each entry point embeds a single probe string at start, and resets the

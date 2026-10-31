@@ -282,7 +282,12 @@ One thread per process that has an embedder, started by
    join that never returns holds SIGTERM until the supervisor's
    SIGKILL and parks the store's `.dirty` marker, which is worse.
 4. **Model change**: a vector whose `ev-model` differs from the
-   configured model is dirty and re-embedded by the ordinary drain. A
+   configured model is dirty and re-embedded by the ordinary drain --
+   and, since the segment answers its k nearest before the model
+   filter and a cross-model cosine is noise, each entry point first
+   clears every such vector in one transaction at start
+   (`clear-foreign-endpoint-vectors`, #80 item 2), so the top-k is
+   lexical-only rather than poisoned until the sweep catches up. A
    *dimension* change cannot be handled by the worker: an empty segment
    keeps its dimension and the engine's only drop is unsafe against a
    concurrent search (facts E3). So each entry point, after opening the

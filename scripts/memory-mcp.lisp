@@ -118,7 +118,14 @@ stdout (#78 SS5)."
                   (when (mem:reset-endpoint-segment g d)
                     (%note "semantic index: segment reset to ~
 dimension ~d (~a)"
-                           d (mem:store-name g)))))
+                           d (mem:store-name g)))
+                  ;; Another model's vectors would crowd the top-k
+                  ;; until the sweep reached them (#80 item 2).
+                  (let ((n (mem:clear-foreign-endpoint-vectors
+                            g (agent:endpoint-embedder-model ee))))
+                    (when (plusp n)
+                      (%note "semantic index: cleared ~d vector~:p of ~
+another model (~a)" n (mem:store-name g))))))
               (setf *embedder* ee)
               ;; The image says this in its banner; the solo server has
               ;; none, and "index on" is not otherwise observable (#78).
