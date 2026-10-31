@@ -138,9 +138,9 @@ dimension ~d (~a)"
 
 (defun %die (control &rest args)
   "Report on stderr and exit 1.  STOP first: the exit is :abort t, which
-skips the hooks, and the hook is not pushed yet -- a failure after
-OPEN-SCOPE returned would otherwise leave the .dirty marker behind.  A
-no-op on the two refusal paths, where nothing opened."
+skips the hooks, so a failure after OPEN-SCOPE returned would otherwise
+leave the .dirty marker behind.  A no-op on the two refusal paths,
+where nothing opened."
   (stop)
   (apply #'format *error-output* control args)
   (finish-output *error-output*)
@@ -157,6 +157,14 @@ on the worker STOP joins (#84; the long form is memory-image.lisp's)."
         (handler-case (sb-thread:interrupt-thread main #'sb-ext:exit)
           (sb-thread:interrupt-thread-error () (sb-ext:exit))))))
 
+;; Before START, as in memory-image.lisp (#84): a SIGTERM while START
+;; holds the scope open -- in the embedder's probe, say -- exits through
+;; the hook, on the main thread, rather than through SBCL's own handler
+;; with no hook to run.  The refusals below leave through %DIE, whose
+;; :abort t skips the hook after stopping the scope itself.
+(push #'stop sb-ext:*exit-hooks*)
+(sb-sys:enable-interrupt sb-unix:sigterm #'%exit-from-the-main-thread)
+
 (let ((server
         ;; stdout carries JSON-RPC only, so the open's logging goes to
         ;; stderr by binding, not by trusting the engine's stream.
@@ -171,10 +179,6 @@ on the worker STOP joins (#84; the long form is memory-image.lisp's)."
                    that location.~%" c))
           (error (c)
             (%die "~&memory mcp: ~A~%" c)))))
-  ;; Only once the scope is open: every failure above leaves through
-  ;; %DIE, which stops the scope itself before exiting with no hook.
-  (push #'stop sb-ext:*exit-hooks*)
-  (sb-sys:enable-interrupt sb-unix:sigterm #'%exit-from-the-main-thread)
   ;; One worker per process, started outside START's *STANDARD-OUTPUT*
   ;; binding: it logs to the *ERROR-OUTPUT* of this call, which here is
   ;; the process's stderr -- stdout carries JSON-RPC only (#78 SS4.3).

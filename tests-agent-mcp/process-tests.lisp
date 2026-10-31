@@ -45,11 +45,13 @@ child at the developer's real store."
                          (member (%env-name e) names :test #'string=))
                        (sb-ext:posix-environ)))))
 
-(defun %launch-solo (root &key clock)
-  "The solo server as a child, stdin/stdout/stderr as streams."
+(defun %launch-solo (root &key clock assignments)
+  "The solo server as a child, stdin/stdout/stderr as streams;
+ASSIGNMENTS go ahead of the solo variables."
   (sb-ext:run-program (%script "run-memory-mcp.sh") '()
                       :environment (%child-environment
-                                    (%solo-env root :clock clock))
+                                    (append assignments
+                                            (%solo-env root :clock clock)))
                       :input :stream :output :stream :error :stream
                       :wait nil))
 
@@ -297,11 +299,13 @@ when the thread is gone."
                                     sb-alien:int sb-alien:int))
    (sb-ext:process-pid process) tid signal))
 
-(defun %serve-embeddings (socket dimension stopping)
+(defun %serve-embeddings (socket dimension state &key (delay 0))
   "Answer every POST on SOCKET with one OpenAI-shaped embedding of
-DIMENSION until STOPPING (a cons) holds T: enough of HTTP for dexador,
-nothing more.  The request body is read out before the reply, so the
-close cannot reset the connection under the client."
+DIMENSION, DELAY seconds after reading it, until STATE's car holds T;
+its cdr counts the connections accepted, so a test can tell when a
+child is inside its probe.  Enough of HTTP for dexador, nothing more.
+The request body is read out before the reply, so the close cannot
+reset the connection under the client."
   (flet ((serve (s)
            (let ((length 0))
              (loop for line = (string-right-trim '(#\Return)
@@ -312,6 +316,7 @@ close cannot reset the connection under the client."
                                                :end2 15))
                         (setf length (parse-integer line :start 15))))
              (dotimes (i length) (read-char s nil))
+             (when (plusp delay) (sleep delay))
              (let ((body (format nil "{\"data\":[{\"index\":0,~
 \"embedding\":[~{~a~^,~}]}]}"
                                  (make-list dimension
@@ -322,34 +327,39 @@ application/json~C~CContent-Length: ~D~C~CConnection: close~C~C~C~C~A"
                        (length body) #\Return #\Newline
                        #\Return #\Newline #\Return #\Newline body)
                (finish-output s)))))
-    (loop until (car stopping)
+    (loop until (car state)
           do (when (usocket:wait-for-input socket :timeout 0.2
                                                   :ready-only t)
                (let ((c (ignore-errors
                          (usocket:socket-accept
                           socket :element-type 'character))))
                  (when c
+                   (incf (cdr state))
                    (unwind-protect
                         (ignore-errors (serve (usocket:socket-stream c)))
                      (ignore-errors (usocket:socket-close c)))))))))
 
-(defmacro with-embeddings-fake ((url &key (dimension 3)) &body body)
+(defmacro with-embeddings-fake ((url &key (dimension 3) (delay 0)
+                                     (state (gensym "STATE")))
+                                &body body)
   "BODY with URL bound to a loopback OpenAI-compatible embeddings base
-URL, served by %SERVE-EMBEDDINGS on its own thread; stopped afterwards."
-  (let ((socket (gensym "SOCKET")) (stopping (gensym "STOPPING"))
-        (thread (gensym "THREAD")))
+URL, served by %SERVE-EMBEDDINGS on its own thread and stopped
+afterwards; DELAY and STATE (a variable for its state cons) are the
+fake's."
+  (let ((socket (gensym "SOCKET")) (thread (gensym "THREAD")))
     `(let* ((,socket (usocket:socket-listen "127.0.0.1" 0
                                             :reuse-address t
                                             :element-type 'character))
-            (,stopping (list nil))
+            (,state (cons nil 0))
             (,thread (bt:make-thread
                       (lambda ()
-                        (%serve-embeddings ,socket ,dimension ,stopping))
+                        (%serve-embeddings ,socket ,dimension ,state
+                                           :delay ,delay))
                       :name "embeddings fake"))
             (,url (format nil "http://127.0.0.1:~d/v1"
                           (usocket:get-local-port ,socket))))
        (unwind-protect (progn ,@body)
-         (setf (car ,stopping) t)
+         (setf (car ,state) t)
          (ignore-errors (bt:join-thread ,thread))
          (ignore-errors (usocket:socket-close ,socket))))))
 
@@ -418,4 +428,32 @@ the banner naming it is the control that the index is on."
                        "control: delivered")
                    (is (eql 0 (%wait process)) "exit 0 within the grace")
                    (is (not (%dirty-p (%sub root "store/")))))))
+          (%reap process))))))
+
+(test sigterm-during-the-solo-start-leaves-the-store-clean
+  "#84: SIGTERM while the solo server is still inside START with the
+scope open -- held there by an embedder that takes 3 s to answer the
+dimension probe -- exits and leaves no .dirty marker.  The hook used to
+be pushed only once START had returned, so this window closed the
+store through nothing; the hook and the handler now go in first, as
+the image's do.  Controls: the fake's accepted count says the child is
+in the probe, and the marker is present then."
+  (with-scratch-root (root)
+    (with-embeddings-fake (url :delay 3 :state fake)
+      (let ((process (%launch-solo
+                      root :assignments
+                      (list (format nil "CL_LLM_MEMORY_EMBED_URL=~a" url)
+                            "CL_LLM_MEMORY_EMBED_MODEL=fake"
+                            "CL_LLM_MEMORY_EMBED_FLOOR=0.5"))))
+        (unwind-protect
+             (progn
+               ;; 60 s: the child loads cl-llm/agent/mcp first.
+               (is (loop repeat 600
+                         do (when (plusp (cdr fake)) (return t))
+                            (sleep 0.1))
+                   "control: the probe reached the fake")
+               (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+               (sb-ext:process-kill process sb-unix:sigterm)
+               (is (eql 0 (%wait process)) "exit 0 within the grace")
+               (is (not (%dirty-p (%sub root "store/")))))
           (%reap process))))))
