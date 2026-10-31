@@ -876,7 +876,14 @@ sweep -- `*prepare-attempts*` (10) times, the last about four minutes
 after the first -- then resets and sweeps as a start would have
 (`endpoint indexer: ready after N failed attempts; sweeping`). Past
 the bound it logs `the semantic index stays off for this run` and
-stops; only then is a restart needed.
+stops; only then is a restart needed. Only a failure that can recover
+is retried -- a connection refused, no such host, a dropped socket, a
+timeout, a rate limit, a 5xx (`mcp:probe-retry-p`). A wrong
+`CL_LLM_MEMORY_EMBED_KEY` (401), a model the endpoint lacks (404) or
+any other 4xx is a misconfiguration: the start turns the index off at
+once, `semantic index off: LLM API error 401 from ...`, as does an
+engine error, and a retry that meets one stops the worker the same
+way.
 
 **The worker.** Each process runs one endpoint indexer (the memory
 image, or each solo server). It sweeps at start, then drains after

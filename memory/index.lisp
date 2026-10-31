@@ -267,6 +267,16 @@ unsafe against a concurrent VECTOR-SEARCH."
   "This process's worker, or NIL when no embedder is configured.
 NOTIFY-ENDPOINT-INDEXER with no argument uses it (SS4.5).")
 
+(define-condition endpoint-index-off (error)
+  ((reason :initarg :reason :reader endpoint-index-off-reason))
+  (:report (lambda (c s)
+             (format s "the semantic index is off: ~a"
+                     (endpoint-index-off-reason c))))
+  (:documentation "What a PREPARE signals when no retry can help -- a
+misconfigured embedder, an engine error -- so the worker stops at once
+rather than at the bound (#80 review).  REASON is one line for the
+operator."))
+
 (defparameter *prepare-attempts* 10
   "Attempts the worker gives a PREPARE function before it leaves the
 index off for the run (#80 item 3): under the default backoff, the
@@ -431,14 +441,23 @@ HARD) as %INDEXER-PASS.  A true return makes the worker ready and owes
 it the sweep at once; NIL or a SERIOUS-CONDITION is logged once per
 worker and retried after the outage backoff -- a deadline no notify
 cuts short -- until PREPARE-ATTEMPTS have failed, when one line says
-the index stays off, OFF is set and the worker stops (#80 item 3).
-PREPARE runs with no lock held: it is a probe round trip."
+the index stays off, OFF is set and the worker stops (#80 item 3).  An
+ENDPOINT-INDEX-OFF does that at once, naming its reason: no retry
+helps a misconfiguration.  PREPARE runs with no lock held: it is a
+probe round trip."
   (let ((lines '()) (delay nil) (hard nil))
     (multiple-value-bind (ok c)
         (handler-case (values (funcall (endpoint-indexer-prepare w)) nil)
           (serious-condition (c) (values nil c)))
       (bt:with-lock-held ((endpoint-indexer-lock w))
         (cond
+          ((typep c 'endpoint-index-off)
+           (incf (endpoint-indexer-attempts w))
+           (setf (endpoint-indexer-off w) t
+                 (endpoint-indexer-stop-p w) t)
+           (push (list "~&endpoint indexer: ~a; it stays off for this ~
+                        run~%" c)
+                 lines))
           (ok
            (setf (endpoint-indexer-ready w) t
                  (endpoint-indexer-pending w) t

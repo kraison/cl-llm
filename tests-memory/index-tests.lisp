@@ -857,6 +857,43 @@ sets OFF and stops, having embedded nothing."
             (is-true (mem:stop-endpoint-indexer w)
                      "stop still joins a worker that gave up")))))))
 
+(test a-prepare-that-says-off-stops-the-worker-at-once
+  "#80 review: a PREPARE that signals ENDPOINT-INDEX-OFF -- the entry
+points' answer to a misconfigured embedder -- is not retried to the
+bound: the worker names the reason once, sets OFF and stops after
+that one attempt, having embedded nothing."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter) (%counting-embed 4)
+      (let* ((prepared 0)
+             (log (make-string-output-stream))
+             (*error-output* log)
+             (w (mem:start-endpoint-indexer
+                 (list g) :embed embed :model "m" :backoff 0.05
+                          :prepare (lambda ()
+                                     (incf prepared)
+                                     (error 'mem:endpoint-index-off
+                                            :reason "LLM API error 401")))))
+        (unwind-protect
+             (progn
+               (loop repeat 300 until (mem:endpoint-indexer-off-p w)
+                     do (sleep 0.01))
+               (is-true (mem:endpoint-indexer-off-p w) "the worker gave up")
+               (sleep 0.3)
+               (is (= 1 prepared) "after one attempt, not the bound")
+               (is (= 0 (car counter)) "and embedded nothing")
+               (loop repeat 100
+                     while (bt:thread-alive-p
+                            (mem::endpoint-indexer-thread w))
+                     do (sleep 0.01))
+               (is-false (bt:thread-alive-p
+                          (mem::endpoint-indexer-thread w)))
+               (let ((text (get-output-stream-string log)))
+                 (is (= 1 (%count-substring "LLM API error 401" text))
+                     "the reason was logged once: ~s" text)
+                 (is (= 1 (%count-substring "stays off" text)))))
+          (mem:stop-endpoint-indexer w))))))
+
 (test a-second-start-stops-the-first-worker
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))

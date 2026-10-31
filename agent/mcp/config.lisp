@@ -193,6 +193,34 @@ cold start recovers that way without a restart (#80 item 3)."
                          another model (~a)" n (mem:store-name g)))))
     (setf (agent:endpoint-embedder-ready embedder) t)))
 
+(defun probe-retry-p (condition)
+  "T when CONDITION, signalled by the probe, is one a later attempt
+can recover from: transport (an LLM-HTTP-ERROR with no status --
+connection refused, no such host, a dropped socket), a timeout, a
+STREAM-ERROR, a rate limit, a 408 or a 5xx.  NIL for the rest: an auth
+error or any other 4xx is a misconfiguration no retry fixes, and an
+engine error is not the embedder's (#80 review)."
+  (typecase condition
+    (c:llm-timeout-error t)
+    (c:llm-rate-limit-error t)
+    (c:llm-auth-error nil)
+    (c:llm-http-error
+     (let ((status (c:llm-error-status condition)))
+       (or (null status) (= status 408) (>= status 500))))
+    (stream-error t)
+    (t nil)))
+
+(defun retry-endpoint-index (embedder stores note)
+  "PREPARE-ENDPOINT-INDEX as the worker's PREPARE; => T when ready.  A
+failure the probe can recover from (PROBE-RETRY-P) propagates, so the
+worker retries on its backoff; any other ends the retries at once with
+a MEM:ENDPOINT-INDEX-OFF naming INDEX-OFF-REASON's line (#80 review)."
+  (handler-case (prepare-endpoint-index embedder stores note)
+    (error (c)
+      (if (probe-retry-p c)
+          (error c)
+          (error 'mem:endpoint-index-off :reason (index-off-reason c))))))
+
 (defun embed-key-source ()
   "Which credential the index's embedder will send, for the start line:
 \"env CL_LLM_MEMORY_EMBED_KEY\", \"OPENAI_API_KEY fallback\", or

@@ -303,6 +303,10 @@ One thread per process that has an embedder, started by
    probe-reset-clear step as its `prepare`, retried on the outage
    backoff before the first sweep, `*prepare-attempts*` (10) times;
    past that the worker logs that the index stays off and stops.
+   Only what can recover is retried (transport, a timeout, a rate
+   limit, a 5xx: `probe-retry-p`); an auth error or any other 4xx,
+   and an engine error, turn the index off at once with the reason,
+   at start or from the worker (`endpoint-index-off`).
 5. **Idle** (added in SDD Task 3): the worker reports itself idle only
    when a drain finished with no notify outstanding *and* no store has
    a dirty endpoint left, so `wait-endpoint-indexer` cannot read

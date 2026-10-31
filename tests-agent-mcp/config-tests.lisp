@@ -185,6 +185,82 @@ ready."
       (is (= 2 (length (mem:dirty-endpoints w "synonym-test")))
           "and W's endpoints are dirty for the sweep"))))
 
+(test the-probe-retries-only-what-can-recover
+  "#80 review: transport, a timeout, a dropped stream, a rate limit
+and a 5xx are retried from the worker; an auth error, any other 4xx
+and an engine error turn the index off at once."
+  (flet ((http (type &rest args)
+           (apply #'make-condition type :url "http://e/v1/embeddings"
+                  args)))
+    (is-true (mcp:probe-retry-p (http 'cl-llm.conditions:llm-http-error
+                                      :status nil :body "refused"))
+             "transport: no status")
+    (is-true (mcp:probe-retry-p (http 'cl-llm.conditions:llm-timeout-error)))
+    (is-true (mcp:probe-retry-p (http 'cl-llm.conditions:llm-api-error
+                                      :status 503 :body "")))
+    (is-true (mcp:probe-retry-p (http 'cl-llm.conditions:llm-api-error
+                                      :status 408 :body "")))
+    (is-true (mcp:probe-retry-p
+              (http 'cl-llm.conditions:llm-rate-limit-error
+                    :status 429 :body "")))
+    (is-true (mcp:probe-retry-p (make-condition 'end-of-file
+                                                :stream *standard-input*))
+             "a dropped connection the HTTP layer did not translate")
+    (is-false (mcp:probe-retry-p (http 'cl-llm.conditions:llm-auth-error
+                                       :status 401 :body ""))
+              "a wrong key")
+    (is-false (mcp:probe-retry-p (http 'cl-llm.conditions:llm-api-error
+                                       :status 404 :body ""))
+              "a model the endpoint lacks")
+    (is-false (mcp:probe-retry-p (http 'cl-llm.conditions:llm-api-error
+                                       :status 400 :body "")))
+    (is-false (mcp:probe-retry-p (make-condition 'simple-error
+                                                 :format-control "engine"))
+              "an engine error is not the embedder's")))
+
+(defclass %failing-embedder (cl-llm.rag:embedder)
+  ((condition :initarg :condition :reader %failing-condition))
+  (:default-initargs :model "m")
+  (:documentation "An embedder whose every EMBED signals CONDITION."))
+
+(defmethod cl-llm.rag:embed ((e %failing-embedder) input)
+  (declare (ignore input))
+  (error (%failing-condition e)))
+
+(test the-workers-prepare-retries-or-gives-up-by-the-probes-failure
+  "#80 review: RETRY-ENDPOINT-INDEX lets a 503 propagate, so the worker
+retries it, and turns a 401 into ENDPOINT-INDEX-OFF naming it, so the
+worker stops at once; the embedder stays not ready either way."
+  (with-stores (w p)
+    (flet ((embedder (type status)
+             (let ((ee (agent:make-endpoint-embedder
+                        (make-instance
+                         '%failing-embedder
+                         :condition (make-condition
+                                     type :status status :body ""
+                                     :url "http://e/v1/embeddings"))
+                        :floor 0.3)))
+               (setf (agent:endpoint-embedder-ready ee) nil)
+               ee))
+           (note (control &rest args)
+             (declare (ignore control args))
+             (fail "no store was touched")))
+      (let ((down (embedder 'cl-llm.conditions:llm-api-error 503)))
+        (signals cl-llm.conditions:llm-api-error
+          (mcp:retry-endpoint-index down (list w p) #'note))
+        (is-false (agent:endpoint-embedder-ready down)))
+      (let ((wrong (embedder 'cl-llm.conditions:llm-auth-error 401)))
+        (handler-case
+            (progn (mcp:retry-endpoint-index wrong (list w p) #'note)
+                   (fail "a 401 must end the retries"))
+          (mem:endpoint-index-off (c)
+            (is (search "401" (mem:endpoint-index-off-reason c))
+                "and name the status: ~a" c)
+            (is (not (search "engine error"
+                             (mem:endpoint-index-off-reason c)))
+                "as the embedder's failure, not the engine's")))
+        (is-false (agent:endpoint-embedder-ready wrong))))))
+
 (test the-start-line-names-which-key-the-embedder-will-send
   "#78: an empty CL_LLM_MEMORY_EMBED_KEY is not \"no credential\" --
 RAG falls back to OPENAI_API_KEY (rag/embed.lisp:91) -- so the image's

@@ -118,9 +118,12 @@ stdout (#78 SS5)."
                 ;; An embedder that does not answer is a cold start as
                 ;; often as an outage: the index is off, lexical,
                 ;; until the worker's retry of the probe succeeds
-                ;; (#80 item 3).  An engine error is neither, and
-                ;; falls through to OFF.
-                (cl-llm.conditions:llm-error (c)
+                ;; (#80 item 3) -- for what can recover (transport, a
+                ;; timeout, a 5xx).  An auth error or another 4xx is
+                ;; a misconfiguration and an engine error is not the
+                ;; embedder's: those fall through to OFF, now.
+                (error (c)
+                  (unless (mcp:probe-retry-p c) (error c))
                   (setf (agent:endpoint-embedder-ready ee) nil)
                   (%note "semantic index: probe failed: ~a; lexical ~
 until the worker's retry succeeds" c)))
@@ -181,7 +184,7 @@ no-op on the two refusal paths, where nothing opened."
            :prepare (let ((ee *embedder*) (stores *stores*))
                       (unless (agent:endpoint-embedder-ready ee)
                         (lambda ()
-                          (mcp:prepare-endpoint-index
+                          (mcp:retry-endpoint-index
                            ee stores #'%note)))))))
   (cl-mcp:run-server server :input *standard-input*
                             :output *standard-output*)
