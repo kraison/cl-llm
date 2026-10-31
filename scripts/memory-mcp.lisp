@@ -39,6 +39,9 @@
 run -- unconfigured, misconfigured, or the probe failed (#78 SS5).")
 (defvar *indexer* nil
   "The endpoint indexer worker; NIL whenever *EMBEDDER* is.")
+(defvar *exiting* nil
+  "T once a stop has begun, by STOP or by the SIGTERM handler, which
+then does nothing more (#84).")
 
 (defun %home (relative)
   (namestring (merge-pathnames relative (user-homedir-pathname))))
@@ -56,7 +59,13 @@ session its server."
   "Stop the indexer -- it writes to the stores, so it is joined first,
 under a bound -- then close every store and the clock; never signals,
 but a close that fails says so on stderr (MCP:CLOSE-SCOPE);
-idempotent.  The exit hook, so SIGTERM leaves no .dirty marker (SS6)."
+idempotent.  The exit hook, reached on the main thread on SIGTERM
+(%EXIT-FROM-THE-MAIN-THREAD, #84), so a stop leaves no .dirty marker
+(SS6); one stderr line says it began, when there was anything to stop,
+and from then on a SIGTERM is ignored (*EXITING*)."
+  (setf *exiting* t)
+  (when (or *indexer* *stores* *clock*)
+    (%note "stopping"))
   (when *indexer*
     ;; The embedder's own bound (MCP:%BOUNDED-EMBED, 30 s) plus a
     ;; margin: past that the worker is abandoned rather than allowed to
@@ -144,13 +153,35 @@ until the worker's retry succeeds" c)))
 
 (defun %die (control &rest args)
   "Report on stderr and exit 1.  STOP first: the exit is :abort t, which
-skips the hooks, and the hook is not pushed yet -- a failure after
-OPEN-SCOPE returned would otherwise leave the .dirty marker behind.  A
-no-op on the two refusal paths, where nothing opened."
+skips the hooks, so a failure after OPEN-SCOPE returned would otherwise
+leave the .dirty marker behind.  A no-op on the two refusal paths,
+where nothing opened."
   (stop)
   (apply #'format *error-output* control args)
   (finish-output *error-output*)
   (sb-ext:exit :code 1 :abort t))
+
+(defun %exit-from-the-main-thread (signal info context)
+  "The SIGTERM handler: EXIT on the main thread, whichever thread the
+kernel delivered the signal to, so the hook runs STOP there and never
+on the worker STOP joins; nothing once a stop has begun, so a second
+SIGTERM cannot abort the close (#84; the long form is
+memory-image.lisp's)."
+  (declare (ignore signal info context))
+  (unless (sb-ext:compare-and-swap (symbol-value '*exiting*) nil t)
+    (let ((main (sb-thread:main-thread)))
+      (if (eq main sb-thread:*current-thread*)
+          (sb-ext:exit)
+          (handler-case (sb-thread:interrupt-thread main #'sb-ext:exit)
+            (sb-thread:interrupt-thread-error () (sb-ext:exit)))))))
+
+;; Before START, as in memory-image.lisp (#84): a SIGTERM while START
+;; holds the scope open -- in the embedder's probe, say -- exits through
+;; the hook, on the main thread, rather than through SBCL's own handler
+;; with no hook to run.  The refusals below leave through %DIE, whose
+;; :abort t skips the hook after stopping the scope itself.
+(push #'stop sb-ext:*exit-hooks*)
+(sb-sys:enable-interrupt sb-unix:sigterm #'%exit-from-the-main-thread)
 
 (let ((server
         ;; stdout carries JSON-RPC only, so the open's logging goes to
@@ -166,9 +197,6 @@ no-op on the two refusal paths, where nothing opened."
                    that location.~%" c))
           (error (c)
             (%die "~&memory mcp: ~A~%" c)))))
-  ;; Only once the scope is open: every failure above leaves through
-  ;; %DIE, which stops the scope itself before exiting with no hook.
-  (push #'stop sb-ext:*exit-hooks*)
   ;; One worker per process, started outside START's *STANDARD-OUTPUT*
   ;; binding: it logs to the *ERROR-OUTPUT* of this call, which here is
   ;; the process's stderr -- stdout carries JSON-RPC only (#78 SS4.3).

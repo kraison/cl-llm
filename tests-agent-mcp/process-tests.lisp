@@ -1,6 +1,7 @@
 ;;;; tests-agent-mcp/process-tests.lisp -- the solo server as a child
-;;;; process: round trip, the double-hold refusal, SIGTERM.  Spec SS4,
-;;;; SS6; recon C7, C8, E5.
+;;;; process: round trip, the double-hold refusal, SIGTERM; the image,
+;;;; and SIGTERM on one of its worker threads (#84).  Spec SS4, SS6;
+;;;; recon C7, C8, E5.
 
 (in-package #:cl-llm.agent.mcp/tests)
 (in-suite :cl-llm-agent-mcp)
@@ -44,11 +45,13 @@ child at the developer's real store."
                          (member (%env-name e) names :test #'string=))
                        (sb-ext:posix-environ)))))
 
-(defun %launch-solo (root &key clock)
-  "The solo server as a child, stdin/stdout/stderr as streams."
+(defun %launch-solo (root &key clock assignments)
+  "The solo server as a child, stdin/stdout/stderr as streams;
+ASSIGNMENTS go ahead of the solo variables."
   (sb-ext:run-program (%script "run-memory-mcp.sh") '()
                       :environment (%child-environment
-                                    (%solo-env root :clock clock))
+                                    (append assignments
+                                            (%solo-env root :clock clock)))
                       :input :stream :output :stream :error :stream
                       :wait nil))
 
@@ -228,19 +231,25 @@ ASSIGNMENTS ahead of the solo variables; SWANK on an ephemeral port."
                       :input nil :output :stream :error :stream
                       :wait nil))
 
+(defun %await-line (stream process needle &key (grace 120) (poll 0.2))
+  "The first line of PROCESS's STREAM holding NEEDLE, or NIL when none
+arrives within GRACE seconds or the process exits first; POLL is the
+sleep between looks, so a short window wants a short one."
+  (let ((deadline (+ (get-universal-time) grace)))
+    (loop while (< (get-universal-time) deadline)
+          do (if (listen stream)
+                 (let ((line (read-line stream nil nil)))
+                   (cond ((null line) (return nil))
+                         ((search needle line) (return line))))
+                 (if (sb-ext:process-alive-p process)
+                     (sleep poll)
+                     (return nil))))))
+
 (defun %banner (process &key (grace 120))
   "The image's banner line, or NIL when none arrives within GRACE
 seconds (the child builds from FASLs; a cold cache is slow)."
-  (let ((out (sb-ext:process-output process))
-        (deadline (+ (get-universal-time) grace)))
-    (loop while (< (get-universal-time) deadline)
-          do (if (listen out)
-                 (let ((line (read-line out nil nil)))
-                   (cond ((null line) (return nil))
-                         ((search "memory image:" line) (return line))))
-                 (if (sb-ext:process-alive-p process)
-                     (sleep 0.2)
-                     (return nil))))))
+  (%await-line (sb-ext:process-output process) process "memory image:"
+               :grace grace))
 
 (test an-empty-mcp-port-turns-the-listener-off
   "#75: CL_LLM_MEMORY_MCP_PORT set but EMPTY runs the image without the
@@ -264,3 +273,304 @@ is touched)."
              (is (search "mcp 127.0.0.1:" (or banner ""))
                  "control, a listener: ~a" banner))
         (%reap process)))))
+
+;;;; SIGTERM on a worker thread (#84).  Linux hands a process-directed
+;;;; signal to the main thread whenever it may, which is the delivery
+;;;; every test above exercises; the one the issue measured is forced
+;;;; with tgkill(2) on one thread.
+
+(defun %worker-tids (process)
+  "The Linux thread ids of PROCESS's threads other than the main thread
+(its id is the pid) and SBCL's finalizer, oldest first.  /proc names a
+thread only when its Lisp name fits in 15 characters; the image's
+listener and indexer are longer, so they are found by age, not name."
+  (let ((pid (sb-ext:process-pid process)))
+    (sort (loop for dir in (uiop:subdirectories
+                            (format nil "/proc/~d/task/" pid))
+                for tid = (parse-integer
+                           (car (last (pathname-directory dir))))
+                unless (or (= tid pid)
+                           (string= "finalizer"
+                                    (uiop:read-file-line
+                                     (merge-pathnames "comm" dir))))
+                  collect tid)
+          #'<)))
+
+(defun %signal-thread (process tid signal)
+  "SIGNAL to the one thread TID of PROCESS, by tgkill(2); => 0, or -1
+when the thread is gone."
+  (sb-alien:alien-funcall
+   (sb-alien:extern-alien "tgkill"
+                          (function sb-alien:int sb-alien:int
+                                    sb-alien:int sb-alien:int))
+   (sb-ext:process-pid process) tid signal))
+
+(defun %serve-embeddings (socket dimension state &key (delay 0))
+  "Answer every POST on SOCKET with one OpenAI-shaped embedding of
+DIMENSION, DELAY seconds after reading it, until STATE's car holds T;
+its cdr counts the connections accepted, so a test can tell when a
+child is inside its probe.  Enough of HTTP for dexador, nothing more.
+The request body is read out before the reply, so the close cannot
+reset the connection under the client."
+  (flet ((serve (s)
+           (let ((length 0))
+             (loop for line = (string-right-trim '(#\Return)
+                                                 (read-line s nil ""))
+                   until (string= line "")
+                   do (when (and (> (length line) 15)
+                                 (string-equal "content-length:" line
+                                               :end2 15))
+                        (setf length (parse-integer line :start 15))))
+             (dotimes (i length) (read-char s nil))
+             (when (plusp delay) (sleep delay))
+             (let ((body (format nil "{\"data\":[{\"index\":0,~
+\"embedding\":[~{~a~^,~}]}]}"
+                                 (make-list dimension
+                                            :initial-element "0.5"))))
+               (format s "HTTP/1.1 200 OK~C~CContent-Type: ~
+application/json~C~CContent-Length: ~D~C~CConnection: close~C~C~C~C~A"
+                       #\Return #\Newline #\Return #\Newline
+                       (length body) #\Return #\Newline
+                       #\Return #\Newline #\Return #\Newline body)
+               (finish-output s)))))
+    (loop until (car state)
+          do (when (usocket:wait-for-input socket :timeout 0.2
+                                                  :ready-only t)
+               (let ((c (ignore-errors
+                         (usocket:socket-accept
+                          socket :element-type 'character))))
+                 (when c
+                   (incf (cdr state))
+                   (unwind-protect
+                        (ignore-errors (serve (usocket:socket-stream c)))
+                     (ignore-errors (usocket:socket-close c)))))))))
+
+(defmacro with-embeddings-fake ((url &key (dimension 3) (delay 0)
+                                     (state (gensym "STATE")))
+                                &body body)
+  "BODY with URL bound to a loopback OpenAI-compatible embeddings base
+URL, served by %SERVE-EMBEDDINGS on its own thread and stopped
+afterwards; DELAY and STATE (a variable for its state cons) are the
+fake's."
+  (let ((socket (gensym "SOCKET")) (thread (gensym "THREAD")))
+    `(let* ((,socket (usocket:socket-listen "127.0.0.1" 0
+                                            :reuse-address t
+                                            :element-type 'character))
+            (,state (cons nil 0))
+            (,thread (bt:make-thread
+                      (lambda ()
+                        (%serve-embeddings ,socket ,dimension ,state
+                                           :delay ,delay))
+                      :name "embeddings fake"))
+            (,url (format nil "http://127.0.0.1:~d/v1"
+                          (usocket:get-local-port ,socket))))
+       (unwind-protect (progn ,@body)
+         (setf (car ,state) t)
+         (ignore-errors (bt:join-thread ,thread))
+         (ignore-errors (usocket:socket-close ,socket))))))
+
+(test sigterm-on-the-listener-thread-leaves-the-store-clean
+  "#84: SIGTERM delivered to the image's listener thread -- the last
+thread START makes while the index is off -- exits 0 within %WAIT's
+grace and leaves no .dirty marker, with SWANK up and the listener on.
+A regression check of the forward on this path, not the test that
+caught the issue: under SBCL's own handler this delivery was already
+clean, because the hook then ran STOP on the listener thread, where
+STOP-LISTENER's join of that thread (itself) is under IGNORE-ERRORS
+and nothing else in STOP waits on it, so CLOSE-GRAPH ran there and
+cleared the marker all the same.  The delivery that was not clean is
+the indexer's, below.  Controls: the marker's presence while the image
+runs, and that a thread was found and signalled."
+  (with-scratch-root (root)
+    (let ((process (%launch-image root "CL_LLM_MEMORY_MCP_PORT=0")))
+      (unwind-protect
+           (let ((banner (%banner process)))
+             (is (stringp banner) "no banner: ~a" (%stderr process))
+             (is (search "mcp 127.0.0.1:" (or banner ""))
+                 "control, a listener: ~a" banner)
+             (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+             (let ((tid (car (last (%worker-tids process)))))
+               (is (integerp tid) "control: a worker thread to signal")
+               (when tid
+                 (is (zerop (%signal-thread process tid sb-unix:sigterm))
+                     "control: delivered")
+                 (is (eql 0 (%wait process)) "exit 0 within the grace")
+                 (is (not (%dirty-p (%sub root "store/"))))
+                 (let* ((gdb:*system-directory* (%sub root "sys/"))
+                        (g (gdb:open-graph :cl-llm-memory
+                                           (%sub root "store/")
+                                           :buffer-pool-size 1000)))
+                   (is (gdb::graph-open-p g))
+                   (let ((gdb:*graph* g))
+                     (gdb:close-graph g :snapshot-p nil))))))
+        (%reap process)))))
+
+(test sigterm-on-the-indexer-thread-exits-within-the-grace
+  "#84: SIGTERM delivered to the image's endpoint-indexer thread -- the
+last thread START makes while the index is on -- exits 0 within %WAIT's
+grace and leaves no .dirty marker.  Without the forward, the hook ran
+STOP on that thread, where STOP-ENDPOINT-INDEXER waits its whole 35 s
+for the thread it is on to die before abandoning it: clean in the end,
+but past the grace a supervisor allows before SIGKILL, which is the
+.dirty marker the issue measured.  The embedder is a loopback fake;
+the banner naming it is the control that the index is on."
+  (with-scratch-root (root)
+    (with-embeddings-fake (url)
+      (let ((process (%launch-image
+                      root "CL_LLM_MEMORY_MCP_PORT=0"
+                      (format nil "CL_LLM_MEMORY_EMBED_URL=~a" url)
+                      "CL_LLM_MEMORY_EMBED_MODEL=fake"
+                      "CL_LLM_MEMORY_EMBED_FLOOR=0.5")))
+        (unwind-protect
+             (let ((banner (%banner process)))
+               (is (stringp banner) "no banner: ~a" (%stderr process))
+               (is (search "index fake" (or banner ""))
+                   "control, the index on: ~a" banner)
+               (let ((tid (car (last (%worker-tids process)))))
+                 (is (integerp tid) "control: a worker thread to signal")
+                 (when tid
+                   (is (zerop (%signal-thread process tid
+                                              sb-unix:sigterm))
+                       "control: delivered")
+                   (is (eql 0 (%wait process)) "exit 0 within the grace")
+                   (is (not (%dirty-p (%sub root "store/")))))))
+          (%reap process))))))
+
+(test sigterm-during-the-solo-start-leaves-the-store-clean
+  "#84: SIGTERM while the solo server is still inside START with the
+scope open -- held there by an embedder that takes 3 s to answer the
+dimension probe -- exits and leaves no .dirty marker.  The hook used to
+be pushed only once START had returned, so this window closed the
+store through nothing; the hook and the handler now go in first, as
+the image's do.  Controls: the fake's accepted count says the child is
+in the probe, and the marker is present then."
+  (with-scratch-root (root)
+    (with-embeddings-fake (url :delay 3 :state fake)
+      (let ((process (%launch-solo
+                      root :assignments
+                      (list (format nil "CL_LLM_MEMORY_EMBED_URL=~a" url)
+                            "CL_LLM_MEMORY_EMBED_MODEL=fake"
+                            "CL_LLM_MEMORY_EMBED_FLOOR=0.5"))))
+        (unwind-protect
+             (progn
+               ;; 60 s: the child loads cl-llm/agent/mcp first.
+               (is (loop repeat 600
+                         do (when (plusp (cdr fake)) (return t))
+                            (sleep 0.1))
+                   "control: the probe reached the fake")
+               (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+               (sb-ext:process-kill process sb-unix:sigterm)
+               (is (eql 0 (%wait process)) "exit 0 within the grace")
+               (is (not (%dirty-p (%sub root "store/")))))
+          (%reap process))))))
+
+(test a-second-sigterm-during-the-stop-is-ignored
+  "#84: a second SIGTERM while the image is already stopping -- after
+its `stopping` line, inside STOP-LISTENER's join or CLOSE-GRAPH -- is
+ignored: exit 0, no .dirty marker, a store that reopens.  Without the
+guard the second signal EXITs again on the main thread, which SBCL
+takes as an abort: exit 1 and the marker left, as two kill -TERM a
+moment apart from systemd or timeout(1) would leave it.  Controls: the
+marker is present when the first signal lands, and the stop line
+arrives."
+  (with-scratch-root (root)
+    (let ((process (%launch-image root "CL_LLM_MEMORY_MCP_PORT=0")))
+      (unwind-protect
+           (progn
+             (is (stringp (%banner process))
+                 "no banner: ~a" (%stderr process))
+             (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+             (sb-ext:process-kill process sb-unix:sigterm)
+             (is (stringp (%await-line (sb-ext:process-error process)
+                                       process "memory image: stopping"
+                                       :grace 15 :poll 0.01))
+                 "control: the stop began")
+             (sb-ext:process-kill process sb-unix:sigterm)
+             (is (eql 0 (%wait process)) "exit 0 within the grace")
+             (is (not (%dirty-p (%sub root "store/"))))
+             (let* ((gdb:*system-directory* (%sub root "sys/"))
+                    (g (gdb:open-graph :cl-llm-memory (%sub root "store/")
+                                       :buffer-pool-size 1000)))
+               (is (gdb::graph-open-p g))
+               (let ((gdb:*graph* g)) (gdb:close-graph g :snapshot-p nil))))
+        (%reap process)))))
+
+(test a-second-sigterm-during-the-solo-stop-is-ignored
+  "#84: the same for the solo server, mid-session.  Its stop is over
+in a few tens of milliseconds on a fresh store, too short a window to
+hit from outside, so the worker holds it open: a conclude gives the
+indexer endpoints to embed, and the fake answers each in 3 s, so STOP
+waits inside STOP-ENDPOINT-INDEXER for the embedding in flight.
+SIGTERM, the `stopping` line, SIGTERM again; exit 0 and no .dirty
+marker, where the second signal used to abort the stop.  Controls: the
+fake has taken the indexer's request before the first signal, and the
+marker is present then."
+  (with-scratch-root (root)
+    (with-embeddings-fake (url :delay 3 :state fake)
+      (let ((process (%launch-solo
+                      root :assignments
+                      (list (format nil "CL_LLM_MEMORY_EMBED_URL=~a" url)
+                            "CL_LLM_MEMORY_EMBED_MODEL=fake"
+                            "CL_LLM_MEMORY_EMBED_FLOOR=0.5"))))
+        (unwind-protect
+             (progn
+               (%child-rpc process "initialize"
+                           '(("protocolVersion" . "2025-06-18")
+                             ("clientInfo" . (("name" . "t")
+                                              ("version" . "0")))))
+               (%child-rpc process "tools/call"
+                           '(("name" . "conclude")
+                             ("arguments"
+                              . (("subject-namespace" . "repo")
+                                 ("subject-key" . "cl-llm")
+                                 ("relation" . "a")
+                                 ("object-namespace" . "v")
+                                 ("object-key" . "1") ("rule" . "r")))))
+               ;; The probe was the first request; the indexer's is next.
+               (is (loop repeat 100
+                         do (when (> (cdr fake) 1) (return t))
+                            (sleep 0.1))
+                   "control: the indexer is embedding")
+               (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+               (sb-ext:process-kill process sb-unix:sigterm)
+               (is (stringp (%await-line (sb-ext:process-error process)
+                                         process "memory mcp: stopping"
+                                         :grace 15))
+                   "control: the stop began")
+               (sb-ext:process-kill process sb-unix:sigterm)
+               (is (eql 0 (%wait process)) "exit 0 within the grace")
+               (is (not (%dirty-p (%sub root "store/")))))
+          (%reap process))))))
+
+(test sigterm-on-the-solo-indexer-thread-exits-within-the-grace
+  "#84: SIGTERM delivered to the solo server's endpoint-indexer thread
+-- the last one started, after START returns -- while the main thread
+idles in RUN-SERVER's read of stdin: exit 0 within %WAIT's grace and
+no .dirty marker.  The handler interrupts the main thread out of that
+read; without the forward the hook ran STOP on the indexer thread and
+waited its 35 s there.  Controls: the server answers initialize, the
+marker is present, a thread was found and signalled."
+  (with-scratch-root (root)
+    (with-embeddings-fake (url)
+      (let ((process (%launch-solo
+                      root :assignments
+                      (list (format nil "CL_LLM_MEMORY_EMBED_URL=~a" url)
+                            "CL_LLM_MEMORY_EMBED_MODEL=fake"
+                            "CL_LLM_MEMORY_EMBED_FLOOR=0.5"))))
+        (unwind-protect
+             (progn
+               (is (%child-rpc process "initialize"
+                               '(("protocolVersion" . "2025-06-18")
+                                 ("clientInfo" . (("name" . "t")
+                                                  ("version" . "0")))))
+                   "control: the server answers")
+               (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+               (let ((tid (car (last (%worker-tids process)))))
+                 (is (integerp tid) "control: a worker thread to signal")
+                 (when tid
+                   (is (zerop (%signal-thread process tid
+                                              sb-unix:sigterm))
+                       "control: delivered")
+                   (is (eql 0 (%wait process)) "exit 0 within the grace")
+                   (is (not (%dirty-p (%sub root "store/")))))))
+          (%reap process))))))

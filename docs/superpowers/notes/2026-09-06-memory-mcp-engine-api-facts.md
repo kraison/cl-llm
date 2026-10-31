@@ -550,6 +550,18 @@ file:
 Both children were alive immediately before the signal and had written
 the marker by the time `process-wait` returned. **VERIFIED (image).**
 
+**Correction (kraison/cl-llm#84, 2026-10-31).** Both children were
+single-threaded, and the hooks ran *on the thread that took the
+signal*: SBCL's handler is `(exit)` on the receiving thread, whose
+unwind runs `*exit-hooks*` before `%exit-other-threads` interrupts the
+main thread (which then runs them again, as a no-op for an idempotent
+`stop`). In an image with other threads the kernel may deliver SIGTERM
+to any of them, and a `stop` that joins the receiving thread -- the
+listener, or the indexer's 35 s wait on itself -- runs there. The
+scripts now take SIGTERM themselves and interrupt the main thread with
+`exit`, so every delivery is the one measured above; the forced case
+is `tests-agent-mcp/process-tests.lisp` (tgkill on one thread).
+
 **But the spec's citation is wrong.** §6 says "SBCL runs the hooks on
 SIGTERM, measured in kraison/sitrep#25", and `scripts/memory-image.lisp`
 :80-83 says the same. The record in
