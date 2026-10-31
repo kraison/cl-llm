@@ -264,11 +264,17 @@ unsafe against a concurrent VECTOR-SEARCH."
   "This process's worker, or NIL when no embedder is configured.
 NOTIFY-ENDPOINT-INDEXER with no argument uses it (SS4.5).")
 
+(defparameter *prepare-attempts* 10
+  "Attempts the worker gives a PREPARE function before it leaves the
+index off for the run (#80 item 3): under the default backoff, the
+tenth comes about four minutes after the first.")
+
 (defstruct (endpoint-indexer (:constructor %make-endpoint-indexer))
   "One thread draining STORES with EMBED under MODEL.  PENDING says a
 notify arrived since the running drain began, IDLE that the last drain
-left every store clean; both are read and written under LOCK only.
-REPORTED is the worker thread's alone."
+left every store clean, OFF that PREPARE never succeeded and the
+worker stopped; all three are read and written under LOCK only.
+READY, ATTEMPTS and REPORTED are the worker thread's alone."
   stores embed model thread
   (lock (bt:make-lock "endpoint-indexer"))
   (cv (bt:make-condition-variable :name "endpoint-indexer"))
@@ -280,6 +286,11 @@ REPORTED is the worker thread's alone."
   (initial-backoff 1.0)       ; where an outage's doubling starts again
   (max-backoff 60.0)
   (failing nil)               ; T once this outage has been logged
+  (prepare nil)               ; () -> true once the index may be used
+  (prepare-attempts *prepare-attempts*)
+  (ready t)                   ; NIL while PREPARE has not succeeded
+  (attempts 0)                ; PREPARE calls that failed
+  (off nil)
   (reported (make-hash-table :test 'equal)))
 
 (defun %indexer-log (control &rest args)
@@ -411,31 +422,98 @@ error is not an outage and wants a different fix."
     (dolist (line lines) (apply #'%indexer-log line))
     (values delay hard)))
 
+(defun %indexer-prepare (w)
+  "One attempt at W's PREPARE and its bookkeeping; => (values SECONDS
+HARD) as %INDEXER-PASS.  A true return makes the worker ready and owes
+it the sweep at once; NIL or a SERIOUS-CONDITION is logged once per
+worker and retried after the outage backoff -- a deadline no notify
+cuts short -- until PREPARE-ATTEMPTS have failed, when one line says
+the index stays off, OFF is set and the worker stops (#80 item 3).
+PREPARE runs with no lock held: it is a probe round trip."
+  (let ((lines '()) (delay nil) (hard nil))
+    (multiple-value-bind (ok c)
+        (handler-case (values (funcall (endpoint-indexer-prepare w)) nil)
+          (serious-condition (c) (values nil c)))
+      (bt:with-lock-held ((endpoint-indexer-lock w))
+        (cond
+          (ok
+           (setf (endpoint-indexer-ready w) t
+                 (endpoint-indexer-pending w) t
+                 (endpoint-indexer-backoff w)
+                 (endpoint-indexer-initial-backoff w))
+           (when (endpoint-indexer-failing w)
+             (setf (endpoint-indexer-failing w) nil)
+             (push (list "~&endpoint indexer: ready after ~d failed ~
+                          attempt~:p; sweeping~%"
+                         (endpoint-indexer-attempts w))
+                   lines)))
+          (t
+           (incf (endpoint-indexer-attempts w))
+           (unless (endpoint-indexer-failing w)
+             (setf (endpoint-indexer-failing w) t)
+             (push (list "~&endpoint indexer: not ready: ~a; retrying ~
+                          with backoff~%"
+                         (or c "PREPARE answered NIL"))
+                   lines))
+           (cond ((>= (endpoint-indexer-attempts w)
+                      (endpoint-indexer-prepare-attempts w))
+                  (setf (endpoint-indexer-off w) t
+                        (endpoint-indexer-stop-p w) t)
+                  (push (list "~&endpoint indexer: not ready after ~d ~
+                               attempt~:p; the semantic index stays ~
+                               off for this run~%"
+                              (endpoint-indexer-attempts w))
+                        lines))
+                 (t
+                  (setf delay (endpoint-indexer-backoff w)
+                        hard t
+                        (endpoint-indexer-backoff w)
+                        (min (endpoint-indexer-max-backoff w)
+                             (* 2 (endpoint-indexer-backoff w))))))))))
+    (dolist (line lines) (apply #'%indexer-log line))
+    (values delay hard)))
+
 (defun %indexer-loop (w)
-  "The worker thread's body: await, drain, repeat until stopped."
+  "The worker thread's body: await, then prepare until ready and
+drain from then on, until stopped."
   (let ((delay nil) (hard nil))
     (loop while (%indexer-await w delay hard)
-          do (multiple-value-setq (delay hard) (%indexer-pass w)))))
+          do (multiple-value-setq (delay hard)
+               (if (endpoint-indexer-ready w)
+                   (%indexer-pass w)
+                   (%indexer-prepare w))))))
 
 (defun start-endpoint-indexer (stores &key embed model (backoff 1.0)
-                                           (name "endpoint-indexer"))
+                                           (name "endpoint-indexer")
+                                           prepare
+                                           (prepare-attempts
+                                            *prepare-attempts*))
   "Start the worker over STORES with EMBED (text -> vector) and MODEL:
 a sweep at once, then a drain after every NOTIFY-ENDPOINT-INDEXER; an
 embedder error is logged once per outage and retried with a doubling
 BACKOFF (seconds, capped at 60) that no notify can cut short.  => the
-ENDPOINT-INDEXER, also set as *ENDPOINT-INDEXER*.  A worker already in
-*ENDPOINT-INDEXER* is stopped first, so a re-entered start never
-orphans one -- at STOP-ENDPOINT-INDEXER's default bound, so a wedged
-predecessor delays this call by that much and is then abandoned.  It
-logs to the *ERROR-OUTPUT* of this call, which
-a new thread would not otherwise see: BT:*DEFAULT-SPECIAL-BINDINGS* is
-NIL, so it would get the global stream.  Trap: stop it before closing
-the stores."
+ENDPOINT-INDEXER, also set as *ENDPOINT-INDEXER*.  PREPARE, when
+given, is a function of no arguments the worker calls before its
+first sweep and retries on the same backoff until it returns true --
+an entry point's probe of an embedder still loading (#80 item 3); NIL
+or a SERIOUS-CONDITION is not ready yet, and after PREPARE-ATTEMPTS
+failures the worker stops with ENDPOINT-INDEXER-OFF-P true.  Nothing
+is embedded, and nothing should search, before it succeeds.  A worker
+already in *ENDPOINT-INDEXER* is stopped first, so a re-entered start
+never orphans one -- at STOP-ENDPOINT-INDEXER's default bound, so a
+wedged predecessor delays this call by that much and is then
+abandoned.  It logs to the *ERROR-OUTPUT* of this call, which a new
+thread would not otherwise see: BT:*DEFAULT-SPECIAL-BINDINGS* is NIL,
+so it would get the global stream.  Trap: stop it before closing the
+stores."
   (when *endpoint-indexer*
     (stop-endpoint-indexer *endpoint-indexer*))
   (let ((w (%make-endpoint-indexer :stores stores :embed embed
                                    :model model :backoff backoff
-                                   :initial-backoff backoff))
+                                   :initial-backoff backoff
+                                   :prepare prepare
+                                   :prepare-attempts prepare-attempts
+                                   :ready (null prepare)))
         (err *error-output*))
     (setf (endpoint-indexer-thread w)
           (bt:make-thread (lambda ()
@@ -460,6 +538,12 @@ backoff -- see %INDEXER-AWAIT."
   "W's IDLE flag, read under its lock."
   (bt:with-lock-held ((endpoint-indexer-lock w))
     (endpoint-indexer-idle w)))
+
+(defun endpoint-indexer-off-p (indexer)
+  "T once INDEXER gave up on its PREPARE and stopped: the semantic
+index is off for this run (#80 item 3).  Read under its lock."
+  (bt:with-lock-held ((endpoint-indexer-lock indexer))
+    (endpoint-indexer-off indexer)))
 
 (defun wait-endpoint-indexer (indexer &key (timeout 10))
   "Block until INDEXER has drained every store clean, or TIMEOUT

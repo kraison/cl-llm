@@ -389,7 +389,11 @@ reaches `incident:ledger-rollback-2026-08-30` with no token in common
 stores in scope. Below the floor nothing is added, and the
 nothing-consulted refusal below is unchanged: the floor is a refusal,
 not a ranking. An endpoint a write has touched is reachable lexically
-until the indexer re-embeds it.
+until the indexer re-embeds it, and so is everything while the
+embedder is not `endpoint-embedder-ready` -- an entry point clears
+that flag when its start-time probe fails and the worker's retry sets
+it, so a cold local model costs a few minutes of lexical-only
+retrieval rather than the run's index (#80).
 
 ```json
 {

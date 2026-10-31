@@ -128,6 +128,63 @@ want different fixes."
                 (mcp:index-off-reason other))
         "and still names the condition")))
 
+(defun %constant-embed (dimension)
+  "EMBED answering the same DIMENSION vector for every text."
+  (lambda (text)
+    (declare (ignore text))
+    (make-array dimension :element-type 'single-float
+                          :initial-element 1f0)))
+
+(test prepare-endpoint-index-marks-the-embedder-ready
+  "#80 item 3: the entry points' start step, also the worker's PREPARE.
+A probe that signals leaves the embedder as it was and the error
+propagates; one that answers resets a segment of another dimension,
+clears another model's vectors, notes each, and marks the embedder
+ready."
+  (with-stores (w p)
+    (%belief w "root-cause" '(:cause . "x")
+             :subject '(:incident . "ledger-rollback"))
+    (%belief p "root-cause" '(:cause . "y")
+             :subject '(:incident . "ledger-freeze"))
+    ;; W: the synonym embedder's dimension, another model's vectors.
+    ;; P: another dimension altogether.
+    (mem:drain-endpoint-vectors (list w) :embed (%constant-embed 32)
+                                         :model "old")
+    (mem:drain-endpoint-vectors (list p) :embed (%constant-embed 4)
+                                         :model "old")
+    (let* ((notes '())
+           (note (lambda (control &rest args)
+                   (push (apply #'format nil control args) notes)))
+           (down (agent:make-endpoint-embedder
+                  (cl-llm.rag:make-openai-compatible-embedder
+                   :base-url "http://127.0.0.1:1/v1" :model "m")
+                  :floor 0.3))
+           (ee (cl-llm.agent/tests::%embedder)))
+      (setf (agent:endpoint-embedder-ready down) nil
+            (agent:endpoint-embedder-ready ee) nil)
+      (signals cl-llm.conditions:llm-error
+        (mcp:prepare-endpoint-index down (list w p) note))
+      (is-false (agent:endpoint-embedder-ready down)
+                "a probe that signals leaves it not ready")
+      (is (null notes) "and touched no store")
+      (is (eq t (mcp:prepare-endpoint-index ee (list w p) note)))
+      (is-true (agent:endpoint-embedder-ready ee))
+      (is (= 2 (length notes)) "one line per store changed: ~s" notes)
+      (is (find-if (lambda (n)
+                     (search "cleared 2 vectors of another model" n))
+                   notes)
+          "W's two vectors of the old model went: ~s" notes)
+      (is (find-if (lambda (n) (search "segment reset to dimension 32"
+                                       n))
+                   notes)
+          "P's segment was reset to the embedder's dimension: ~s" notes)
+      (is (null (mem:nearest-endpoints w (funcall (%constant-embed 32)
+                                                  "q")
+                                       :k 5))
+          "nothing of the old model is searchable")
+      (is (= 2 (length (mem:dirty-endpoints w "synonym-test")))
+          "and W's endpoints are dirty for the sweep"))))
+
 (test the-start-line-names-which-key-the-embedder-will-send
   "#78: an empty CL_LLM_MEMORY_EMBED_KEY is not \"no credential\" --
 RAG falls back to OPENAI_API_KEY (rag/embed.lisp:91) -- so the image's

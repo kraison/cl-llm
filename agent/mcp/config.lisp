@@ -170,6 +170,29 @@ whatever the HTTP layer signals."
     (length (rag:embed (agent:endpoint-embedder-embedder embedder)
                        "probe"))))
 
+(defun prepare-endpoint-index (embedder stores note)
+  "Make STORES ready for EMBEDDER: probe its dimension, reset each
+store's segment to it and clear the vectors another model left, then
+mark EMBEDDER ready; => T.  NOTE, a function of a format control and
+arguments, gets one line per store changed.  Signals what the probe or
+the engine signals, EMBEDDER left as it was.  Must run while nothing
+searches: at start before the listener, or from the worker's PREPARE
+while EMBEDDER is not ready and retrieve is therefore lexical -- a
+cold start recovers that way without a restart (#80 item 3)."
+  (let ((d (probe-embedding-dimension embedder))
+        (model (agent:endpoint-embedder-model embedder)))
+    (dolist (g stores)
+      (when (mem:reset-endpoint-segment g d)
+        (funcall note "semantic index: segment reset to dimension ~d ~
+                       (~a)" d (mem:store-name g)))
+      ;; Another model's vectors would crowd the top-k until the sweep
+      ;; reached them (#80 item 2).
+      (let ((n (mem:clear-foreign-endpoint-vectors g model)))
+        (when (plusp n)
+          (funcall note "semantic index: cleared ~d vector~:p of ~
+                         another model (~a)" n (mem:store-name g)))))
+    (setf (agent:endpoint-embedder-ready embedder) t)))
+
 (defun embed-key-source ()
   "Which credential the index's embedder will send, for the start line:
 \"env CL_LLM_MEMORY_EMBED_KEY\", \"OPENAI_API_KEY fallback\", or

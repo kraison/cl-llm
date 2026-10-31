@@ -297,6 +297,12 @@ One thread per process that has an embedder, started by
    (`graph-db::rebuild-vector-segment`, internal; an export is asked of
    the engine) while nothing can search. A dimension change therefore
    costs one restart, which a configuration change already requires.
+   A probe that fails does not cost the run its index (#80 item 3):
+   the entry point marks the embedder not ready -- the planner is
+   lexical and nothing searches -- and hands the worker the same
+   probe-reset-clear step as its `prepare`, retried on the outage
+   backoff before the first sweep, `*prepare-attempts*` (10) times;
+   past that the worker logs that the index stays off and stops.
 5. **Idle** (added in SDD Task 3): the worker reports itself idle only
    when a drain finished with no notify outstanding *and* no store has
    a dirty endpoint left, so `wait-endpoint-indexer` cannot read

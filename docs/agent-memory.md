@@ -306,6 +306,13 @@ next sweep, and stays reachable lexically meanwhile. The agent
 side of this -- `make-agent-tools`' `:embedder`, and how `retrieve`
 uses the index -- is in `docs/agent-tools.md`.
 
+`start-endpoint-indexer` also takes `:prepare`, a function of no
+arguments the worker calls before its first sweep and retries on the
+same backoff until it returns true, `:prepare-attempts`
+(`*prepare-attempts*`, 10) times; past that it logs that the index
+stays off, answers `endpoint-indexer-off-p` and stops. The entry
+points hand it their probe when the start-time one failed (#80).
+
 A failed drain is logged to `*error-output*` once per outage, not once
 per attempt -- `drain failed: ...`, so named because the guard covers
 the engine work as well as the embedder, and an engine error is not an
@@ -855,13 +862,21 @@ would not answer from an engine error while resetting.
 
 **Both round trips are bounded**, because the LLM layer's defaults
 (60 s, three retries) are for a completion someone is watching. The
-start-up probe waits **5 s** and does not retry: a typo in the URL
-costs the handshake five seconds, not three minutes. A worker embedding
-waits **30 s** and does not retry either -- the indexer's own doubling
-backoff is the retry policy, and an unbounded one would hold `SIGTERM`
-inside the worker's join with the store still marked dirty. A cold
-local model that takes longer than 5 s to answer leaves the index off
-for this run; restart once it is warm.
+start-up probe waits **5 s** and does not retry in line: a typo in
+the URL costs the handshake five seconds, not three minutes. A worker
+embedding waits **30 s** and does not retry either -- the indexer's
+own doubling backoff is the retry policy, and an unbounded one would
+hold `SIGTERM` inside the worker's join with the store still marked
+dirty. A cold local model that takes longer than 5 s to answer does
+not lose the run its index (#80): the start line reads `semantic
+index: probe failed: ...; lexical until the worker's retry succeeds`
+(the image's banner says `probe pending`), the tools are lexical
+meanwhile, and the worker retries the probe on its backoff before its
+sweep -- `*prepare-attempts*` (10) times, the last about four minutes
+after the first -- then resets and sweeps as a start would have
+(`endpoint indexer: ready after N failed attempts; sweeping`). Past
+the bound it logs `the semantic index stays off for this run` and
+stops; only then is a restart needed.
 
 **The worker.** Each process runs one endpoint indexer (the memory
 image, or each solo server). It sweeps at start, then drains after
@@ -913,8 +928,12 @@ connection and before the worker starts, because the engine's segment
 rebuild is unsafe against a concurrent search. Every vector is dropped
 and re-made from scratch, and the start line says so. An embedder that
 will not answer that probe is reported once on stderr and leaves the
-index off for that run: the image still serves its store and its SWANK,
-and the solo server still completes the handshake, five seconds later.
+index off until the worker's retry of the probe succeeds (above): the
+image still serves its store and its SWANK, and the solo server still
+completes the handshake, five seconds later. The worker's reset is as
+safe as the start's because nothing searches the segment while the
+embedder is not ready -- `retrieve` and `plan-bounds` are lexical
+until the probe answers.
 
 ### Telling an agent to use it
 

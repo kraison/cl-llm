@@ -38,6 +38,7 @@
    #:*endpoint-indexer* #:endpoint-indexer #:start-endpoint-indexer
    #:notify-endpoint-indexer #:wait-endpoint-indexer
    #:stop-endpoint-indexer #:endpoint-indexer-embedded
+   #:endpoint-indexer-off-p #:*prepare-attempts*
    ;; scope (S6b)
    #:check-scope #:scope-argument-error
    #:call-with-scope-snapshots #:with-scope-snapshots

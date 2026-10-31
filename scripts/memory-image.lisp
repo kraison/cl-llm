@@ -120,17 +120,16 @@ store another image left dirty."
     (handler-case
         (let ((ee (mcp:embedder-from-env)))
           (when ee
-            (let ((d (mcp:probe-embedding-dimension ee)))
-              (when (mem:reset-endpoint-segment *graph* d)
-                (%note "semantic index: segment reset to dimension ~d"
-                       d))
-              ;; Another model's vectors would crowd the top-k until
-              ;; the sweep reached them (#80 item 2).
-              (let ((n (mem:clear-foreign-endpoint-vectors
-                        *graph* (agent:endpoint-embedder-model ee))))
-                (when (plusp n)
-                  (%note "semantic index: cleared ~d vector~:p of ~
-another model" n))))
+            (handler-case
+                (mcp:prepare-endpoint-index ee (list *graph*) #'%note)
+              ;; An embedder that does not answer is a cold start as
+              ;; often as an outage: the index is off, lexical, until
+              ;; the worker's retry of the probe succeeds (#80 item 3).
+              ;; An engine error is neither, and falls through to OFF.
+              (cl-llm.conditions:llm-error (c)
+                (setf (agent:endpoint-embedder-ready ee) nil)
+                (%note "semantic index: probe failed: ~a; lexical ~
+until the worker's retry succeeds" c)))
             (setf *embedder* ee)))
       (error (c)
         (%note "semantic index off: ~a" (mcp:index-off-reason c))
@@ -176,7 +175,14 @@ another model" n))))
               (mem:start-endpoint-indexer
                (list *graph*)
                :embed (agent:endpoint-embedder-embed *embedder*)
-               :model (agent:endpoint-embedder-model *embedder*))))
+               :model (agent:endpoint-embedder-model *embedder*)
+               ;; Only after a failed probe: the worker retries it
+               ;; before its sweep, bounded (#80 item 3).
+               :prepare (let ((ee *embedder*) (g *graph*))
+                          (unless (agent:endpoint-embedder-ready ee)
+                            (lambda ()
+                              (mcp:prepare-endpoint-index
+                               ee (list g) #'%note)))))))
       ;; graph-db's source directory: a mismatched engine shows here,
       ;; not at the first missing symbol (#72).
       (format t "~&memory image: ~(~S~) at ~A as ~A; clock ~A; ~
@@ -187,10 +193,12 @@ swank 127.0.0.1:~D; ~A; ~A; graph-db ~A~%"
                           (mcp:listener-port *listener*))
                   "mcp off")
               (if *embedder*
-                  (format nil "index ~A floor ~A (key: ~A)"
+                  (format nil "index ~A floor ~A (key: ~A)~:[, probe ~
+pending~;~]"
                           (agent:endpoint-embedder-model *embedder*)
                           (agent:endpoint-embedder-floor *embedder*)
-                          (mcp:embed-key-source))
+                          (mcp:embed-key-source)
+                          (agent:endpoint-embedder-ready *embedder*))
                   "index off")
               (asdf:system-source-directory
                (asdf:find-system :graph-db))))

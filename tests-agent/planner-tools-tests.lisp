@@ -242,6 +242,36 @@ does, and retrieve cites the belief.  Control: no embedder refuses."
         (is (search "replica-checksum-mismatch"
                     (json:jget (elt (json:jget r "evidence") 0) "text")))))))
 
+(test retrieve-is-lexical-while-the-embedder-is-not-ready
+  "#80 item 3: a cold start.  While the entry point's probe has not
+answered the embedder is not READY: the paraphrase refuses as it would
+with no embedder, and the query is not embedded; once READY the same
+tools route it."
+  (with-stores (w p)
+    (%belief w "root-cause" '(:cause . "replica-checksum-mismatch")
+             :subject '(:incident . "ledger-rollback-2026-08-30"))
+    (let* ((ee (%embedder))
+           (tools (agent:make-agent-tools (list w p) :producer +p+
+                                          :embedder ee))
+           (q "why was the deployment reverted in august")
+           (calls 0)
+           (old (fdefinition 'rag:embed)))
+      (%drain (list w) ee)
+      (setf (agent:endpoint-embedder-ready ee) nil)
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'rag:embed)
+                   (lambda (e input) (incf calls) (funcall old e input)))
+             (signals llm:llm-tool-error (%call tools "retrieve" "query" q))
+             (is (= 0 calls) "not ready: the query was not embedded"))
+        (setf (fdefinition 'rag:embed) old))
+      (setf (agent:endpoint-embedder-ready ee) t)
+      (is (equal '("incident:ledger-rollback-2026-08-30")
+                 (coerce (json:jget (%call tools "retrieve" "query" q)
+                                    "endpoints")
+                         'list))
+          "ready: the same tools route the paraphrase"))))
+
 (test retrieve-still-refuses-an-unindexed-topic-with-an-embedder
   "#78 R3: the floor is a refusal, not a ranking -- a query no profile
 embeds near still names nothing, and the message is unchanged."

@@ -73,8 +73,11 @@ equal to a namespace name selects nothing by itself; it breaks ties."
 (defstruct (endpoint-embedder (:constructor %make-endpoint-embedder))
   "A RAG:EMBEDDER with the MODEL it names and the cosine FLOOR a dense
 candidate must clear (#78 R3, R7).  EMBED is the (text -> vector)
-function the memory layer takes -- it depends on no LLM."
-  embedder model floor embed)
+function the memory layer takes -- it depends on no LLM.  READY, T
+unless an entry point clears it, says the index may be searched: NIL
+while a start-time probe has not answered and the worker is retrying
+it, and the route is lexical only (#80 item 3)."
+  embedder model floor embed (ready t))
 
 (defun make-endpoint-embedder (embedder &key floor)
   "Wrap EMBEDDER for the semantic index; => an ENDPOINT-EMBEDDER.
@@ -102,9 +105,10 @@ QUERY-VECTOR is a function of the query returning its embedding, so a
 caller can memoise it across the stores in scope; the default embeds
 on every call.  ENDPOINT-EMBEDDER NIL is MAKE-KEY-EXTRACTOR itself.
 Traps: an endpoint a write touched and the indexer has not re-embedded
-is reachable lexically only (#78 SS4.1); and the vector search runs
-when the returned function is called, not under whatever snapshot
-VOCABULARY was read in."
+is reachable lexically only (#78 SS4.1); while ENDPOINT-EMBEDDER is
+not READY the whole function is, and the query is not embedded (#80
+item 3); and the vector search runs when the returned function is
+called, not under whatever snapshot VOCABULARY was read in."
   (let ((lexical (make-key-extractor vocabulary :cap cap)))
     (if (null endpoint-embedder)
         lexical
@@ -115,7 +119,8 @@ VOCABULARY was read in."
           (lambda (query)
             (let* ((l (funcall lexical query))
                    (room (- cap (length l))))
-              (if (plusp room)
+              (if (and (plusp room)
+                       (endpoint-embedder-ready endpoint-embedder))
                   (let ((dense
                           (loop for (ep . score)
                                   in (mem:nearest-endpoints
