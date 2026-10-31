@@ -30,6 +30,7 @@
    #:touch-endpoints
    ;; the semantic index (#78)
    #:nearest-endpoints #:dirty-endpoints #:materialise-endpoint-vectors
+   #:*materialise-batch*
    #:drain-endpoint-vectors #:rebuild-endpoint-vectors
    #:reset-endpoint-segment #:*embed-passes*
    ;; the indexer worker (#78 SS4.3)

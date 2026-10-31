@@ -108,6 +108,90 @@ i.e. between the render and the store transaction (#78 SS4.3 step 2)."
     (is (= 0 (mem:materialise-endpoint-vectors g))
         "a second pass creates nothing")))
 
+(test materialise-creates-in-batches
+  "#80 item 1: a pre-#78 store's first sweep is one transaction per
+*MATERIALISE-BATCH* vertices, not one over the whole vocabulary; the
+count and the vertices are the same whatever the batch."
+  (with-memory-graph (g)
+    ;; Three endpoints with no vertex: RECORD-ABSENCE touches nothing.
+    (gdb:with-transaction (:graph g)
+      (dolist (k '("a" "b" "c"))
+        (mem:record-absence g (cons :incident k) "postmortem"
+                            :producer +p+ :standing :searched-empty)))
+    (let ((old (fdefinition 'graph-db::call-with-transaction))
+          (transactions 0)
+          (created nil))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'graph-db::call-with-transaction)
+                   (lambda (fn tm)
+                     (incf transactions)
+                     (funcall old fn tm)))
+             (let ((mem:*materialise-batch* 2))
+               (setf created (mem:materialise-endpoint-vectors g))))
+        (setf (fdefinition 'graph-db::call-with-transaction) old))
+      (is (= 3 created))
+      (is (= 2 transactions)
+          "two batches of two for three endpoints, got ~a" transactions)
+      (dolist (k '("a" "b" "c"))
+        (is-true (mem:endpoint-vector-of g :incident k)
+                 "~a has a vertex" k))
+      (is (= 0 (mem:materialise-endpoint-vectors g))
+          "a second pass creates nothing"))))
+
+(test the-dirty-set-resolves-claims-for-suspects-only
+  "#80 item 1: after a clean drain a write dirties two endpoints; the
+next dirty set asks whether a belief is current for those two, not
+for every endpoint in the vocabulary."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (%pbelief g '(:repo . "cl-llm") "root-cause" '(:cause . "flaky"))
+    (%pbelief g '(:decision . "hold") "decided-because"
+              '(:verdict . "green"))
+    (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 4)
+                                         :model "m")
+    (is (null (mem:dirty-endpoints g "m")) "control: clean")
+    (%pbelief g '(:repo . "cl-llm") "owner" '(:person . "kevin")
+              "2026-08-31T08:00:00Z")
+    (let ((old (fdefinition 'mem::%any-current-belief-p))
+          (asked '())
+          (dirty nil))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'mem::%any-current-belief-p)
+                   (lambda (graph namespace key)
+                     (push (cons namespace key) asked)
+                     (funcall old graph namespace key)))
+             (setf dirty (mem:dirty-endpoints g "m")))
+        (setf (fdefinition 'mem::%any-current-belief-p) old))
+      (is (equal '((:repo . "cl-llm") (:person . "kevin"))
+                 (sort (copy-list dirty) #'string< :key #'cdr)))
+      (is (= 2 (length asked))
+          "five endpoints in the vocabulary, two suspects; asked ~a"
+          asked)
+      (is (null (set-difference asked dirty :test #'equal))
+          "and only the suspects were asked: ~a" asked))))
+
+(test an-endpoint-with-no-vertex-at-all-is-dirty
+  "#80 item 1: the dirty set is derived from the vertices, but a store
+written before #78 has none -- a current belief with no vertex is
+still dirty, and the drain still embeds it."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    ;; Delete the vertices the touch created: a pre-#78 store.
+    (let ((gdb:*graph* g))
+      (dolist (ep '((:repo . "cl-llm") (:verdict . "green")))
+        (dolist (ev (mem::%endpoint-vectors-of g (car ep) (cdr ep)))
+          (gdb:mark-deleted ev))))
+    (is (null (mem:endpoint-vector-of g :repo "cl-llm"))
+        "control: no vertex is left")
+    (is (equal '((:repo . "cl-llm") (:verdict . "green"))
+               (sort (copy-list (mem:dirty-endpoints g "m"))
+                     #'string< :key #'cdr)))
+    (is (= 2 (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 4)
+                                                  :model "m")))
+    (is (null (mem:dirty-endpoints g "m")))))
+
 (test the-drain-embeds-every-dirty-endpoint-once
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))

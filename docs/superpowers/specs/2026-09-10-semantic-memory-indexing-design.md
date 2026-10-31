@@ -238,7 +238,13 @@ One thread per process that has an embedder, started by
    already-clear vector is still a `save`, and that write-set entry is
    the only thing a create-only writer (a first belief, nothing
    superseded, whose claim writes are all creates) offers a concurrent
-   drain to validate against. The drain itself embeds OUTSIDE every
+   drain to validate against. The materialise runs in batches of
+   `*materialise-batch*` (256) vertices per transaction, and the dirty
+   set is derived from the `endpoint-vector` vertices first -- a claim
+   is resolved only for an endpoint with no vertex, no vector, or
+   another model's vector -- so a drain costs the store what the
+   writes since the last one touched, not its vocabulary (#80 item
+   1). The drain itself embeds OUTSIDE every
    transaction -- an embedder is a network round trip and the engine's
    ninth attempt at a transaction runs the body under the global
    transaction-manager lock -- and per endpoint makes up to four

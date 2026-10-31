@@ -29,35 +29,71 @@ ask for more than the cap."
                    (push (cons ep score) hits))))
     (nreverse hits)))
 
+(defun %suspect-endpoints (graph model)
+  "An EQUAL table of the endpoints of GRAPH that a live ENDPOINT-VECTOR
+leaves possibly dirty under MODEL: no vector, or another model's.  One
+vertex read per vertex and no claim resolved: a typed MAP-VERTICES
+is snapshot-consistent, so it reads under the caller's snapshot
+(#80 item 1)."
+  (let ((suspects (make-hash-table :test 'equal)))
+    (gdb:map-vertices
+     (lambda (ev)
+       (when (or (null (endpoint-vector-value ev))
+                 (and model (string/= model (ev-model ev))))
+         (setf (gethash (cons (ev-namespace ev) (ev-key ev)) suspects)
+               t)))
+     graph :vertex-type 'endpoint-vector)
+    suspects))
+
 (defun dirty-endpoints (graph &optional model)
-  "The endpoints of GRAPH that need embedding under MODEL (SS4.1), from
-the vocabulary (count-index backed, #70).  Trap: opens a read snapshot,
-so it must not be called inside a transaction."
+  "The endpoints of GRAPH that need embedding under MODEL (SS4.1), in
+vocabulary order (count-index backed, #70).  The claim resolution that
+decides it -- is one belief current? -- is paid only for an endpoint
+with no vertex or one a vertex leaves suspect (%SUSPECT-ENDPOINTS):
+in steady state the few a write touched, not the vocabulary (#80 item
+1).  Trap: opens a read snapshot, so it must not be called inside a
+transaction."
   (with-scope-snapshots ((list graph))
-    (remove-if-not (lambda (ep)
-                     (endpoint-dirty-p graph (car ep) (cdr ep) model))
-                   (vocabulary-endpoints (vocabulary graph)))))
+    (let ((suspects (%suspect-endpoints graph model)))
+      (remove-if-not
+       (lambda (ep)
+         (and (or (gethash ep suspects)
+                  (null (endpoint-vector-of graph (car ep) (cdr ep))))
+              (endpoint-dirty-p graph (car ep) (cdr ep) model)))
+       (vocabulary-endpoints (vocabulary graph))))))
+
+(defparameter *materialise-batch* 256
+  "Vertices MATERIALISE-ENDPOINT-VECTORS creates per transaction: a
+pre-#78 store's first sweep is one short transaction per batch, not
+one over the whole vocabulary (#80 item 1).")
 
 (defun materialise-endpoint-vectors (graph)
   "Create a vector-less ENDPOINT-VECTOR (EV-MODEL \"\") for every
-vocabulary endpoint of GRAPH that has none, in one transaction; => the
-number created.  The drain runs this first so that in steady state it
-only ever UPDATES an existing node: VALIDATE reads write sets only, and
-a create is invisible there.  What makes a touch racing a drain a
-write-write conflict is TOUCH-ENDPOINTS' unconditional save, not this
-(SS4.3 step 2).  Trap: the survey reads committed state outside the
-transaction, so a concurrent first touch of the same endpoint can leave
-two vertices -- benign, there is no unique constraint (SS2.5)."
+vocabulary endpoint of GRAPH that has none, *MATERIALISE-BATCH* per
+transaction; => the number created.  The drain runs this first so that
+in steady state it only ever UPDATES an existing node: VALIDATE reads
+write sets only, and a create is invisible there.  What makes a touch
+racing a drain a write-write conflict is TOUCH-ENDPOINTS' unconditional
+save, not this (SS4.3 step 2).  Trap: the survey reads committed state
+outside the transactions, so a concurrent first touch of the same
+endpoint can leave two vertices -- benign, there is no unique
+constraint (SS2.5)."
   (let ((missing (with-scope-snapshots ((list graph))
                    (remove-if (lambda (ep)
                                 (endpoint-vector-of graph (car ep)
                                                     (cdr ep)))
                               (vocabulary-endpoints (vocabulary graph))))))
-    (when missing
-      (gdb:with-transaction (:graph graph)
-        (dolist (ep missing)
-          (make-endpoint-vector :graph graph :ev-namespace (car ep)
-                                :ev-key (cdr ep) :ev-model ""))))
+    ;; Each batch is a tail of MISSING, never a popped prefix: the
+    ;; engine re-runs a body whose commit failed validation.
+    (loop for batch on missing by (lambda (l)
+                                    (nthcdr *materialise-batch* l))
+          do (gdb:with-transaction (:graph graph)
+               (loop for ep in batch
+                     repeat *materialise-batch*
+                     do (make-endpoint-vector :graph graph
+                                              :ev-namespace (car ep)
+                                              :ev-key (cdr ep)
+                                              :ev-model ""))))
     (length missing)))
 
 (defun %store-vector (graph namespace key vector model)

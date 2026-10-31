@@ -221,8 +221,13 @@ every endpoint, stops at the first belief that is still current.
 
 Nothing records dirtiness: an endpoint **is** dirty when it has a
 current belief and its `endpoint-vector` holds no conforming vector, or
-one from another model. `dirty-endpoints` derives that from the store's
-vocabulary, so it survives a crash, an exit or a lost worker unchanged.
+one from another model. `dirty-endpoints` derives that from the store,
+so it survives a crash, an exit or a lost worker unchanged. It walks
+the `endpoint-vector` vertices first and asks the store whether a
+belief is current only for the endpoints that leave it in doubt -- no
+vertex, no vector, or another model's -- so in steady state a drain
+costs a claim resolution per endpoint a write touched, not per endpoint
+in the vocabulary (#80).
 
 `drain-endpoint-vectors` embeds that set in the calling thread and
 returns the number embedded, and as a second value the endpoints whose
@@ -230,8 +235,9 @@ profile outran the passes below. It takes an embedding *function* (text to
 a `(simple-array single-float (*))`) and a model name, never a
 `cl-llm/rag` embedder: `cl-llm/memory` depends on no LLM. Per store it
 first runs `materialise-endpoint-vectors`, which gives every vocabulary
-endpoint a vector-less vertex, so from then on the drain and the write
-path only ever update existing nodes.
+endpoint a vector-less vertex, `*materialise-batch*` (256) per
+transaction, so from then on the drain and the write path only ever
+update existing nodes.
 
 Then, per endpoint, up to `*embed-passes*` (4) passes of: render the
 profile under a read snapshot, call the embedder **outside every
