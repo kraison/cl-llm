@@ -237,8 +237,9 @@ out of passes."
   "GRAPH's vector segment for ENDPOINT-VECTOR.EMBEDDING, or NIL.
 Engine internals (facts E3): VECTOR-SEGMENTS is an EQUAL table keyed
 (owner-name . slot-name) by GRAPH-DB::%SEGMENT-KEY, and ENDPOINT-VECTOR
-declares EMBEDDING, so it is its own owner.  An export is asked of the
-engine (kraison/vivace-graph, exported segment reset)."
+declares EMBEDDING, so it is its own owner.  Only the dimension is
+read through it; the drop itself is the exported GDB:RESET-VECTOR-SEGMENT
+(vivace-graph GH #365)."
   (gethash '(endpoint-vector . embedding)
            (graph-db::vector-segments graph)))
 
@@ -248,16 +249,25 @@ DIMENSION, clear every vector and drop the segment so vectors of
 DIMENSION are accepted; => T when it reset, NIL otherwise -- with no
 segment nothing is indexed and the next write fixes the dimension.  An
 empty segment keeps its dimension, so clearing alone is not enough (E3).
-Must run before anything can search -- at start, before the listener
-and the worker (SS4.3 step 4): the engine's rebuild is documented
-unsafe against a concurrent VECTOR-SEARCH."
+
+Safe to run while the store serves (#80 review), which the worker's
+PREPARE does after a failed start-time probe.  Writers: the clear is
+one transaction, and GDB:RESET-VECTOR-SEGMENT drops the segment under
+the transaction manager's lock, so no commit interleaves -- a touch
+that clears a vector commits before it (and is swept as held nothing)
+or after it (and finds no segment to remove from).  Readers: a
+VECTOR-SEARCH holding the old segment gets SEGMENT-CLOSED and
+re-fetches (vivace-graph GH #54); and the planner does not search at
+all while its embedder is not READY, a flag PREPARE sets only after
+this returns.  Trap: a vector another writer stores between the clear
+and the drop makes the engine refuse with VECTOR-SEGMENT-IN-USE; the
+drain is the only such writer and it is this worker, not yet sweeping."
   (let ((seg (%endpoint-segment graph)))
     (when (and seg (/= dimension (graph-db::segment-dimension seg)))
       (%clear-endpoint-vectors graph)
-      ;; With every vector cleared this creates no segment at all: it
-      ;; closes the old one, drops the file, and the next conforming
-      ;; write fixes the new dimension (E3).
-      (graph-db::rebuild-vector-segment graph 'endpoint-vector 'embedding)
+      ;; Drops the segment and its file; the next conforming write
+      ;; creates one at the new dimension (E3, GH #365).
+      (gdb:reset-vector-segment graph 'endpoint-vector 'embedding)
       t)))
 
 ;;;; The worker (SS4.3): one thread per process, a sweep at start, a

@@ -105,10 +105,9 @@ stdout (#78 SS5)."
          :buffer-pool (parse-integer
                        (mcp:env "CL_LLM_MEMORY_BUFFER_POOL" "2000")))
       (setf *stores* stores *clock* clock)
-      ;; Before the server can serve a search: the dimension is known
-      ;; only from an embedding, and the engine's segment rebuild is
-      ;; unsafe against a concurrent search (#78 SS4.3 step 4).  A down
-      ;; or misconfigured embedder costs this run its index, never the
+      ;; Before the server can serve when the probe answers: the
+      ;; dimension is known only from an embedding (#78 SS4.3 step 4).
+      ;; A misconfigured embedder costs this run its index, never the
       ;; session -- the tools stay lexical and the client sees a server.
       (handler-case
           (let ((ee (mcp:embedder-from-env)))

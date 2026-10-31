@@ -288,9 +288,12 @@ One thread per process that has an embedder, started by
    clears every such vector in one transaction at start
    (`clear-foreign-endpoint-vectors`, #80 item 2), so the top-k is
    lexical-only rather than poisoned until the sweep catches up. A
-   *dimension* change cannot be handled by the worker: an empty segment
-   keeps its dimension and the engine's only drop is unsafe against a
-   concurrent search (facts E3). So each entry point, after opening the
+   *dimension* change cannot be handled by the drain: an empty segment
+   keeps its dimension (facts E3; the engine's drop was then unsafe
+   against a concurrent search -- since GH #54 and #365 it runs under
+   the transaction manager's lock and a reader re-fetches, which is
+   what lets the worker's PREPARE below run it while the store
+   serves). So each entry point, after opening the
    stores and before starting the listener or the worker, embeds one
    probe string, and when the segment's dimension differs it clears
    every vector in one transaction and rebuilds the segment

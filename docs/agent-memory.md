@@ -263,10 +263,14 @@ searches the segment and answers `((namespace . key) . cosine)` best
 first, one entry per endpoint.
 
 A *dimension* change is not something the drain can absorb: an empty
-segment keeps its dimension, and the engine's only drop is unsafe
-against a concurrent search. `reset-endpoint-segment` clears every
-vector and drops the segment, returning `T` when it reset; it must run
-at start, before anything can search (spec SS4.3). A *model* change
+segment keeps its dimension. `reset-endpoint-segment` clears every
+vector in one transaction and drops the segment through the engine's
+`reset-vector-segment`, returning `T` when it reset. The drop runs
+under the transaction manager's lock, so no commit interleaves, and a
+search holding the old segment re-fetches (vivace-graph GH #54, #365):
+it may run while the store serves, which is what lets the worker
+finish a cold start (#80). The entry points still run it before the
+listener when the probe answers at start. A *model* change
 is one the drain does absorb, but not soon enough for the top-k: the
 segment answers its `k` nearest before `nearest-endpoints` filters by
 model, and a cross-model cosine is noise, so the previous model's
@@ -935,16 +939,17 @@ serve lexically until it catches up, and no query blocks.
 **A dimension change resets.** The vector segment holds one dimension.
 Each entry point embeds a single probe string at start, and resets the
 segment when the dimension differs -- before the listener accepts a
-connection and before the worker starts, because the engine's segment
-rebuild is unsafe against a concurrent search. Every vector is dropped
-and re-made from scratch, and the start line says so. An embedder that
+connection and before the worker starts. Every vector is dropped and
+re-made from scratch, and the start line says so. An embedder that
 will not answer that probe is reported once on stderr and leaves the
 index off until the worker's retry of the probe succeeds (above): the
 image still serves its store and its SWANK, and the solo server still
-completes the handshake, five seconds later. The worker's reset is as
-safe as the start's because nothing searches the segment while the
-embedder is not ready -- `retrieve` and `plan-bounds` are lexical
-until the probe answers.
+completes the handshake, five seconds later. The worker's reset runs
+while connections are served, and is safe there: the engine drops the
+segment under the transaction manager's lock, so no `conclude` commits
+across it; a search that still holds the old segment re-fetches; and
+`retrieve` and `plan-bounds` do not search at all until the probe
+answers, since the ready flag is set only after the reset returns.
 
 ### Telling an agent to use it
 

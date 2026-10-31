@@ -112,11 +112,10 @@ store another image left dirty."
               (gdb:make-graph name store :buffer-pool-size pool
                               :system-clock *clock*)))
     (setf gdb:*graph* *graph*)
-    ;; Before the listener and the worker: the dimension is known only
-    ;; from an embedding, and the engine's segment rebuild is unsafe
-    ;; against a concurrent search (#78 SS4.3 step 4).  Guarded like the
-    ;; listener below -- a down or misconfigured embedder costs this run
-    ;; its index, never the image's store or its REPL.
+    ;; Before the listener and the worker when the probe answers: the
+    ;; dimension is known only from an embedding (#78 SS4.3 step 4).
+    ;; Guarded like the listener below -- a misconfigured embedder
+    ;; costs this run its index, never the image's store or its REPL.
     (handler-case
         (let ((ee (mcp:embedder-from-env)))
           (when ee

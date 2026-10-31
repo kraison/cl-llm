@@ -363,6 +363,52 @@ removes them in one transaction and leaves their endpoints dirty."
                                             :model "n"))))
     (is (null (mem:reset-endpoint-segment g 8)) "same dimension: no-op")))
 
+(test the-reset-drops-the-segment-under-the-commit-lock
+  "#80 review: the worker's PREPARE resets while the store serves, so
+the drop must exclude commits.  The engine's reset closes the old
+segment under the transaction manager's lock -- the lock every commit
+takes -- and this watches that it does: the close runs inside a
+CALL-WITH-TRANSACTION-MANAGER-LOCK.  Readers need no exclusion: a
+search holding the old segment re-fetches on SEGMENT-CLOSED (GH #54),
+and the planner does not search before READY, set after the reset."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 4)
+                                         :model "m")
+    (let ((old-lock (fdefinition 'graph-db::call-with-transaction-manager-lock))
+          (old-close (fdefinition 'graph-db::close-vector-segment))
+          (depth 0)
+          (closed 0)
+          (closed-under-lock nil)
+          (result nil))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'graph-db::call-with-transaction-manager-lock)
+                   (lambda (fn tm)
+                     (funcall old-lock
+                              (lambda ()
+                                (incf depth)
+                                (unwind-protect (funcall fn)
+                                  (decf depth)))
+                              tm))
+                   (fdefinition 'graph-db::close-vector-segment)
+                   (lambda (segment)
+                     (incf closed)
+                     (setf closed-under-lock (plusp depth))
+                     (funcall old-close segment)))
+             (setf result (mem:reset-endpoint-segment g 8)))
+        (setf (fdefinition 'graph-db::call-with-transaction-manager-lock)
+              old-lock
+              (fdefinition 'graph-db::close-vector-segment) old-close))
+      (is (eq t result) "control: the segment was reset")
+      (is (= 1 closed) "control: the old segment was closed once")
+      (is-true closed-under-lock
+               "and closed under the transaction manager's lock, so no ~
+                commit interleaved"))
+    (is (= 2 (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 8)
+                                                  :model "n"))
+        "and the new dimension is accepted")))
+
 (test the-drain-skips-a-failing-embedder-and-keeps-the-endpoint-dirty
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
