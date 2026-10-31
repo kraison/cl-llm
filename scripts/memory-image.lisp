@@ -196,10 +196,9 @@ snapshot (unbounded work before the .dirty marker clears; a backup is a
 separate operation), then the clock; never signals, but a close that
 fails says so on stderr.  The worker writes to the store, so it is
 joined first -- under a bound, so a hung embedder cannot hold the exit.
-The exit hook: SBCL runs
-*EXIT-HOOKS* on SIGTERM (measured in docs/superpowers/notes/
-2026-09-06-memory-mcp-engine-api-facts.md E5), so a stop from the shell
-or systemd leaves no .dirty marker."
+The exit hook; a SIGTERM reaches it on the main thread through
+%EXIT-FROM-THE-MAIN-THREAD (#84), so a stop from the shell or systemd
+leaves no .dirty marker."
   (when *indexer*
     ;; The embedder's own bound (MCP:%BOUNDED-EMBED, 30 s) plus a
     ;; margin: past that the worker is abandoned rather than allowed to
@@ -228,6 +227,25 @@ or systemd leaves no .dirty marker."
 ;; :abort t, which skips the hooks.  The listener's own failures never
 ;; reach here: START reports and skips it.
 (push #'stop sb-ext:*exit-hooks*)
+
+(defun %exit-from-the-main-thread (signal info context)
+  "The SIGTERM handler: EXIT on the main thread, whichever thread the
+kernel delivered the signal to.  SBCL's own handler EXITs on the
+receiving thread, whose unwind then runs *EXIT-HOOKS* -- so a SIGTERM
+landing on the listener or the indexer ran STOP on the very thread it
+joins (#84; the E5 measurement in docs/superpowers/notes/
+2026-09-06-memory-mcp-engine-api-facts.md was single-threaded).
+Interrupting the main thread makes every delivery the one measured:
+its unwind runs the hook once, with every other thread still up.  A
+main thread already gone falls back to exiting here."
+  (declare (ignore signal info context))
+  (let ((main (sb-thread:main-thread)))
+    (if (eq main sb-thread:*current-thread*)
+        (sb-ext:exit)
+        (handler-case (sb-thread:interrupt-thread main #'sb-ext:exit)
+          (sb-thread:interrupt-thread-error () (sb-ext:exit))))))
+;; With the hook, before START: the store is never open without both.
+(sb-sys:enable-interrupt sb-unix:sigterm #'%exit-from-the-main-thread)
 
 (handler-case (start)
   (gdb:store-not-closed-cleanly-error (c)

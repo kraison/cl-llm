@@ -647,7 +647,11 @@ index nomic-embed-text floor 0.55 (key: none); graph-db /path/to/engine/
 
 The image refuses a store left dirty (`store-not-closed-cleanly-error`,
 exit 1) rather than open a torn one; the exit hook closes the graph on
-SIGTERM, so a clean stop leaves no marker. Its package,
+SIGTERM, so a clean stop leaves no marker. The image handles SIGTERM
+itself and exits from the main thread whichever thread the kernel
+delivered it to, so the hook never runs on the listener or indexer
+thread it has to join (kraison/cl-llm#84); the solo server does the
+same. Its package,
 `cl-llm.memory-image`, holds `*graph*` (also bound as `gdb:*graph*`)
 and `*producer*`, with local nicknames `mem`, `gdb`, `st` and `agent`.
 

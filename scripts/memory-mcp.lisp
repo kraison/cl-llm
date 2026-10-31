@@ -56,7 +56,9 @@ session its server."
   "Stop the indexer -- it writes to the stores, so it is joined first,
 under a bound -- then close every store and the clock; never signals,
 but a close that fails says so on stderr (MCP:CLOSE-SCOPE);
-idempotent.  The exit hook, so SIGTERM leaves no .dirty marker (SS6)."
+idempotent.  The exit hook, reached on the main thread on SIGTERM
+(%EXIT-FROM-THE-MAIN-THREAD, #84), so a stop leaves no .dirty marker
+(SS6)."
   (when *indexer*
     ;; The embedder's own bound (MCP:%BOUNDED-EMBED, 30 s) plus a
     ;; margin: past that the worker is abandoned rather than allowed to
@@ -144,6 +146,17 @@ no-op on the two refusal paths, where nothing opened."
   (finish-output *error-output*)
   (sb-ext:exit :code 1 :abort t))
 
+(defun %exit-from-the-main-thread (signal info context)
+  "The SIGTERM handler: EXIT on the main thread, whichever thread the
+kernel delivered the signal to, so the hook runs STOP there and never
+on the worker STOP joins (#84; the long form is memory-image.lisp's)."
+  (declare (ignore signal info context))
+  (let ((main (sb-thread:main-thread)))
+    (if (eq main sb-thread:*current-thread*)
+        (sb-ext:exit)
+        (handler-case (sb-thread:interrupt-thread main #'sb-ext:exit)
+          (sb-thread:interrupt-thread-error () (sb-ext:exit))))))
+
 (let ((server
         ;; stdout carries JSON-RPC only, so the open's logging goes to
         ;; stderr by binding, not by trusting the engine's stream.
@@ -161,6 +174,7 @@ no-op on the two refusal paths, where nothing opened."
   ;; Only once the scope is open: every failure above leaves through
   ;; %DIE, which stops the scope itself before exiting with no hook.
   (push #'stop sb-ext:*exit-hooks*)
+  (sb-sys:enable-interrupt sb-unix:sigterm #'%exit-from-the-main-thread)
   ;; One worker per process, started outside START's *STANDARD-OUTPUT*
   ;; binding: it logs to the *ERROR-OUTPUT* of this call, which here is
   ;; the process's stderr -- stdout carries JSON-RPC only (#78 SS4.3).
