@@ -289,6 +289,16 @@ clock across a scope, so one trace never mixes axes."
   (let ((epoch (st:claim-commit-epoch outcome)))
     (and (integerp epoch) (gdb:graph-system-clock graph) epoch)))
 
+(defmacro with-trace-reads ((scope) &body body)
+  "BODY under SCOPE's snapshots with *SCOPE-RECALLS* bound to a fresh
+memo table, unless a caller already bound one -- TRACE-LISTING's spans
+every TRACE under it (#55).  The table is made inside the snapshots so
+it never outlives the reads it was filled under."
+  `(with-scope-snapshots (,scope)
+     (let ((*scope-recalls* (or *scope-recalls*
+                                (make-hash-table :test 'equal))))
+       ,@body)))
+
 (defun %resolve-in (cite store-name graph scope at epoch)
   "CITE resolved in the store its evidence claim named, when that store
 is in SCOPE; unit-1 evidence (no store) resolves in GRAPH; a store out
@@ -317,7 +327,7 @@ clocked scope and at its recorded instant otherwise; the record's AXIS
 says which (#53).  Runs under the scope's snapshots (S6b)."
   ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
   (check-scope scope :write-store graph)
-  (with-scope-snapshots (scope)
+  (with-trace-reads (scope)
     (let* ((g (find-if (lambda (s) (%decision-claims s decision-id))
                        scope))
            (claims (and g (%decision-claims g decision-id)))
@@ -382,7 +392,7 @@ under the scope's snapshots, once, so the listing is one consistent
 read (S6b)."
   ;; GRAPH must be in SCOPE (SS3); :WRITE-STORE is the membership check.
   (check-scope scope :write-store graph)
-  (with-scope-snapshots (scope)
+  (with-trace-reads (scope)
     (loop for id in decision-ids
           for rec = (trace graph id :scope scope)
           collect (if (null rec)

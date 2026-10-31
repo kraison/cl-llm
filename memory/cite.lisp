@@ -125,6 +125,35 @@ so one store can hold two nodes carrying it."
                  matches)
         (first matches))))
 
+(defvar *scope-recalls* nil
+  "NIL, or an EQUAL hash table memoising %SCOPE-RECALL's rows per
+(namespace key relation producer) for the extent of one TRACE or
+TRACE-LISTING call (#55).  Sound only under one set of snapshots, so a
+binder makes a fresh table inside WITH-SCOPE-SNAPSHOTS and never
+shares it across calls.")
+
+(defun %scope-recall (claim scope)
+  "CLAIM's series over SCOPE, retracted included, as %NOTE-SUPERSESSION
+asks RECALL for it: one RECALL per (subject relation producer) under a
+bound *SCOPE-RECALLS*, every call otherwise (#55)."
+  (flet ((run ()
+           (recall (first scope)
+                   (cons (st:claim-subject-namespace claim)
+                         (st:claim-subject-key claim))
+                   :relation (st:claim-relation claim)
+                   :producer (st:claim-producer claim)
+                   :include-retracted t :scope scope)))
+    (if (null *scope-recalls*)
+        (run)
+        (let ((key (list (st:claim-subject-namespace claim)
+                         (st:claim-subject-key claim)
+                         (st:claim-relation claim)
+                         (st:claim-producer claim))))
+          (multiple-value-bind (rows found) (gethash key *scope-recalls*)
+            (if found
+                rows
+                (setf (gethash key *scope-recalls*) (run))))))))
+
 (defun %note-supersession (record graph scope)
   "RECORD amended when a store in SCOPE holds a claim superseding the
 one it resolved to, under RECALL's trust rule (#53): CHANGED-SINCE
@@ -132,19 +161,15 @@ becomes :SUPERSEDED and SUPERSEDED-BY (cite . store-name).  Beliefs
 only, and only where %CHANGED-SINCE found nothing and the claim is
 still open: inside one store a supersession closes the predecessor's
 validity, so only another store can hide one.  GRAPH is the store
-RECORD resolved in.  Returns RECORD."
+RECORD resolved in.  The recall is memoised under *SCOPE-RECALLS*
+(#55).  Returns RECORD."
   (let ((claim (cite-record-claim record)))
     (when (and (rest scope)
                (eq :resolved (cite-record-state record))
                (eq 'belief (cite-record-family record))
                (null (cite-record-changed-since record))
                (%open-p claim))
-      (let* ((rows (recall (first scope)
-                           (cons (st:claim-subject-namespace claim)
-                                 (st:claim-subject-key claim))
-                           :relation (st:claim-relation claim)
-                           :producer (st:claim-producer claim)
-                           :include-retracted t :scope scope))
+      (let* ((rows (%scope-recall claim scope))
              (row (%recall-row rows graph (st:claim-identity-key claim)))
              (succ (and row (belief-record-superseded-by row))))
         (when succ
