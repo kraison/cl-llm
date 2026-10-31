@@ -396,7 +396,9 @@ and "rollback" land near each other and an unrelated word lands
 nowhere; it is deterministic and needs no service. Every assertion
 below is exact under it. One test tagged for a live model runs only when
 `CL_LLM_MEMORY_EMBED_URL` is set in the test environment, as the mcp
-suite gates its child-process tests.
+suite gates its child-process tests (written for #80 item 4, in the
+agent suite: test 1 and test 2 below against that model at the
+operator's `CL_LLM_MEMORY_EMBED_FLOOR`, skipped without the URL).
 
 1. **Paraphrase recovery.** A belief under an incident endpoint whose
    key shares no token with the query; the query's paraphrase routes to

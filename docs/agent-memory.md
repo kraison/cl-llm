@@ -910,7 +910,11 @@ image's REPL, over SWANK:
 ```
 
 Run a handful of real queries -- ones that should hit and ones that
-should not -- and put the floor in the gap between them.
+should not -- and put the floor in the gap between them. Then check
+it: with `CL_LLM_MEMORY_EMBED_URL`, `_MODEL` and `_FLOOR` exported,
+the agent suite (`cl-llm/agent/tests`) runs one test against that
+model at that floor -- a paraphrase must route and an unrelated query
+must still refuse -- and skips it when the URL is not set (#80).
 
 **A model change re-embeds.** Every vector records the model that made
 it, and `nearest-endpoints` ignores another model's. Point

@@ -242,6 +242,90 @@ does, and retrieve cites the belief.  Control: no embedder refuses."
         (is (search "replica-checksum-mismatch"
                     (json:jget (elt (json:jget r "evidence") 0) "text")))))))
 
+(defun %live-embedder ()
+  "The embedder CL_LLM_MEMORY_EMBED_URL, _MODEL, _FLOOR and (where
+the host wants one) _KEY name, as the entry points build it from the
+same variables, or NIL when the URL is unset or empty.  Built here
+rather than by MCP:EMBEDDER-FROM-ENV: this suite does not load
+cl-llm/agent/mcp.  The floor is read as a number only, nothing
+interned and nothing evaluated."
+  (let ((url (uiop:getenv "CL_LLM_MEMORY_EMBED_URL")))
+    (when (and url (plusp (length url)))
+      (let ((model (uiop:getenv "CL_LLM_MEMORY_EMBED_MODEL"))
+            (floor (uiop:getenv "CL_LLM_MEMORY_EMBED_FLOOR"))
+            (key (uiop:getenv "CL_LLM_MEMORY_EMBED_KEY")))
+        (unless (and model floor (plusp (length model))
+                     (plusp (length floor)))
+          (error "CL_LLM_MEMORY_EMBED_MODEL and _FLOOR are required ~
+                  with a URL"))
+        (agent:make-endpoint-embedder
+         (rag:make-openai-compatible-embedder
+          :base-url url :model model
+          :api-key (and key (plusp (length key)) key))
+         :floor (let ((f (with-standard-io-syntax
+                           (let ((*read-eval* nil)
+                                 (*package* (find-package :keyword)))
+                             (read-from-string floor)))))
+                  (unless (realp f)
+                    (error "CL_LLM_MEMORY_EMBED_FLOOR must be a real, ~
+                            not ~s" floor))
+                  f))))))
+
+(test a-live-model-routes-a-paraphrase-at-the-configured-floor
+  "#78 SS7, the live-model test (#80 item 4): opt-in on
+CL_LLM_MEMORY_EMBED_URL with _MODEL and _FLOOR -- the entry points'
+own variables -- and skipped otherwise, as CL_LLM_LIVE gates the live
+suites.  The synonym table is exact by construction; this is the one
+run against a real model at the operator's floor, so it is where a
+floor that no longer separates a paraphrase from an unrelated query
+shows: the first failure below means the floor is too high, the last
+that it is too low (docs/agent-memory.md, picking a floor)."
+  (let ((ee (%live-embedder)))
+    (if (null ee)
+        (skip "CL_LLM_MEMORY_EMBED_URL is not set.")
+        (with-stores (w p)
+          (%belief w "root-cause" '(:cause . "replica-checksum-mismatch")
+                   :subject '(:incident . "ledger-rollback-2026-08-30"))
+          ;; A decoy that shares no token with the query either.
+          (%belief w "owner" '(:person . "kevin")
+                   :subject '(:repo . "cl-llm"))
+          (let ((tools (agent:make-agent-tools (list w p) :producer +p+
+                                               :embedder ee))
+                (plain (agent:make-agent-tools (list w p) :producer +p+))
+                (q "why was the deployment reverted in august"))
+            (multiple-value-bind (n unsettled) (%drain (list w) ee)
+              (is (= 4 n) "control: every endpoint embedded, got ~d" n)
+              (is (null unsettled)))
+            (is (every (lambda (ep)
+                         (string= (agent:endpoint-embedder-model ee)
+                                  (mem:ev-model
+                                   (mem:endpoint-vector-of w (car ep)
+                                                           (cdr ep)))))
+                       '((:incident . "ledger-rollback-2026-08-30")
+                         (:cause . "replica-checksum-mismatch")))
+                "each vector records the live model's name")
+            (signals llm:llm-tool-error (%call plain "retrieve" "query" q))
+            (let* ((r (%call tools "retrieve" "query" q))
+                   (eps (coerce (json:jget r "endpoints") 'list)))
+              (is (equal "incident:ledger-rollback-2026-08-30" (first eps))
+                  "the paraphrase routes to the incident first (a floor ~
+                   too high, or a model that does not place it there): ~a"
+                  eps)
+              (is (some (lambda (e)
+                          (search "replica-checksum-mismatch"
+                                  (json:jget e "text")))
+                        (coerce (json:jget r "evidence") 'list))
+                  "and retrieve cites the belief"))
+            (handler-case
+                (progn (%call tools "retrieve"
+                              "query" "a recipe for sourdough bread")
+                       (fail "an unrelated query must refuse: the floor ~
+                              is too low for this model"))
+              (llm:llm-tool-error (e)
+                (is (search "no endpoint recognised"
+                            (princ-to-string (llm:llm-error-underlying
+                                              e)))))))))))
+
 (test retrieve-is-lexical-while-the-embedder-is-not-ready
   "#80 item 3: a cold start.  While the entry point's probe has not
 answered the embedder is not READY: the paraphrase refuses as it would

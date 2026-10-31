@@ -46,3 +46,10 @@ hand, from a checkout with a key exported:
 ```bash
 CL_LLM_LIVE=1 sbcl --eval '(asdf:test-system :cl-llm/agent/live)'
 ```
+
+One test in the offline agent suite is gated the same way on the
+semantic index's own variables (#80): with `CL_LLM_MEMORY_EMBED_URL`,
+`_MODEL` and `_FLOOR` exported, the agent suite runs the paraphrase
+routing of spec 2026-09-10 SS7 against that live model at that floor,
+and skips it otherwise -- so CI, which exports none of them, never
+embeds anything.
