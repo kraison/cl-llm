@@ -510,7 +510,10 @@ record says which (`decision-record-axis`, `:epoch` or `:instant`).
 system clock is the engine's `epoch-axis-unavailable`, a caller error.
 `changed-since` reports a supersession from another store under the
 trust rule: `:superseded`, with `cite-record-superseded-by` holding
-the successor's `(cite . store-name)`.
+the successor's `(cite . store-name)`. That check is one `recall` over
+the scope per cited series; `trace` and `trace-listing` run it once
+per (subject, relation, producer) for the extent of one call, however
+many rows cite the series (#55).
 
 ## Banners
 

@@ -494,6 +494,63 @@ is less trusted and may not supersede."
             "control: P is less trusted; it may not supersede")
         (is (null (mem:cite-record-superseded-by ev)))))))
 
+(defun %call-counting-recalls (fn)
+  "FN called with a thunk answering how many times RECALL has run so
+far, RECALL wrapped to count and restored on exit."
+  (let ((recall (fdefinition 'mem:recall)) (n 0))
+    (unwind-protect
+         (progn
+           (setf (fdefinition 'mem:recall)
+                 (lambda (&rest args) (incf n) (apply recall args)))
+           (funcall fn (lambda () n)))
+      (setf (fdefinition 'mem:recall) recall))))
+
+(defun %evidence-row (listing-row cite)
+  (find cite (fourth listing-row) :key #'first :test #'string=))
+
+(test trace-recalls-each-cited-series-once-per-call
+  "#55: under a multi-store scope every open belief cite costs one
+RECALL over the scope to learn of a supersession elsewhere.  Two
+decisions citing the same two beliefs and concluding two relations: a
+TRACE-LISTING of both recalls once per (subject relation producer) --
+the two cited series and the two conclusions, four -- not once per
+resolved row, six.  The memo lasts one call: a lone TRACE recalls its
+three, and a second TRACE recalls them again, since a table kept
+across calls would miss a write between them.  The verdicts are those
+of the #53 test on every row: W's green is superseded by the more
+trusted P, blue is not."
+  (with-two-stores (w p)
+    (let* ((green (%belief-in w "ci-status" '(:verdict . "green")))
+           (blue (%belief-in w "last-push" '(:sha . "abc")))
+           (d1 (mem:conclude w (list :belief +ss+ "releasable"
+                                     '(:v . "yes") :standing :inferred)
+                             :producer +p+ :evidence (list green blue)
+                             :rule "r"))
+           (d2 (mem:conclude w (list :belief +ss+ "deployable"
+                                     '(:v . "yes") :standing :inferred)
+                             :producer +p+ :evidence (list green blue)
+                             :rule "r"))
+           (ids (list (mem:decision-id d1) (mem:decision-id d2))))
+      (gdb:with-transaction (:graph p)
+        (mem:record-belief p +ss+ "ci-status" '(:verdict . "red")
+                           :producer +p+ :standing :observed
+                           :extent (%open-from
+                                    (%ts "2026-09-02T08:00:00Z"))))
+      (%call-counting-recalls
+       (lambda (count)
+         (let ((rows (mem:trace-listing w ids :scope (list p w))))
+           (is (= 4 (funcall count)) "one recall per cited series")
+           (is (= 2 (length rows)))
+           (dolist (row rows)
+             (is (equal (list (mem:claim-cite green) :resolved :superseded)
+                        (%evidence-row row (mem:claim-cite green))))
+             (is (equal (list (mem:claim-cite blue) :resolved nil)
+                        (%evidence-row row (mem:claim-cite blue))))))
+         (mem:trace w (first ids) :scope (list p w))
+         (is (= 7 (funcall count)) "a lone TRACE recalls its three")
+         (mem:trace w (first ids) :scope (list p w))
+         (is (= 10 (funcall count)) "and a second call recalls again"))))))
+
 (test trace-on-a-clockless-store-uses-the-instant-axis
   "SS7 (#53): a store with no system clock still numbers its
 transactions, but those epochs are a private counter -- the engine
