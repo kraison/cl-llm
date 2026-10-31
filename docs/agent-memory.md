@@ -221,8 +221,13 @@ every endpoint, stops at the first belief that is still current.
 
 Nothing records dirtiness: an endpoint **is** dirty when it has a
 current belief and its `endpoint-vector` holds no conforming vector, or
-one from another model. `dirty-endpoints` derives that from the store's
-vocabulary, so it survives a crash, an exit or a lost worker unchanged.
+one from another model. `dirty-endpoints` derives that from the store,
+so it survives a crash, an exit or a lost worker unchanged. It walks
+the `endpoint-vector` vertices first and asks the store whether a
+belief is current only for the endpoints that leave it in doubt -- no
+vertex, no vector, or another model's -- so in steady state a drain
+costs a claim resolution per endpoint a write touched, not per endpoint
+in the vocabulary (#80).
 
 `drain-endpoint-vectors` embeds that set in the calling thread and
 returns the number embedded, and as a second value the endpoints whose
@@ -230,8 +235,9 @@ profile outran the passes below. It takes an embedding *function* (text to
 a `(simple-array single-float (*))`) and a model name, never a
 `cl-llm/rag` embedder: `cl-llm/memory` depends on no LLM. Per store it
 first runs `materialise-endpoint-vectors`, which gives every vocabulary
-endpoint a vector-less vertex, so from then on the drain and the write
-path only ever update existing nodes.
+endpoint a vector-less vertex, `*materialise-batch*` (256) per
+transaction, so from then on the drain and the write path only ever
+update existing nodes.
 
 Then, per endpoint, up to `*embed-passes*` (4) passes of: render the
 profile under a read snapshot, call the embedder **outside every
@@ -257,10 +263,21 @@ searches the segment and answers `((namespace . key) . cosine)` best
 first, one entry per endpoint.
 
 A *dimension* change is not something the drain can absorb: an empty
-segment keeps its dimension, and the engine's only drop is unsafe
-against a concurrent search. `reset-endpoint-segment` clears every
-vector and drops the segment, returning `T` when it reset; it must run
-at start, before anything can search (spec SS4.3).
+segment keeps its dimension. `reset-endpoint-segment` clears every
+vector in one transaction and drops the segment through the engine's
+`reset-vector-segment`, returning `T` when it reset. The drop runs
+under the transaction manager's lock, so no commit interleaves, and a
+search holding the old segment re-fetches (vivace-graph GH #54, #365):
+it may run while the store serves, which is what lets the worker
+finish a cold start (#80). The entry points still run it before the
+listener when the probe answers at start. A *model* change
+is one the drain does absorb, but not soon enough for the top-k: the
+segment answers its `k` nearest before `nearest-endpoints` filters by
+model, and a cross-model cosine is noise, so the previous model's
+vectors crowd the current one's out until the sweep has reached every
+endpoint. `clear-foreign-endpoint-vectors` drops them in one
+transaction, returning the count; the entry points run it at start
+beside the reset (#80).
 
 ### The worker
 
@@ -292,6 +309,13 @@ for its own notify; without one the endpoint waits for the worker's
 next sweep, and stays reachable lexically meanwhile. The agent
 side of this -- `make-agent-tools`' `:embedder`, and how `retrieve`
 uses the index -- is in `docs/agent-tools.md`.
+
+`start-endpoint-indexer` also takes `:prepare`, a function of no
+arguments the worker calls before its first sweep and retries on the
+same backoff until it returns true, `:prepare-attempts`
+(`*prepare-attempts*`, 10) times; past that it logs that the index
+stays off, answers `endpoint-indexer-off-p` and stops. The entry
+points hand it their probe when the start-time one failed (#80).
 
 A failed drain is logged to `*error-output*` once per outage, not once
 per attempt -- `drain failed: ...`, so named because the guard covers
@@ -837,19 +861,36 @@ GPU box elsewhere on the tailnet serves both modes.
 <model> floor <f> (key: <source>)` or `index off`; the solo server
 writes the same to stderr, prefixed `memory mcp:`, and neither is
 silent about a reset -- `semantic index: segment reset to dimension
-<n>` means every vector in that store was just dropped. A failure is
+<n>` means every vector in that store was just dropped, and `semantic
+index: cleared <n> vectors of another model` that a model change did
+the same to the previous model's. A failure is
 one line, `semantic index off: ...`, distinguishing an embedder that
 would not answer from an engine error while resetting.
 
 **Both round trips are bounded**, because the LLM layer's defaults
 (60 s, three retries) are for a completion someone is watching. The
-start-up probe waits **5 s** and does not retry: a typo in the URL
-costs the handshake five seconds, not three minutes. A worker embedding
-waits **30 s** and does not retry either -- the indexer's own doubling
-backoff is the retry policy, and an unbounded one would hold `SIGTERM`
-inside the worker's join with the store still marked dirty. A cold
-local model that takes longer than 5 s to answer leaves the index off
-for this run; restart once it is warm.
+start-up probe waits **5 s** and does not retry in line: a typo in
+the URL costs the handshake five seconds, not three minutes. A worker
+embedding waits **30 s** and does not retry either -- the indexer's
+own doubling backoff is the retry policy, and an unbounded one would
+hold `SIGTERM` inside the worker's join with the store still marked
+dirty. A cold local model that takes longer than 5 s to answer does
+not lose the run its index (#80): the start line reads `semantic
+index: probe failed: ...; lexical until the worker's retry succeeds`
+(the image's banner says `probe pending`), the tools are lexical
+meanwhile, and the worker retries the probe on its backoff before its
+sweep -- `*prepare-attempts*` (10) times, the last about four minutes
+after the first -- then resets and sweeps as a start would have
+(`endpoint indexer: ready after N failed attempts; sweeping`). Past
+the bound it logs `the semantic index stays off for this run` and
+stops; only then is a restart needed. Only a failure that can recover
+is retried -- a connection refused, no such host, a dropped socket, a
+timeout, a rate limit, a 5xx (`mcp:probe-retry-p`). A wrong
+`CL_LLM_MEMORY_EMBED_KEY` (401), a model the endpoint lacks (404) or
+any other 4xx is a misconfiguration: the start turns the index off at
+once, `semantic index off: LLM API error 401 from ...`, as does an
+engine error, and a retry that meets one stops the worker the same
+way.
 
 **The worker.** Each process runs one endpoint indexer (the memory
 image, or each solo server). It sweeps at start, then drains after
@@ -883,23 +924,35 @@ image's REPL, over SWANK:
 ```
 
 Run a handful of real queries -- ones that should hit and ones that
-should not -- and put the floor in the gap between them.
+should not -- and put the floor in the gap between them. Then check
+it: with `CL_LLM_MEMORY_EMBED_URL`, `_MODEL` and `_FLOOR` exported,
+the agent suite (`cl-llm/agent/tests`) runs one test against that
+model at that floor -- a paraphrase must route and an unrelated query
+must still refuse -- and skips it when the URL is not set (#80).
 
 **A model change re-embeds.** Every vector records the model that made
 it, and `nearest-endpoints` ignores another model's. Point
-`CL_LLM_MEMORY_EMBED_MODEL` at a different model and the whole store is
-re-embedded in the background over the next drains; the tools serve
-lexically until it catches up, and no query blocks.
+`CL_LLM_MEMORY_EMBED_MODEL` at a different model and the next start
+drops the previous model's vectors in one transaction (`semantic
+index: cleared <n> vectors of another model`) -- left in the segment
+they would crowd the new model's out of every top-k -- and the whole
+store is re-embedded in the background over the next drains; the tools
+serve lexically until it catches up, and no query blocks.
 
 **A dimension change resets.** The vector segment holds one dimension.
 Each entry point embeds a single probe string at start, and resets the
 segment when the dimension differs -- before the listener accepts a
-connection and before the worker starts, because the engine's segment
-rebuild is unsafe against a concurrent search. Every vector is dropped
-and re-made from scratch, and the start line says so. An embedder that
+connection and before the worker starts. Every vector is dropped and
+re-made from scratch, and the start line says so. An embedder that
 will not answer that probe is reported once on stderr and leaves the
-index off for that run: the image still serves its store and its SWANK,
-and the solo server still completes the handshake, five seconds later.
+index off until the worker's retry of the probe succeeds (above): the
+image still serves its store and its SWANK, and the solo server still
+completes the handshake, five seconds later. The worker's reset runs
+while connections are served, and is safe there: the engine drops the
+segment under the transaction manager's lock, so no `conclude` commits
+across it; a search that still holds the old segment re-fetches; and
+`retrieve` and `plan-bounds` do not search at all until the probe
+answers, since the ready flag is set only after the reset returns.
 
 ### Telling an agent to use it
 

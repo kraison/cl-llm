@@ -108,6 +108,90 @@ i.e. between the render and the store transaction (#78 SS4.3 step 2)."
     (is (= 0 (mem:materialise-endpoint-vectors g))
         "a second pass creates nothing")))
 
+(test materialise-creates-in-batches
+  "#80 item 1: a pre-#78 store's first sweep is one transaction per
+*MATERIALISE-BATCH* vertices, not one over the whole vocabulary; the
+count and the vertices are the same whatever the batch."
+  (with-memory-graph (g)
+    ;; Three endpoints with no vertex: RECORD-ABSENCE touches nothing.
+    (gdb:with-transaction (:graph g)
+      (dolist (k '("a" "b" "c"))
+        (mem:record-absence g (cons :incident k) "postmortem"
+                            :producer +p+ :standing :searched-empty)))
+    (let ((old (fdefinition 'graph-db::call-with-transaction))
+          (transactions 0)
+          (created nil))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'graph-db::call-with-transaction)
+                   (lambda (fn tm)
+                     (incf transactions)
+                     (funcall old fn tm)))
+             (let ((mem:*materialise-batch* 2))
+               (setf created (mem:materialise-endpoint-vectors g))))
+        (setf (fdefinition 'graph-db::call-with-transaction) old))
+      (is (= 3 created))
+      (is (= 2 transactions)
+          "two batches of two for three endpoints, got ~a" transactions)
+      (dolist (k '("a" "b" "c"))
+        (is-true (mem:endpoint-vector-of g :incident k)
+                 "~a has a vertex" k))
+      (is (= 0 (mem:materialise-endpoint-vectors g))
+          "a second pass creates nothing"))))
+
+(test the-dirty-set-resolves-claims-for-suspects-only
+  "#80 item 1: after a clean drain a write dirties two endpoints; the
+next dirty set asks whether a belief is current for those two, not
+for every endpoint in the vocabulary."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (%pbelief g '(:repo . "cl-llm") "root-cause" '(:cause . "flaky"))
+    (%pbelief g '(:decision . "hold") "decided-because"
+              '(:verdict . "green"))
+    (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 4)
+                                         :model "m")
+    (is (null (mem:dirty-endpoints g "m")) "control: clean")
+    (%pbelief g '(:repo . "cl-llm") "owner" '(:person . "kevin")
+              "2026-08-31T08:00:00Z")
+    (let ((old (fdefinition 'mem::%any-current-belief-p))
+          (asked '())
+          (dirty nil))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'mem::%any-current-belief-p)
+                   (lambda (graph namespace key)
+                     (push (cons namespace key) asked)
+                     (funcall old graph namespace key)))
+             (setf dirty (mem:dirty-endpoints g "m")))
+        (setf (fdefinition 'mem::%any-current-belief-p) old))
+      (is (equal '((:repo . "cl-llm") (:person . "kevin"))
+                 (sort (copy-list dirty) #'string< :key #'cdr)))
+      (is (= 2 (length asked))
+          "five endpoints in the vocabulary, two suspects; asked ~a"
+          asked)
+      (is (null (set-difference asked dirty :test #'equal))
+          "and only the suspects were asked: ~a" asked))))
+
+(test an-endpoint-with-no-vertex-at-all-is-dirty
+  "#80 item 1: the dirty set is derived from the vertices, but a store
+written before #78 has none -- a current belief with no vertex is
+still dirty, and the drain still embeds it."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    ;; Delete the vertices the touch created: a pre-#78 store.
+    (let ((gdb:*graph* g))
+      (dolist (ep '((:repo . "cl-llm") (:verdict . "green")))
+        (dolist (ev (mem::%endpoint-vectors-of g (car ep) (cdr ep)))
+          (gdb:mark-deleted ev))))
+    (is (null (mem:endpoint-vector-of g :repo "cl-llm"))
+        "control: no vertex is left")
+    (is (equal '((:repo . "cl-llm") (:verdict . "green"))
+               (sort (copy-list (mem:dirty-endpoints g "m"))
+                     #'string< :key #'cdr)))
+    (is (= 2 (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 4)
+                                                  :model "m")))
+    (is (null (mem:dirty-endpoints g "m")))))
+
 (test the-drain-embeds-every-dirty-endpoint-once
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
@@ -212,6 +296,46 @@ endpoint with no profile at all."
                                          :model "b")))
     (is (null (mem:dirty-endpoints g "b")))))
 
+(test another-models-vectors-poison-the-top-k-until-cleared
+  "#80 item 2: the segment answers K hits before the model filter, so
+until the drain reaches every endpoint a previous model's vectors
+crowd the current one's out of the top-k.  The start-time clear
+removes them in one transaction and leaves their endpoints dirty."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    ;; Model A's vectors are the unit query itself (cosine 1); model
+    ;; B's are 45 degrees off, so A always ranks above B.
+    (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 4)
+                                         :model "a")
+    (let ((b-embed (%near-far-embed 4 "nothing starts with this"))
+          (q (%unit-query 4)))
+      ;; Switch to B, but stop the drain after its first endpoint, as a
+      ;; restart or a stop mid-sweep would: repo is under B now and
+      ;; verdict:green still under A.
+      (let ((n 0))
+        (is (= 1 (mem:drain-endpoint-vectors
+                  (list g) :embed b-embed :model "b"
+                           :stop-p (lambda () (> (incf n) 1))))))
+      (is (string= "b" (mem:ev-model (mem:endpoint-vector-of g :repo
+                                                             "cl-llm"))))
+      (is (string= "a" (mem:ev-model (mem:endpoint-vector-of g :verdict
+                                                             "green")))
+          "control: the two models share the segment")
+      (is (null (mem:nearest-endpoints g q :k 1 :model "b"))
+          "the top-1 is A's vector, filtered out: an empty dense fill")
+      (is (= 1 (mem:clear-foreign-endpoint-vectors g "b")))
+      (is (= 0 (mem:clear-foreign-endpoint-vectors g "b"))
+          "nothing foreign is left")
+      (is (equal '((:repo . "cl-llm"))
+                 (mapcar #'car (mem:nearest-endpoints g q :k 1
+                                                      :model "b")))
+          "B's own vector is the top-1 now")
+      (is-true (mem:endpoint-vector-value
+                (mem:endpoint-vector-of g :repo "cl-llm"))
+               "B's vector was kept")
+      (is (equal '((:verdict . "green")) (mem:dirty-endpoints g "b"))
+          "the cleared endpoint is dirty for the sweep, as before"))))
+
 (test rebuild-re-embeds-clean-endpoints-too
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
@@ -238,6 +362,52 @@ endpoint with no profile at all."
     (is (= 2 (length (mem:nearest-endpoints g (%unit-query 8) :k 5
                                             :model "n"))))
     (is (null (mem:reset-endpoint-segment g 8)) "same dimension: no-op")))
+
+(test the-reset-drops-the-segment-under-the-commit-lock
+  "#80 review: the worker's PREPARE resets while the store serves, so
+the drop must exclude commits.  The engine's reset closes the old
+segment under the transaction manager's lock -- the lock every commit
+takes -- and this watches that it does: the close runs inside a
+CALL-WITH-TRANSACTION-MANAGER-LOCK.  Readers need no exclusion: a
+search holding the old segment re-fetches on SEGMENT-CLOSED (GH #54),
+and the planner does not search before READY, set after the reset."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 4)
+                                         :model "m")
+    (let ((old-lock (fdefinition 'graph-db::call-with-transaction-manager-lock))
+          (old-close (fdefinition 'graph-db::close-vector-segment))
+          (depth 0)
+          (closed 0)
+          (closed-under-lock nil)
+          (result nil))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'graph-db::call-with-transaction-manager-lock)
+                   (lambda (fn tm)
+                     (funcall old-lock
+                              (lambda ()
+                                (incf depth)
+                                (unwind-protect (funcall fn)
+                                  (decf depth)))
+                              tm))
+                   (fdefinition 'graph-db::close-vector-segment)
+                   (lambda (segment)
+                     (incf closed)
+                     (setf closed-under-lock (plusp depth))
+                     (funcall old-close segment)))
+             (setf result (mem:reset-endpoint-segment g 8)))
+        (setf (fdefinition 'graph-db::call-with-transaction-manager-lock)
+              old-lock
+              (fdefinition 'graph-db::close-vector-segment) old-close))
+      (is (eq t result) "control: the segment was reset")
+      (is (= 1 closed) "control: the old segment was closed once")
+      (is-true closed-under-lock
+               "and closed under the transaction manager's lock, so no ~
+                commit interleaved"))
+    (is (= 2 (mem:drain-endpoint-vectors (list g) :embed (%counting-embed 8)
+                                                  :model "n"))
+        "and the new dimension is accepted")))
 
 (test the-drain-skips-a-failing-embedder-and-keeps-the-endpoint-dirty
   (with-memory-graph (g)
@@ -331,6 +501,79 @@ endpoint with no profile at all."
       (is (= 1 (mem:drain-endpoint-vectors (list g) :embed embed
                                                     :model "m")))
       (is-false (mem:dirty-endpoints g "m")))))
+
+(test a-profile-that-vanishes-mid-pass-ends-with-no-vector
+  "#80 item 5: the retraction lands inside the embed call, so the
+re-render finds nothing current.  The pass is not stored, the next
+pass renders NIL and clears instead of embedding, and the drain ends
+with the endpoint vector-less and clean after one embedder call."
+  (with-memory-graph (g)
+    (let* ((b (%pbelief g '(:repo . "cl-llm") "ci-status"
+                        '(:verdict . "green")))
+           (log (make-%embed-log))
+           (embed (%racing-embed
+                   log
+                   (lambda ()
+                     (gdb:with-transaction (:graph g)
+                       (mem:retract-belief b))))))
+      (multiple-value-bind (n unsettled)
+          (mem:drain-endpoint-vectors (list g) :embed embed :model "m")
+        (is (= 0 n) "nothing was stored")
+        (is (null unsettled) "and nothing ran out of passes"))
+      (is-true (%log-raced log)
+               "control: the retraction fired inside an embed call")
+      (is (= 1 (%log-calls log))
+          "the vanished profile was not embedded again: ~d calls"
+          (%log-calls log))
+      (dolist (ep '((:repo . "cl-llm") (:verdict . "green")))
+        (let ((ev (mem:endpoint-vector-of g (car ep) (cdr ep))))
+          (is-true ev "~a keeps its vertex" ep)
+          (is-false (mem:endpoint-vector-value ev)
+                    "~a holds no vector" ep)))
+      (is (null (mem:dirty-endpoints g "m"))
+          "nothing current, so nothing dirty")
+      (is (null (mem:nearest-endpoints g (%unit-query 4) :k 5
+                                       :model "m"))))))
+
+(test clearing-an-endpoint-with-nothing-current-drops-a-stale-vector
+  "#80 item 5: %CLEAR-ONE-ENDPOINT's write path.  A vector no write
+cleared -- a duplicate vertex, or one from before the touch existed --
+on an endpoint with nothing current is dropped from every live vertex
+in one transaction; a second call finds nothing and opens none."
+  (with-memory-graph (g)
+    ;; Two live vertices for one endpoint, both with a vector, and no
+    ;; belief at all on it.
+    (gdb:with-transaction (:graph g)
+      (dotimes (i 2)
+        (mem::make-endpoint-vector :graph g :ev-namespace :repo
+                                   :ev-key "ghost" :ev-model "m"
+                                   :embedding (%unit-query 4))))
+    (is (= 2 (count-if #'mem:endpoint-vector-value
+                       (mem::%endpoint-vectors-of g :repo "ghost")))
+        "control: two stale vectors")
+    (is (= 1 (length (mem:nearest-endpoints g (%unit-query 4) :k 5
+                                            :model "m")))
+        "control: and the ghost is searchable")
+    (let ((old (fdefinition 'graph-db::call-with-transaction))
+          (transactions 0)
+          (first nil) (second nil))
+      (unwind-protect
+           (progn
+             (setf (fdefinition 'graph-db::call-with-transaction)
+                   (lambda (fn tm)
+                     (incf transactions)
+                     (funcall old fn tm)))
+             (setf first (mem::%clear-one-endpoint g :repo "ghost")
+                   second (mem::%clear-one-endpoint g :repo "ghost")))
+        (setf (fdefinition 'graph-db::call-with-transaction) old))
+      (is (eq t first) "the first call wrote")
+      (is (null second) "the second had nothing to clear")
+      (is (= 1 transactions) "and opened no transaction for it"))
+    (is (= 0 (count-if #'mem:endpoint-vector-value
+                       (mem::%endpoint-vectors-of g :repo "ghost")))
+        "every live vertex was cleared")
+    (is (null (mem:nearest-endpoints g (%unit-query 4) :k 5
+                                     :model "m")))))
 
 (test a-touch-between-re-render-and-commit-never-leaves-a-stale-vector
   "WINDOW 2: the interleaved write commits from inside %STORE-VECTOR --
@@ -513,32 +756,189 @@ leaves the endpoint dirty -- the bounded-pass fallout (SS4.3 step 2)."
           (mem:stop-endpoint-indexer w))))))
 
 (test a-notify-does-not-cancel-an-outage-backoff
+  "SS4.3 step 3: Task 4 wires a notify to every write, so an import
+against a down embedder must not buy one failing round trip per
+write.  Half a second of margin or more on every window (#80 item 6):
+with a 1 s backoff the second attempt is due 1 s after the first and
+the third 2 s after the second, so three notifies inside the first
+0.2 s must not bring the second attempt before 0.5 s, and no third
+may land within 1 s of the second."
   (with-memory-graph (g)
     (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
     (multiple-value-bind (embed counter) (%counting-embed 4 :fail-times 1000)
       (let ((w (mem:start-endpoint-indexer (list g) :embed embed :model "m"
-                                                    :backoff 0.5))
-            (stop-seconds nil))
+                                                    :backoff 1.0))
+            (stop-seconds nil)
+            (first-at nil)
+            (second-at nil))
+        (flet ((seconds-between (a b)
+                 (/ (float (- b a) 0f0) internal-time-units-per-second)))
+          (unwind-protect
+               (progn
+                 (loop repeat 500 until (plusp (car counter))
+                       do (sleep 0.01))
+                 (setf first-at (get-internal-real-time))
+                 (is (= 1 (car counter)) "control: the sweep failed once")
+                 (dotimes (i 3)
+                   (mem:notify-endpoint-indexer w)
+                   (sleep 0.05))
+                 (is (= 1 (car counter))
+                     "three notifies bought no attempt: got ~d"
+                     (car counter))
+                 (loop repeat 500 until (= 2 (car counter))
+                       do (sleep 0.01))
+                 (setf second-at (get-internal-real-time))
+                 (is (= 2 (car counter))
+                     "control: the second attempt came")
+                 (is (>= (seconds-between first-at second-at) 0.5)
+                     "and only once the 1 s backoff ran out, not on a ~
+                      notify: ~,2fs after the first"
+                     (seconds-between first-at second-at))
+                 (sleep 1.0)
+                 (is (= 2 (car counter))
+                     "no third attempt within a second of the second: ~
+                      the backoff doubled; got ~d"
+                     (car counter)))
+            (setf stop-seconds
+                  (%seconds-to (lambda () (mem:stop-endpoint-indexer w)))))
+          (is (< stop-seconds 2)
+              "stop still returns in ~,2fs" stop-seconds))))))
+
+(defun %flaky-prepare (fail-times)
+  "=> (values PREPARE COUNTER): a PREPARE that signals on its first
+FAIL-TIMES calls, answers NIL on the next, and T from then on,
+counting calls in COUNTER's car.  An embedder still loading is a
+probe that signals; NIL is the other way PREPARE can say no."
+  (let ((counter (list 0)))
+    (values (lambda ()
+              (incf (car counter))
+              (cond ((<= (car counter) fail-times)
+                     (error "connection refused"))
+                    ((= (car counter) (1+ fail-times)) nil)
+                    (t t)))
+            counter)))
+
+(test the-worker-retries-prepare-and-embeds-nothing-until-it-succeeds
+  "#80 item 3: a cold start.  The probe fails twice, then once answers
+NIL; the worker retries it on the backoff, calls the embedder only
+after it succeeds, then sweeps; the outage is logged once."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter) (%counting-embed 4)
+      (multiple-value-bind (prepare prepared) (%flaky-prepare 2)
+        (let* ((log (make-string-output-stream))
+               (*error-output* log)
+               (w (mem:start-endpoint-indexer (list g) :embed embed
+                                              :model "m" :backoff 0.1
+                                              :prepare prepare)))
+          (unwind-protect
+               (progn
+                 (loop repeat 300 until (= 2 (car prepared))
+                       do (sleep 0.01))
+                 (is (= 2 (car prepared)) "control: two probes failed")
+                 (is (= 0 (car counter))
+                     "nothing is embedded before the probe succeeds")
+                 (is (mem:wait-endpoint-indexer w :timeout 10)
+                     "ready, then the sweep")
+                 (is (= 4 (car prepared))
+                     "two signals, one NIL, then T: ~d calls"
+                     (car prepared))
+                 (is (= 2 (car counter)) "and the sweep embedded both")
+                 (is (null (mem:dirty-endpoints g "m")))
+                 (is-false (mem:endpoint-indexer-off-p w))
+                 (sleep 0.1)
+                 (let ((text (get-output-stream-string log)))
+                   (is (= 1 (%count-substring "not ready" text))
+                       "the cold start was logged once: ~s" text)
+                   (is (= 1 (%count-substring "ready after 3" text))
+                       "and so was the recovery: ~s" text)))
+            (mem:stop-endpoint-indexer w)))))))
+
+(test the-worker-gives-up-on-prepare-after-the-bound
+  "#80 item 3: the retry is bounded.  A probe that never succeeds is
+tried PREPARE-ATTEMPTS times, each after the doubling backoff that a
+notify does not cut short; then the worker says the index stays off,
+sets OFF and stops, having embedded nothing."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter) (%counting-embed 4)
+      (multiple-value-bind (prepare prepared) (%flaky-prepare 1000)
+        (let* ((log (make-string-output-stream))
+               (*error-output* log)
+               (w (mem:start-endpoint-indexer (list g) :embed embed
+                                              :model "m" :backoff 0.1
+                                              :prepare prepare
+                                              :prepare-attempts 3)))
+          (unwind-protect
+               (progn
+                 (loop repeat 300 until (plusp (car prepared))
+                       do (sleep 0.01))
+                 ;; Notifies land during the first backoff (0.1 s).
+                 (dotimes (i 3)
+                   (mem:notify-endpoint-indexer w)
+                   (sleep 0.01))
+                 (is (= 1 (car prepared))
+                     "a notify did not buy another probe: ~d"
+                     (car prepared))
+                 (loop repeat 500 until (mem:endpoint-indexer-off-p w)
+                       do (sleep 0.01))
+                 (is-true (mem:endpoint-indexer-off-p w)
+                          "the worker gave up")
+                 (is (= 3 (car prepared)) "after exactly the bound")
+                 (is (= 0 (car counter)) "and never embedded")
+                 (loop repeat 100
+                       while (bt:thread-alive-p
+                              (mem::endpoint-indexer-thread w))
+                       do (sleep 0.01))
+                 (is-false (bt:thread-alive-p
+                            (mem::endpoint-indexer-thread w))
+                           "and its thread returned")
+                 (is (null (mem:wait-endpoint-indexer w :timeout 0.2))
+                     "an off worker is never idle")
+                 (let ((text (get-output-stream-string log)))
+                   (is (= 1 (%count-substring "not ready:" text))
+                       "the outage was logged once: ~s" text)
+                   (is (= 1 (%count-substring "stays off" text))
+                       "and the giving up once: ~s" text)))
+            (is-true (mem:stop-endpoint-indexer w)
+                     "stop still joins a worker that gave up")))))))
+
+(test a-prepare-that-says-off-stops-the-worker-at-once
+  "#80 review: a PREPARE that signals ENDPOINT-INDEX-OFF -- the entry
+points' answer to a misconfigured embedder -- is not retried to the
+bound: the worker names the reason once, sets OFF and stops after
+that one attempt, having embedded nothing."
+  (with-memory-graph (g)
+    (%pbelief g '(:repo . "cl-llm") "ci-status" '(:verdict . "green"))
+    (multiple-value-bind (embed counter) (%counting-embed 4)
+      (let* ((prepared 0)
+             (log (make-string-output-stream))
+             (*error-output* log)
+             (w (mem:start-endpoint-indexer
+                 (list g) :embed embed :model "m" :backoff 0.05
+                          :prepare (lambda ()
+                                     (incf prepared)
+                                     (error 'mem:endpoint-index-off
+                                            :reason "LLM API error 401")))))
         (unwind-protect
              (progn
-               (loop repeat 200 until (plusp (car counter))
+               (loop repeat 300 until (mem:endpoint-indexer-off-p w)
                      do (sleep 0.01))
-               (is (= 1 (car counter)) "control: the sweep failed once")
-               ;; Task 4 wires a notify to every write, so an import
-               ;; against a down embedder must not buy one failing
-               ;; round trip per write (SS4.3 step 3).
-               (dotimes (i 3)
-                 (mem:notify-endpoint-indexer w)
-                 (sleep 0.05))
-               (sleep 1.0)
-               (is (= 2 (car counter))
-                   "one attempt per backoff period -- 0.5s, then 1.0s ~
-                    -- not one per notify; got ~d"
-                   (car counter)))
-          (setf stop-seconds
-                (%seconds-to (lambda () (mem:stop-endpoint-indexer w)))))
-        (is (< stop-seconds 2)
-            "stop still returns in ~,2fs" stop-seconds)))))
+               (is-true (mem:endpoint-indexer-off-p w) "the worker gave up")
+               (sleep 0.3)
+               (is (= 1 prepared) "after one attempt, not the bound")
+               (is (= 0 (car counter)) "and embedded nothing")
+               (loop repeat 100
+                     while (bt:thread-alive-p
+                            (mem::endpoint-indexer-thread w))
+                     do (sleep 0.01))
+               (is-false (bt:thread-alive-p
+                          (mem::endpoint-indexer-thread w)))
+               (let ((text (get-output-stream-string log)))
+                 (is (= 1 (%count-substring "LLM API error 401" text))
+                     "the reason was logged once: ~s" text)
+                 (is (= 1 (%count-substring "stays off" text)))))
+          (mem:stop-endpoint-indexer w))))))
 
 (test a-second-start-stops-the-first-worker
   (with-memory-graph (g)

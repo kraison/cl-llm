@@ -112,18 +112,27 @@ store another image left dirty."
               (gdb:make-graph name store :buffer-pool-size pool
                               :system-clock *clock*)))
     (setf gdb:*graph* *graph*)
-    ;; Before the listener and the worker: the dimension is known only
-    ;; from an embedding, and the engine's segment rebuild is unsafe
-    ;; against a concurrent search (#78 SS4.3 step 4).  Guarded like the
-    ;; listener below -- a down or misconfigured embedder costs this run
-    ;; its index, never the image's store or its REPL.
+    ;; Before the listener and the worker when the probe answers: the
+    ;; dimension is known only from an embedding (#78 SS4.3 step 4).
+    ;; Guarded like the listener below -- a misconfigured embedder
+    ;; costs this run its index, never the image's store or its REPL.
     (handler-case
         (let ((ee (mcp:embedder-from-env)))
           (when ee
-            (let ((d (mcp:probe-embedding-dimension ee)))
-              (when (mem:reset-endpoint-segment *graph* d)
-                (%note "semantic index: segment reset to dimension ~d"
-                       d)))
+            (handler-case
+                (mcp:prepare-endpoint-index ee (list *graph*) #'%note)
+              ;; An embedder that does not answer is a cold start as
+              ;; often as an outage: the index is off, lexical, until
+              ;; the worker's retry of the probe succeeds (#80 item 3)
+              ;; -- for what can recover (transport, a timeout, a
+              ;; 5xx).  An auth error or another 4xx is a
+              ;; misconfiguration and an engine error is not the
+              ;; embedder's: those fall through to OFF, now.
+              (error (c)
+                (unless (mcp:probe-retry-p c) (error c))
+                (setf (agent:endpoint-embedder-ready ee) nil)
+                (%note "semantic index: probe failed: ~a; lexical ~
+until the worker's retry succeeds" c)))
             (setf *embedder* ee)))
       (error (c)
         (%note "semantic index off: ~a" (mcp:index-off-reason c))
@@ -169,7 +178,14 @@ store another image left dirty."
               (mem:start-endpoint-indexer
                (list *graph*)
                :embed (agent:endpoint-embedder-embed *embedder*)
-               :model (agent:endpoint-embedder-model *embedder*))))
+               :model (agent:endpoint-embedder-model *embedder*)
+               ;; Only after a failed probe: the worker retries it
+               ;; before its sweep, bounded (#80 item 3).
+               :prepare (let ((ee *embedder*) (g *graph*))
+                          (unless (agent:endpoint-embedder-ready ee)
+                            (lambda ()
+                              (mcp:retry-endpoint-index
+                               ee (list g) #'%note)))))))
       ;; graph-db's source directory: a mismatched engine shows here,
       ;; not at the first missing symbol (#72).
       (format t "~&memory image: ~(~S~) at ~A as ~A; clock ~A; ~
@@ -180,10 +196,12 @@ swank 127.0.0.1:~D; ~A; ~A; graph-db ~A~%"
                           (mcp:listener-port *listener*))
                   "mcp off")
               (if *embedder*
-                  (format nil "index ~A floor ~A (key: ~A)"
+                  (format nil "index ~A floor ~A (key: ~A)~:[, probe ~
+pending~;~]"
                           (agent:endpoint-embedder-model *embedder*)
                           (agent:endpoint-embedder-floor *embedder*)
-                          (mcp:embed-key-source))
+                          (mcp:embed-key-source)
+                          (agent:endpoint-embedder-ready *embedder*))
                   "index off")
               (asdf:system-source-directory
                (asdf:find-system :graph-db))))

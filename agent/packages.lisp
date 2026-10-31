@@ -25,6 +25,7 @@
    #:endpoint-embedder #:make-endpoint-embedder #:endpoint-embedder-p
    #:endpoint-embedder-embedder #:endpoint-embedder-model
    #:endpoint-embedder-floor #:endpoint-embedder-embed
+   #:endpoint-embedder-ready
    #:make-hybrid-key-extractor
    ;; annotate
    #:annotation-tools #:annotate-banners #:*annotation-instructions*))

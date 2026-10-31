@@ -238,7 +238,13 @@ One thread per process that has an embedder, started by
    already-clear vector is still a `save`, and that write-set entry is
    the only thing a create-only writer (a first belief, nothing
    superseded, whose claim writes are all creates) offers a concurrent
-   drain to validate against. The drain itself embeds OUTSIDE every
+   drain to validate against. The materialise runs in batches of
+   `*materialise-batch*` (256) vertices per transaction, and the dirty
+   set is derived from the `endpoint-vector` vertices first -- a claim
+   is resolved only for an endpoint with no vertex, no vector, or
+   another model's vector -- so a drain costs the store what the
+   writes since the last one touched, not its vocabulary (#80 item
+   1). The drain itself embeds OUTSIDE every
    transaction -- an embedder is a network round trip and the engine's
    ninth attempt at a transaction runs the body under the global
    transaction-manager lock -- and per endpoint makes up to four
@@ -276,16 +282,34 @@ One thread per process that has an embedder, started by
    join that never returns holds SIGTERM until the supervisor's
    SIGKILL and parks the store's `.dirty` marker, which is worse.
 4. **Model change**: a vector whose `ev-model` differs from the
-   configured model is dirty and re-embedded by the ordinary drain. A
-   *dimension* change cannot be handled by the worker: an empty segment
-   keeps its dimension and the engine's only drop is unsafe against a
-   concurrent search (facts E3). So each entry point, after opening the
+   configured model is dirty and re-embedded by the ordinary drain --
+   and, since the segment answers its k nearest before the model
+   filter and a cross-model cosine is noise, each entry point first
+   clears every such vector in one transaction at start
+   (`clear-foreign-endpoint-vectors`, #80 item 2), so the top-k is
+   lexical-only rather than poisoned until the sweep catches up. A
+   *dimension* change cannot be handled by the drain: an empty segment
+   keeps its dimension (facts E3; the engine's drop was then unsafe
+   against a concurrent search -- since GH #54 and #365 it runs under
+   the transaction manager's lock and a reader re-fetches, which is
+   what lets the worker's PREPARE below run it while the store
+   serves). So each entry point, after opening the
    stores and before starting the listener or the worker, embeds one
    probe string, and when the segment's dimension differs it clears
    every vector in one transaction and rebuilds the segment
    (`graph-db::rebuild-vector-segment`, internal; an export is asked of
    the engine) while nothing can search. A dimension change therefore
    costs one restart, which a configuration change already requires.
+   A probe that fails does not cost the run its index (#80 item 3):
+   the entry point marks the embedder not ready -- the planner is
+   lexical and nothing searches -- and hands the worker the same
+   probe-reset-clear step as its `prepare`, retried on the outage
+   backoff before the first sweep, `*prepare-attempts*` (10) times;
+   past that the worker logs that the index stays off and stops.
+   Only what can recover is retried (transport, a timeout, a rate
+   limit, a 5xx: `probe-retry-p`); an auth error or any other 4xx,
+   and an engine error, turn the index off at once with the reason,
+   at start or from the worker (`endpoint-index-off`).
 5. **Idle** (added in SDD Task 3): the worker reports itself idle only
    when a drain finished with no notify outstanding *and* no store has
    a dirty endpoint left, so `wait-endpoint-indexer` cannot read
@@ -379,7 +403,9 @@ and "rollback" land near each other and an unrelated word lands
 nowhere; it is deterministic and needs no service. Every assertion
 below is exact under it. One test tagged for a live model runs only when
 `CL_LLM_MEMORY_EMBED_URL` is set in the test environment, as the mcp
-suite gates its child-process tests.
+suite gates its child-process tests (written for #80 item 4, in the
+agent suite: test 1 and test 2 below against that model at the
+operator's `CL_LLM_MEMORY_EMBED_FLOOR`, skipped without the URL).
 
 1. **Paraphrase recovery.** A belief under an incident endpoint whose
    key shares no token with the query; the query's paraphrase routes to

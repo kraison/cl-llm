@@ -30,12 +30,16 @@
    #:touch-endpoints
    ;; the semantic index (#78)
    #:nearest-endpoints #:dirty-endpoints #:materialise-endpoint-vectors
+   #:*materialise-batch*
    #:drain-endpoint-vectors #:rebuild-endpoint-vectors
-   #:reset-endpoint-segment #:*embed-passes*
+   #:reset-endpoint-segment #:clear-foreign-endpoint-vectors
+   #:*embed-passes*
    ;; the indexer worker (#78 SS4.3)
    #:*endpoint-indexer* #:endpoint-indexer #:start-endpoint-indexer
    #:notify-endpoint-indexer #:wait-endpoint-indexer
    #:stop-endpoint-indexer #:endpoint-indexer-embedded
+   #:endpoint-indexer-off-p #:*prepare-attempts*
+   #:endpoint-index-off #:endpoint-index-off-reason
    ;; scope (S6b)
    #:check-scope #:scope-argument-error
    #:call-with-scope-snapshots #:with-scope-snapshots

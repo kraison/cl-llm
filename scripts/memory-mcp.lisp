@@ -105,27 +105,35 @@ stdout (#78 SS5)."
          :buffer-pool (parse-integer
                        (mcp:env "CL_LLM_MEMORY_BUFFER_POOL" "2000")))
       (setf *stores* stores *clock* clock)
-      ;; Before the server can serve a search: the dimension is known
-      ;; only from an embedding, and the engine's segment rebuild is
-      ;; unsafe against a concurrent search (#78 SS4.3 step 4).  A down
-      ;; or misconfigured embedder costs this run its index, never the
+      ;; Before the server can serve when the probe answers: the
+      ;; dimension is known only from an embedding (#78 SS4.3 step 4).
+      ;; A misconfigured embedder costs this run its index, never the
       ;; session -- the tools stay lexical and the client sees a server.
       (handler-case
           (let ((ee (mcp:embedder-from-env)))
             (when ee
-              (let ((d (mcp:probe-embedding-dimension ee)))
-                (dolist (g stores)
-                  (when (mem:reset-endpoint-segment g d)
-                    (%note "semantic index: segment reset to ~
-dimension ~d (~a)"
-                           d (mem:store-name g)))))
+              (handler-case
+                  (mcp:prepare-endpoint-index ee stores #'%note)
+                ;; An embedder that does not answer is a cold start as
+                ;; often as an outage: the index is off, lexical,
+                ;; until the worker's retry of the probe succeeds
+                ;; (#80 item 3) -- for what can recover (transport, a
+                ;; timeout, a 5xx).  An auth error or another 4xx is
+                ;; a misconfiguration and an engine error is not the
+                ;; embedder's: those fall through to OFF, now.
+                (error (c)
+                  (unless (mcp:probe-retry-p c) (error c))
+                  (setf (agent:endpoint-embedder-ready ee) nil)
+                  (%note "semantic index: probe failed: ~a; lexical ~
+until the worker's retry succeeds" c)))
               (setf *embedder* ee)
               ;; The image says this in its banner; the solo server has
               ;; none, and "index on" is not otherwise observable (#78).
-              (%note "index ~a floor ~a (key: ~a)"
+              (%note "index ~a floor ~a (key: ~a)~:[, probe pending~;~]"
                      (agent:endpoint-embedder-model ee)
                      (agent:endpoint-embedder-floor ee)
-                     (mcp:embed-key-source))))
+                     (mcp:embed-key-source)
+                     (agent:endpoint-embedder-ready ee))))
         (error (c)
           (%note "semantic index off: ~a" (mcp:index-off-reason c))
           (setf *embedder* nil)))
@@ -169,7 +177,14 @@ no-op on the two refusal paths, where nothing opened."
           (mem:start-endpoint-indexer
            *stores*
            :embed (agent:endpoint-embedder-embed *embedder*)
-           :model (agent:endpoint-embedder-model *embedder*))))
+           :model (agent:endpoint-embedder-model *embedder*)
+           ;; Only after a failed probe: the worker retries it before
+           ;; its sweep, bounded (#80 item 3).
+           :prepare (let ((ee *embedder*) (stores *stores*))
+                      (unless (agent:endpoint-embedder-ready ee)
+                        (lambda ()
+                          (mcp:retry-endpoint-index
+                           ee stores #'%note)))))))
   (cl-mcp:run-server server :input *standard-input*
                             :output *standard-output*)
   (stop)
