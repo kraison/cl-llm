@@ -15,18 +15,6 @@
 ;;; GDB:*SYSTEM-DIRECTORY* (its type-id registry) is NIL, vivace-graph
 ;;; #186.  Each test binds a fresh one, as tests-memory and tests-claims do.
 
-(defun %temp-system-directory ()
-  "A fresh, not-yet-existing directory namestring under /tmp for
-GDB:*SYSTEM-DIRECTORY*.  The caller deletes it: %DELETE-SYSTEM-DIRECTORY."
-  (format nil "/tmp/cl-llm-vg-sys-~a-~a/"
-          (get-internal-real-time) (random 1000000)))
-
-(defun %delete-system-directory ()
-  "Delete the directory GDB:*SYSTEM-DIRECTORY* names, if it exists."
-  (ignore-errors
-   (uiop:delete-directory-tree (pathname gdb:*system-directory*)
-                               :validate t :if-does-not-exist :ignore)))
-
 (defparameter *test-buffer-pool-size* 1000
   "Size the suite starts graph-db's buffer pool at (#11).  The pool is one
 process-wide resource, sized by whichever graph opens FIRST and held for
@@ -39,12 +27,27 @@ already running, whose size then stays.  Returns the size in force."
   (gdb::ensure-buffer-pool *test-buffer-pool-size*)
   gdb:*buffer-pool-size*)
 
+(defun %temp-system-directory ()
+  "A fresh, not-yet-existing directory namestring under /tmp for
+GDB:*SYSTEM-DIRECTORY*.  The caller deletes it: %DELETE-SYSTEM-DIRECTORY.
+Every test binds one before its first graph, so this is also where the
+buffer pool is pinned (%ENSURE-TEST-BUFFER-POOL): a test run alone in a
+fresh image would otherwise size the pool at graph-db's default."
+  (%ensure-test-buffer-pool)
+  (format nil "/tmp/cl-llm-vg-sys-~a-~a/"
+          (get-internal-real-time) (random 1000000)))
+
+(defun %delete-system-directory ()
+  "Delete the directory GDB:*SYSTEM-DIRECTORY* names, if it exists."
+  (ignore-errors
+   (uiop:delete-directory-tree (pathname gdb:*system-directory*)
+                               :validate t :if-does-not-exist :ignore)))
+
 (defmacro with-system-directory (() &body body)
-  "Run BODY with GDB:*SYSTEM-DIRECTORY* bound to a fresh temp directory,
-deleted afterwards however BODY exits, after pinning the buffer pool small
-(%ENSURE-TEST-BUFFER-POOL).  Graphs made inside share the directory, so a
-close-and-reopen within BODY keeps its type ids."
+  "Run BODY with GDB:*SYSTEM-DIRECTORY* bound to a fresh temp directory
+(%TEMP-SYSTEM-DIRECTORY, which also pins the buffer pool), deleted
+afterwards however BODY exits.  Graphs made inside share the directory, so
+a close-and-reopen within BODY keeps its type ids."
   `(let ((gdb:*system-directory* (%temp-system-directory)))
-     (%ensure-test-buffer-pool)
      (unwind-protect (progn ,@body)
        (%delete-system-directory))))
