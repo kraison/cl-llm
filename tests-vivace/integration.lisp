@@ -7,6 +7,7 @@
   "A chunk survives close/reopen (serializer round-trip); a new store over the
 reopened graph hydrates from it."
   (let* ((dir (format nil "/tmp/cl-llm-vg-persist-~a/" (get-internal-real-time)))
+         (gdb:*system-directory* (%temp-system-directory))
          (emb (rag:make-mock-embedder)))
     (unwind-protect
          (progn
@@ -35,7 +36,8 @@ reopened graph hydrates from it."
                       (is (typep (rag:chunk-embedding (rag:hit-chunk hit))
                                  '(simple-array single-float (*))))))
                (gdb:close-graph g2))))
-      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
+      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t))
+      (%delete-system-directory))))
 
 (test open-graph-store-reopens-in-a-fresh-image
   "REGRESSION: open-graph-store must declare the chunk vertex class BEFORE gdb:open-graph, so a
@@ -44,6 +46,7 @@ persistent-reopen-and-hydrate above only exercises a SAME-image reopen (the clas
 the first make-graph-store), so it never caught this.  Simulate a fresh image by undefining the
 chunk class + constructor after close, then reopen via open-graph-store."
   (let ((dir (format nil "/tmp/cl-llm-vg-freshimg-~a/" (get-internal-real-time)))
+        (gdb:*system-directory* (%temp-system-directory))
         (emb (rag:make-mock-embedder))
         (tsym (intern "RAG-CHUNK" :graph-db))
         (ctor (intern "MAKE-RAG-CHUNK" :graph-db)))
@@ -66,7 +69,8 @@ chunk class + constructor after close, then reopen via open-graph-store."
                (gdb:close-graph (v:graph-store-graph store)))))
       ;; restore the class for any later test even if the reopen (regression) failed
       (ignore-errors (v:ensure-chunk-class 'rag-chunk :cl-llm-vg-freshimg))
-      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
+      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t))
+      (%delete-system-directory))))
 
 (define-condition induced-migration-failure (error) ()
   (:documentation "A deliberately-signalled failure, used to simulate a migration that
@@ -94,6 +98,7 @@ that already committed stay migrated -- durably, verified by closing and reopeni
 graph, not just by the failed call's in-memory side effects -- and a subsequent
 MIGRATE-EMBEDDINGS call finishes the rest and leaves the whole store conforming."
   (let ((dir (format nil "/tmp/cl-llm-vg-resume-~a/" (get-internal-real-time)))
+        (gdb:*system-directory* (%temp-system-directory))
         (name :cl-llm-vg-resume))
     (unwind-protect
          (progn
@@ -147,7 +152,8 @@ victims the failed run never reached")
                       (is (= 0 remaining)
                           "the store must be fully conforming after the resuming migration")))
                (gdb:close-graph g3))))
-      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
+      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t))
+      (%delete-system-directory))))
 
 (defun %refresh-chunk (emb doc-id text)
   (rag:make-chunk text :document-id doc-id :embedding (rag:embed emb text)))
@@ -161,6 +167,7 @@ production failure: the in-RAM index looked correct while the graph kept the sta
 refreshed corpus silently GREW (+1 chunk per refreshed document) instead of being replaced.
 The count only ever looked bigger, never wrong, and nothing signalled.  Only a reopen sees it."
   (let* ((dir (format nil "/tmp/cl-llm-vg-refresh-~a/" (get-internal-real-time)))
+         (gdb:*system-directory* (%temp-system-directory))
          (emb (rag:make-mock-embedder))
          (name :cl-llm-vg-refresh))
     (unwind-protect
@@ -192,12 +199,14 @@ delete did not persist and the refresh DUPLICATED the document")
                       (is (string= "revision two" (rag:chunk-text (rag:hit-chunk hit)))
                           "the survivor must be the REPLACEMENT, not the stale original")))
                (gdb:close-graph (v:graph-store-graph store)))))
-      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
+      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t))
+      (%delete-system-directory))))
 
 (test bulk-delete-documents-survives-reopen
   "The bulk primitive on the graph store: one scan removes every id in the set, and the
 removal persists across a reopen."
   (let* ((dir (format nil "/tmp/cl-llm-vg-bulk-~a/" (get-internal-real-time)))
+         (gdb:*system-directory* (%temp-system-directory))
          (emb (rag:make-mock-embedder))
          (name :cl-llm-vg-bulk))
     (unwind-protect
@@ -219,7 +228,8 @@ removal persists across a reopen."
                     (let ((hit (first (rag:store-search store (rag:embed emb "bravo mine") 1))))
                       (is (string= "b" (rag:chunk-document-id (rag:hit-chunk hit))))))
                (gdb:close-graph (v:graph-store-graph store)))))
-      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
+      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t))
+      (%delete-system-directory))))
 
 (test graph-store-drops-into-the-rag-pipeline
   "make-index :store (make-graph-store g) -> add-documents -> rag-ask (mock)."
