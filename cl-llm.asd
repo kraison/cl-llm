@@ -174,7 +174,10 @@
   :pathname "vivace/"
   :components ((:file "packages")
                (:file "schema")
-               (:file "store")))
+               (:file "store"))
+  ;; Without this, (asdf:test-system :cl-llm/rag/vivace) is a silent no-op
+  ;; and the heap canary of #11 never runs (the #26 trap).
+  :in-order-to ((test-op (test-op "cl-llm/rag/vivace/tests"))))
 
 (defsystem "cl-llm/rag/claims"
   :description "Claim traversal as an evidence-bundle source (#13 unit 3)."
@@ -373,11 +376,9 @@ Requires CL_LLM_LIVE=1."
                (:file "store-scan")
                (:file "store-cache")
                (:file "store-segment")
-               (:file "integration"))
-  ;; NB: this suite needs a bigger heap than SBCL's 1GB default -- run with
-  ;; `sbcl --dynamic-space-size 4096`, or ASDF:TEST-SYSTEM below exhausts it
-  ;; on roughly two runs in three. See the Testing section of README.md and
-  ;; tests-vivace/store-segment.lisp's header comment; tracked as cl-llm#11.
+               (:file "integration")
+               ;; Last: its canary reads what the whole run left (#11).
+               (:file "heap"))
   :perform (test-op (o c)
              (unless (uiop:symbol-call :fiveam :run! :cl-llm-rag-vivace)
                (error "cl-llm/rag/vivace tests failed."))))

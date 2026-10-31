@@ -420,15 +420,19 @@ needs no network access or API key. It is what CI runs on every push and pull
 request. The separate `cl-llm/eval` system has its own offline suite
 (`sbcl --eval '(asdf:test-system :cl-llm/eval)'`).
 
-`cl-llm/rag/vivace`'s offline suite needs a **larger heap than SBCL's 1GB
-default** — run it with `--dynamic-space-size 4096`, or it exhausts the heap
-on roughly two runs in three (a pre-existing ~870MB retention in the vivace
-suite fixtures, tracked as cl-llm#11; not caused by, and not specific to, the
-`:segment` strategy tests):
+`cl-llm/rag/vivace`'s offline suite runs inside SBCL's default 1GB heap
+(it peaks around 65MB). Its fixtures bind graph-db's mandatory
+`*system-directory*` to a fresh `/tmp` directory per test and start the
+engine's buffer pool small before the first graph: the pool is one
+process-wide resource, sized by whichever graph opens first and held for
+the life of the image, and at `make-graph`'s default of 100000 it alone
+pins ~300MB (cl-llm#11). Two tests at the end of the suite
+(`tests-vivace/heap.lisp`) fail if a graph lifetime starts retaining heap
+again, if the pool is not the small one, or if the run leaves more than
+512MB live:
 
 ```sh
-sbcl --dynamic-space-size 4096 --non-interactive \
-     --eval '(asdf:test-system :cl-llm/rag/vivace/tests)'
+sbcl --non-interactive --eval '(asdf:test-system :cl-llm/rag/vivace/tests)'
 ```
 
 `cl-llm/rag/claims` and `cl-llm/memory` need `graph-db/spacetime` (from
