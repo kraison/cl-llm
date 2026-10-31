@@ -431,9 +431,9 @@ below would be vacuous")
 
 (defun drop-chunk-segment (graph &optional (type 'rag-chunk))
   "Unregister and close GRAPH's chunk-embedding segment, leaving the vertices
-alone.  Returns the segment FILE's path -- which is NOT removed here, because
-the file is still mmapped until CLOSE-VECTOR-SEGMENT returns and because the
-caller must delete it AFTER GDB:CLOSE-GRAPH (see the fixture note in
+alone.  Returns the segment FILE's path, which is NOT removed here: the file
+is mmapped until CLOSE-VECTOR-SEGMENT returns, and whether to delete it is
+the caller's call (see the fixture note in
 SEGMENT-STORE-MIGRATES-A-PRE-SEGMENT-CORPUS)."
   (let* ((key (chunk-segment-key type))
          (seg (gethash key (gdb::vector-segments graph)))
@@ -461,66 +461,68 @@ overwrites its slot and leaves the live count identical."
          ,@body))))
 
 (test segment-store-migrates-a-pre-segment-corpus
-  "THE OTHER CARRYING TEST.  A store whose chunks were written before the
-:vector-index declaration existed must, on open as :segment, migrate and then
-return the same results as a natively-built one.
+  "THE OTHER CARRYING TEST.  Chunk vertices that have no vector segment
+must, when a :segment store is built over the OPEN graph, be migrated into
+one by HYDRATE and then search exactly like a natively-built store.
 
-FIXTURE NOTE -- this deliberately does MORE than the plan's snippet, which was
-vacuous.  Dropping the segment from the graph's in-RAM VECTOR-SEGMENTS table is
-not enough to simulate a pre-declaration corpus: GDB::CLOSE-VECTOR-SEGMENT
-stamps the file CLEAN and leaves it on disk holding every vector, and
-GDB::RESTORE-VECTOR-SEGMENTS re-registers exactly that file at the next
-GDB:OPEN-GRAPH.  The reopened store would then find a full segment and return
-its 10 hits WITH THE MIGRATION CALL REMOVED ENTIRELY.  The on-disk state an
-upgrading deployment actually has is chunk vertices and NO SEGMENT FILE, so the
-file is deleted here as well -- verified below with a PROBE-FILE assertion in
-both directions so the fixture cannot silently stop simulating what it claims."
+FIXTURE NOTE -- the graph stays open on purpose.  This is the
+MAKE-GRAPH-STORE upgrade path, where the engine cannot help: vivace-graph's
+RESTORE-VECTOR-SEGMENTS rebuilds a MISSING segment file itself at
+GDB:OPEN-GRAPH (warning \"was missing at open; rebuilt N entries\"), so a
+close-and-reopen fixture exercises the engine's rebuild, and HYDRATE then
+finds nothing left to insert.  That is how this test went red -- every run,
+alone or in the suite -- once the engine gained that rebuild.  Dropping the
+segment from the graph's in-RAM VECTOR-SEGMENTS table is not enough either:
+GDB::CLOSE-VECTOR-SEGMENT stamps the file CLEAN and leaves it on disk, and
+a later open would adopt it, so the file is deleted too, asserted in both
+directions so the fixture cannot silently stop simulating what it claims."
   (with-temp-directory (dir)
-    (let ((seg-path nil))
-      (let* ((graph (gdb:make-graph :cl-llm-vg-seg-migrate dir :buffer-pool-size 1000))
-             (store (v:make-graph-store graph :strategy :scan :dimension 8)))
-        (rag:store-add store (agreement-corpus 20))
-        (setf seg-path (drop-chunk-segment graph))
-        (gdb:close-graph graph :snapshot-p nil))
-      ;; The fixture is only a fixture if the file was really there and is
-      ;; really gone; assert both rather than trusting DELETE-FILE.
-      (is (probe-file seg-path)
-          "fixture broken: no segment file at ~A to delete" seg-path)
-      (delete-file seg-path)
-      (is (null (probe-file seg-path))
-          "fixture broken: segment file ~A still present" seg-path)
-      (with-migration-spy (calls)
-        (let ((store (v:open-graph-store (namestring dir)
-                                         :name :cl-llm-vg-seg-migrate
-                                         :strategy :segment :dimension 8)))
-          (unwind-protect
-               (progn
-                 ;; The migration actually ran and inserted all 20 -- not merely
-                 ;; "some segment exists".
+    (let ((graph (gdb:make-graph :cl-llm-vg-seg-migrate dir
+                                 :buffer-pool-size 1000))
+          (seg-path nil))
+      (unwind-protect
+           (progn
+             (rag:store-add (v:make-graph-store graph :strategy :scan
+                                                      :dimension 8)
+                            (agreement-corpus 20))
+             (setf seg-path (drop-chunk-segment graph))
+             ;; The fixture is only a fixture if the file was really there
+             ;; and is really gone; assert both rather than trust DELETE-FILE.
+             (is (probe-file seg-path)
+                 "fixture broken: no segment file at ~A to delete" seg-path)
+             (delete-file seg-path)
+             (is (null (probe-file seg-path))
+                 "fixture broken: segment file ~A still present" seg-path)
+             (with-migration-spy (calls)
+               (let ((store (v:make-graph-store graph :strategy :segment
+                                                      :dimension 8)))
+                 ;; The migration actually ran and inserted all 20 -- not
+                 ;; merely "some segment exists".
                  (is (equal '((20 20)) (spy-calls))
                      "expected one progress call reporting 20 inserted, got ~S"
                      (spy-calls))
-                 (let ((seg (chunk-segment (v:graph-store-graph store))))
+                 (let ((seg (chunk-segment graph)))
                    (is (not (null seg)) "migration created no segment")
                    (when seg
                      (is (= 20 (gdb::segment-live-count seg))
                          "expected 20 vectors in the migrated segment, got ~D"
                          (gdb::segment-live-count seg))))
                  (is (= 20 (rag:store-count store))
-                     "expected 20 chunks after migration, got ~D" (rag:store-count store))
-                 (let ((hits (rag:store-search store (unit-query 8 1.0) 10)))
+                     "expected 20 chunks after migration, got ~D"
+                     (rag:store-count store))
+                 (let* ((hits (rag:store-search store (unit-query 8 1.0) 10))
+                        (ids (mapcar (lambda (h)
+                                       (rag:chunk-document-id
+                                        (rag:hit-chunk h)))
+                                     hits)))
                    (is (= 10 (length hits))
-                       "migrated store returned ~D hits, expected 10" (length hits))
+                       "migrated store returned ~D hits, expected 10"
+                       (length hits))
                    (when (= 10 (length hits))
-                     (is (= 10 (length (remove-duplicates
-                                        (mapcar (lambda (h)
-                                                  (rag:chunk-document-id (rag:hit-chunk h)))
-                                                hits)
-                                        :test #'string=)))
-                         "migration produced duplicate chunks: ~S"
-                         (mapcar (lambda (h) (rag:chunk-document-id (rag:hit-chunk h)))
-                                 hits)))))
-            (gdb:close-graph (v:graph-store-graph store) :snapshot-p nil)))))))
+                     (is (= 10 (length (remove-duplicates ids
+                                                          :test #'string=)))
+                         "migration produced duplicate chunks: ~S" ids))))))
+        (gdb:close-graph graph :snapshot-p nil)))))
 
 (test segment-migration-is-idempotent-on-reopen
   "Opening an already-migrated store must not re-migrate or duplicate anything --
