@@ -541,3 +541,36 @@ marker is present then."
                (is (eql 0 (%wait process)) "exit 0 within the grace")
                (is (not (%dirty-p (%sub root "store/")))))
           (%reap process))))))
+
+(test sigterm-on-the-solo-indexer-thread-exits-within-the-grace
+  "#84: SIGTERM delivered to the solo server's endpoint-indexer thread
+-- the last one started, after START returns -- while the main thread
+idles in RUN-SERVER's read of stdin: exit 0 within %WAIT's grace and
+no .dirty marker.  The handler interrupts the main thread out of that
+read; without the forward the hook ran STOP on the indexer thread and
+waited its 35 s there.  Controls: the server answers initialize, the
+marker is present, a thread was found and signalled."
+  (with-scratch-root (root)
+    (with-embeddings-fake (url)
+      (let ((process (%launch-solo
+                      root :assignments
+                      (list (format nil "CL_LLM_MEMORY_EMBED_URL=~a" url)
+                            "CL_LLM_MEMORY_EMBED_MODEL=fake"
+                            "CL_LLM_MEMORY_EMBED_FLOOR=0.5"))))
+        (unwind-protect
+             (progn
+               (is (%child-rpc process "initialize"
+                               '(("protocolVersion" . "2025-06-18")
+                                 ("clientInfo" . (("name" . "t")
+                                                  ("version" . "0")))))
+                   "control: the server answers")
+               (is (%dirty-p (%sub root "store/")) "control: dirty while held")
+               (let ((tid (car (last (%worker-tids process)))))
+                 (is (integerp tid) "control: a worker thread to signal")
+                 (when tid
+                   (is (zerop (%signal-thread process tid
+                                              sb-unix:sigterm))
+                       "control: delivered")
+                   (is (eql 0 (%wait process)) "exit 0 within the grace")
+                   (is (not (%dirty-p (%sub root "store/")))))))
+          (%reap process))))))
