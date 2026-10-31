@@ -5,11 +5,14 @@
 
 (defun call-with-temp-memory-graph (fn)
   "Run FN on a fresh in-memory graph in a temp dir; clean up after."
-  (let* ((dir (format nil "/tmp/cl-llm-vg-test-~a/" (get-internal-real-time)))
-         (graph (gdb::make-memory-graph :cl-llm-vg-test (pathname dir))))
-    (unwind-protect (funcall fn graph)
-      (ignore-errors (gdb:close-graph graph))
-      (ignore-errors (uiop:delete-directory-tree (pathname dir) :validate t)))))
+  (with-system-directory ()
+    (let* ((dir (format nil "/tmp/cl-llm-vg-test-~a/"
+                        (get-internal-real-time)))
+           (graph (gdb::make-memory-graph :cl-llm-vg-test (pathname dir))))
+      (unwind-protect (funcall fn graph)
+        (ignore-errors (gdb:close-graph graph))
+        (ignore-errors (uiop:delete-directory-tree (pathname dir)
+                                                   :validate t))))))
 
 (defmacro with-temp-graph ((g) &body body)
   `(call-with-temp-memory-graph (lambda (,g) ,@body)))
@@ -21,11 +24,14 @@ regardless of how BODY exits. This only reserves a path -- callers that need an
 on-disk graph there still create it themselves (e.g. via gdb:make-graph, which
 creates the directory), matching the persistent-graph test idiom used elsewhere
 in tests-vivace/ (see tests-vivace/integration.lisp)."
-  `(let ((,dir (pathname (format nil "/tmp/cl-llm-vg-test-~a-~a/"
-                                 (get-internal-real-time) (random 1000000)))))
-     (unwind-protect (progn ,@body)
-       (ignore-errors (uiop:delete-directory-tree ,dir :validate t
-                                                        :if-does-not-exist :ignore)))))
+  `(with-system-directory ()
+     (let ((,dir (pathname (format nil "/tmp/cl-llm-vg-test-~a-~a/"
+                                   (get-internal-real-time)
+                                   (random 1000000)))))
+       (unwind-protect (progn ,@body)
+         (ignore-errors
+          (uiop:delete-directory-tree ,dir :validate t
+                                           :if-does-not-exist :ignore))))))
 
 (defun test-chunk (text dim value)
   "A rag:chunk whose embedding is DIM copies of VALUE (pre-normalisation)."

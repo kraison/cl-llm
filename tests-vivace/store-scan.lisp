@@ -38,6 +38,7 @@
 
 (test scan-store-delete-document
   (let* ((dir (format nil "/tmp/cl-llm-vg-del-scan-~a/" (get-internal-real-time)))
+         (gdb:*system-directory* (%temp-system-directory))
          (emb (rag:make-mock-embedder)))
     (unwind-protect
          (let* ((g (gdb:make-graph :cl-llm-vg-del-scan (pathname dir)))
@@ -54,7 +55,9 @@
            (let ((hits (rag:store-search store (rag:embed emb "a1") 5)))
              (is (every (lambda (h) (string= "B" (rag:chunk-document-id (rag:hit-chunk h)))) hits)))
            (gdb:close-graph g))
-      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore))))
+      (uiop:delete-directory-tree (pathname dir) :validate t
+                                                 :if-does-not-exist :ignore)
+      (%delete-system-directory))))
 
 (test scan-store-delete-absent-document-is-a-noop
   (with-temp-graph (g)

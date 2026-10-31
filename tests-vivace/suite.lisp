@@ -10,3 +10,53 @@
   (is (fboundp 'rag:as-embedding))
   (is (equalp (rag:as-embedding '(1 2 3))
               (rag:as-embedding #(1.0d0 2.0d0 3.0d0)))))
+
+;;; graph-db refuses MAKE-GRAPH, OPEN-GRAPH and MAKE-MEMORY-GRAPH while
+;;; GDB:*SYSTEM-DIRECTORY* (its type-id registry) is NIL, vivace-graph
+;;; #186.  Each test binds a fresh one, as tests-memory and tests-claims do.
+
+(defparameter *test-buffer-pool-size* 1000
+  "Size the suite starts graph-db's buffer pool at (#11).  The pool is one
+process-wide resource, sized by whichever graph opens FIRST and held for
+the life of the image: at MAKE-GRAPH's default of 100000 it pre-fills
+~300 MB of buffers, and a :BUFFER-POOL-SIZE on any later graph is ignored.")
+
+(defvar *buffer-pool-started-here* nil
+  "T once %ENSURE-TEST-BUFFER-POOL started graph-db's pool itself.  NIL
+while the pool in use is one that was already running when the suite
+first needed a graph, e.g. an application's in a long-lived image.")
+
+(defun %ensure-test-buffer-pool ()
+  "Start graph-db's buffer pool at *TEST-BUFFER-POOL-SIZE* unless a pool is
+already running: GDB::ENSURE-BUFFER-POOL then keeps that pool at its own
+size, which the suite does not trim (SET-BUFFER-POOL-SIZE would drop an
+application's live buffers).  Returns the size in force."
+  (unless (gdb::buffer-pool-running-p)
+    (gdb::ensure-buffer-pool *test-buffer-pool-size*)
+    (setf *buffer-pool-started-here* t))
+  gdb:*buffer-pool-size*)
+
+(defun %temp-system-directory ()
+  "A fresh, not-yet-existing directory namestring under /tmp for
+GDB:*SYSTEM-DIRECTORY*.  The caller deletes it: %DELETE-SYSTEM-DIRECTORY.
+Every test binds one before its first graph, so this is also where the
+buffer pool is pinned (%ENSURE-TEST-BUFFER-POOL): a test run alone in a
+fresh image would otherwise size the pool at graph-db's default."
+  (%ensure-test-buffer-pool)
+  (format nil "/tmp/cl-llm-vg-sys-~a-~a/"
+          (get-internal-real-time) (random 1000000)))
+
+(defun %delete-system-directory ()
+  "Delete the directory GDB:*SYSTEM-DIRECTORY* names, if it exists."
+  (ignore-errors
+   (uiop:delete-directory-tree (pathname gdb:*system-directory*)
+                               :validate t :if-does-not-exist :ignore)))
+
+(defmacro with-system-directory (() &body body)
+  "Run BODY with GDB:*SYSTEM-DIRECTORY* bound to a fresh temp directory
+(%TEMP-SYSTEM-DIRECTORY, which also pins the buffer pool), deleted
+afterwards however BODY exits.  Graphs made inside share the directory, so
+a close-and-reopen within BODY keeps its type ids."
+  `(let ((gdb:*system-directory* (%temp-system-directory)))
+     (unwind-protect (progn ,@body)
+       (%delete-system-directory))))

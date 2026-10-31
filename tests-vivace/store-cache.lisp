@@ -69,6 +69,7 @@ that accidental cancellation."
 
 (test cache-store-delete-syncs-cache-and-graph
   (let* ((dir (format nil "/tmp/cl-llm-vg-del-cache-~a/" (get-internal-real-time)))
+         (gdb:*system-directory* (%temp-system-directory))
          (emb (rag:make-mock-embedder)))
     (unwind-protect
          (let* ((g (gdb:make-graph :cl-llm-vg-del-cache (pathname dir)))
@@ -86,7 +87,9 @@ that accidental cancellation."
              (is (string= "B" (rag:chunk-document-id
                                (rag:hit-chunk (first (rag:store-search store2 (rag:embed emb "b1") 5)))))))
            (gdb:close-graph g))
-      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore))))
+      (uiop:delete-directory-tree (pathname dir) :validate t
+                                                 :if-does-not-exist :ignore)
+      (%delete-system-directory))))
 
 (test cache-store-delete-then-readd-no-resurrection
   "The resurrection-critical invariant: soft-deleted chunks must never be
@@ -97,6 +100,7 @@ A1/A2 chunks would still be indexed alongside the new chunk and STORE-COUNT
 would read 3, not 1 -- and a fresh hydrate over the same graph would leak the
 old text back into search results."
   (let* ((dir (format nil "/tmp/cl-llm-vg-del-readd-cache-~a/" (get-internal-real-time)))
+         (gdb:*system-directory* (%temp-system-directory))
          (emb (rag:make-mock-embedder)))
     (unwind-protect
          (let* ((g (gdb:make-graph :cl-llm-vg-del-readd-cache (pathname dir)))
@@ -122,10 +126,13 @@ old text back into search results."
              (is (= 1 (length hits)))
              (is (string= "a3 replacement text" (rag:chunk-text (rag:hit-chunk (first hits))))))
            (gdb:close-graph g))
-      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore))))
+      (uiop:delete-directory-tree (pathname dir) :validate t
+                                                 :if-does-not-exist :ignore)
+      (%delete-system-directory))))
 
 (test graph-store-chunks-returns-all
   (let* ((dir (format nil "/tmp/cl-llm-vg-gsc-~a/" (get-internal-real-time)))
+         (gdb:*system-directory* (%temp-system-directory))
          (emb (rag:make-mock-embedder)))
     (unwind-protect
          (let* ((g (gdb:make-graph :cl-llm-vg-gsc (pathname dir)))
@@ -134,4 +141,6 @@ old text back into search results."
                                       (rag:make-chunk "b" :document-id "d2" :embedding (rag:embed emb "b"))))
            (is (= 2 (length (v:graph-store-chunks store))))
            (gdb:close-graph g))
-      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore))))
+      (uiop:delete-directory-tree (pathname dir) :validate t
+                                                 :if-does-not-exist :ignore)
+      (%delete-system-directory))))
