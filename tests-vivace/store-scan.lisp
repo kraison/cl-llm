@@ -55,7 +55,8 @@
            (let ((hits (rag:store-search store (rag:embed emb "a1") 5)))
              (is (every (lambda (h) (string= "B" (rag:chunk-document-id (rag:hit-chunk h)))) hits)))
            (gdb:close-graph g))
-      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore)
+      (uiop:delete-directory-tree (pathname dir) :validate t
+                                                 :if-does-not-exist :ignore)
       (%delete-system-directory))))
 
 (test scan-store-delete-absent-document-is-a-noop

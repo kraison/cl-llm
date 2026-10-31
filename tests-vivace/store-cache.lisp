@@ -87,7 +87,8 @@ that accidental cancellation."
              (is (string= "B" (rag:chunk-document-id
                                (rag:hit-chunk (first (rag:store-search store2 (rag:embed emb "b1") 5)))))))
            (gdb:close-graph g))
-      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore)
+      (uiop:delete-directory-tree (pathname dir) :validate t
+                                                 :if-does-not-exist :ignore)
       (%delete-system-directory))))
 
 (test cache-store-delete-then-readd-no-resurrection
@@ -125,7 +126,8 @@ old text back into search results."
              (is (= 1 (length hits)))
              (is (string= "a3 replacement text" (rag:chunk-text (rag:hit-chunk (first hits))))))
            (gdb:close-graph g))
-      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore)
+      (uiop:delete-directory-tree (pathname dir) :validate t
+                                                 :if-does-not-exist :ignore)
       (%delete-system-directory))))
 
 (test graph-store-chunks-returns-all
@@ -139,5 +141,6 @@ old text back into search results."
                                       (rag:make-chunk "b" :document-id "d2" :embedding (rag:embed emb "b"))))
            (is (= 2 (length (v:graph-store-chunks store))))
            (gdb:close-graph g))
-      (uiop:delete-directory-tree (pathname dir) :validate t :if-does-not-exist :ignore)
+      (uiop:delete-directory-tree (pathname dir) :validate t
+                                                 :if-does-not-exist :ignore)
       (%delete-system-directory))))
