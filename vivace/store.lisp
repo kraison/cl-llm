@@ -94,12 +94,18 @@ re-migrates whatever is still non-conforming. A half-migrated store is already t
 state that exists transiently during any migration; resumability is worth more than
 atomicity for this one-way upgrade."
   (let ((graph (graph-store-graph store))
-        (victim-ids '()))
+        (victim-ids '())
+        (total 0))
     (map-chunk-vertices
      store
      (lambda (vertex)
        (when (%needs-migration-p (%slot vertex "EMBEDDING"))
          (push (gdb:id vertex) victim-ids))))
+    ;; Count BEFORE the NREVERSE below: it relinks the list, after which
+    ;; VICTIM-IDS names its last cons and LENGTH reads 1.  SBCL happened to
+    ;; compile (coerce (nreverse ...) 'vector) non-destructively, so only
+    ;; ECL reported 1 for a 5-victim migration (#9, the #17 pattern).
+    (setf total (length victim-ids))
     (when victim-ids
       (ecase *embedding-migration-policy*
         (:error
@@ -108,10 +114,9 @@ atomicity for this one-way upgrade."
                                       single-float vectors; scoring would rank ~
                                       them incorrectly. Re-embed, or set ~
                                       *embedding-migration-policy* to :migrate."
-                                 (length victim-ids))))
+                                 total)))
         (:migrate
          (let* ((victims (coerce (nreverse victim-ids) 'vector))
-                (total (length victims))
                 (migrated 0))
            (format t "~&migrate-embeddings: ~d embedding~:p need migration; rewriting ~
                       in batches of ~d~%"
@@ -123,7 +128,7 @@ atomicity for this one-way upgrade."
                     (incf migrated (- end start))
                     (format t "~&migrate-embeddings: ~d/~d migrated~%" migrated total)
                     (finish-output))))))
-    (length victim-ids)))
+    total))
 
 (defun validate-chunks (store chunks)
   "Validate CHUNKS (non-nil embedding + consistent dimension) WITHOUT mutating

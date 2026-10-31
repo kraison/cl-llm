@@ -435,6 +435,9 @@ again, if the pool is not the small one, or if the run leaves more than
 sbcl --non-interactive --eval '(asdf:test-system :cl-llm/rag/vivace/tests)'
 ```
 
+The same suite also runs on ECL (`ecl --load ~/quicklisp/setup.lisp
+--eval '(asdf:test-system :cl-llm/rag/vivace/tests)'`).
+
 `cl-llm/rag/claims` and `cl-llm/memory` need `graph-db/spacetime` (from
 vivace-graph `experiment` at or after the 2026-09-04 merge of #329,
 which the memory tenant's cite, store and capture code and the query
@@ -473,11 +476,21 @@ Under development. Currently **not** implemented:
 
 Two things worth knowing about the graph-backed store:
 
-- **`:segment` has been developed and tested on SBCL only.** The vivace suite has
-  never been run on ECL, and `:segment` is now the default — so an ECL user gets
-  an untested path unless they pass `:strategy :cache` or `:scan`. There is an
-  existing related report of ECL/SBCL store disagreement
-  ([cl-llm#9](https://github.com/kraison/cl-llm/issues/9)).
+- **`:segment` has been developed and tested on SBCL only.** `:segment` is
+  now the default, so an ECL user gets a less-travelled path unless they pass
+  `:strategy :cache` or `:scan`. The vivace suite does run on ECL: the
+  ECL-only scan/cache disagreement
+  ([cl-llm#9](https://github.com/kraison/cl-llm/issues/9)) was a `LENGTH`
+  read from a list a destructive sort had already relinked, so each query
+  returned a correct-order prefix of random length. The top-k collector
+  removed it from search and the same slip in `migrate-embeddings` (its
+  return value) is fixed; both are pinned by tests. What remains
+  ECL-specific is benign but worth knowing: the typed vertex scan visits
+  chunks in a different order per graph on ECL (the engine's in-RAM type
+  index is an `EQUALP` hash set of random ids), where SBCL yields insertion
+  order. Ranking is order-independent (score, then document id), but two
+  chunks of one document with identical embeddings tie completely and come
+  back in scan order.
 - Do not construct two `:segment` stores over the same graph from two threads at
   once — the engine requires that two migrations of one segment never overlap.
   Concurrent *readers* are safe.
