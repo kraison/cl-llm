@@ -6,8 +6,10 @@
 (defun call-with-temp-memory-graph (fn)
   "Run FN on a fresh in-memory graph in a temp dir; clean up after."
   (with-system-directory ()
-    (let* ((dir (format nil "/tmp/cl-llm-vg-test-~a/"
-                        (get-internal-real-time)))
+    ;; RANDOM as well as the clock: ECL's ticks in milliseconds, so two
+    ;; graphs made in one test shared a path there (#9).
+    (let* ((dir (format nil "/tmp/cl-llm-vg-test-~a-~a/"
+                        (get-internal-real-time) (random 1000000)))
            (graph (gdb::make-memory-graph :cl-llm-vg-test (pathname dir))))
       (unwind-protect (funcall fn graph)
         (ignore-errors (gdb:close-graph graph))
