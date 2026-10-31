@@ -16,19 +16,23 @@ chunks, one search, then close and delete.  Unique names on purpose: the
 suite names every graph differently, and a per-name registry was one of
 #11's suspects."
   (with-system-directory ()
-    (let* ((dir (pathname (format nil "/tmp/cl-llm-vg-heap-~a-~a/"
-                                  (get-internal-real-time) i)))
-           (name (intern (format nil "CL-LLM-VG-HEAP-~D" i) :keyword))
-           (graph (if (evenp i)
-                      (gdb:make-graph name dir)
-                      (gdb::make-memory-graph name dir))))
+    (let ((dir (pathname (format nil "/tmp/cl-llm-vg-heap-~a-~a/"
+                                 (get-internal-real-time) i)))
+          (name (intern (format nil "CL-LLM-VG-HEAP-~D" i) :keyword))
+          (graph nil))
+      ;; MAKE-GRAPH creates DIR before it can signal, so it runs inside the
+      ;; protected form: an abort there must still delete the directory.
       (unwind-protect
-           (let ((store (v:make-graph-store graph :strategy :segment
-                                                  :dimension 8)))
+           (let* ((g (setf graph (if (evenp i)
+                                     (gdb:make-graph name dir)
+                                     (gdb::make-memory-graph name dir))))
+                  (store (v:make-graph-store g :strategy :segment
+                                               :dimension 8)))
              (rag:store-add store (agreement-corpus 20))
              (rag:store-search store (unit-query 8 1.0) 5))
-        (gdb:close-graph graph :snapshot-p nil)
-        (ignore-errors (uiop:delete-directory-tree dir :validate t))))))
+        (when graph (gdb:close-graph graph :snapshot-p nil))
+        (ignore-errors (uiop:delete-directory-tree
+                        dir :validate t :if-does-not-exist :ignore))))))
 
 (defparameter *graph-lifetimes* 20)
 
