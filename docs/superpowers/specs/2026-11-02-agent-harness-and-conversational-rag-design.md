@@ -10,7 +10,6 @@ domain.
 Marking used below: **(owner)** is a decision the repository owner
 made. **(builder's call, made)** is a choice the designer made and the
 owner can overturn while reading. **(left to the builder)** is open.
-**(pending)** awaits the owner's answer.
 
 ## 1. Why
 
@@ -267,17 +266,17 @@ deployment can run it on a small local model.
 3. **Answer.** The answer provider sees the system prompt (the
    caller's, composed with `*grounding-instructions*`), the numbered
    sources, the standalone question and the question as asked. What it
-   sees of earlier turns is a caller option **(pending)**:
-   - `:questions` (the recommended default): earlier questions and
-     their standalone forms only, so no earlier answer can become a
-     source;
+   sees of earlier turns is a caller option:
+   - `:questions`, the default **(owner, 2026-11-02)**: earlier
+     questions and their standalone forms only, so no earlier answer
+     can become a source;
    - `:turns`: earlier questions and answers, compacted.
 
    Carrying earlier turns' sources into this turn is a second option,
-   off by default **(pending)**. When on, carried hits pass through a
-   caller-supplied filter against the new standalone question before
-   they join the context, so a change of subject does not bring the old
-   subject's passages along.
+   off by default **(owner, 2026-11-02)**. When on, carried hits pass
+   through a caller-supplied filter against the new standalone question
+   before they join the context, so a change of subject does not bring
+   the old subject's passages along.
 
    The answer runs through `run-persona`, so the turn gets the
    harness's guards and a run record.
