@@ -65,3 +65,10 @@ returning the requests seen, oldest first, as plists of :system, :user
         (copy-list (llm:stored-conversation-turns sc))
         (llm:stored-conversation-summary sc)
         (llm:stored-conversation-summarized sc)))
+
+(defun count-matches (needle haystack)
+  (loop with start = 0
+        for at = (search needle haystack :start2 start)
+        while at
+        count t
+        do (setf start (1+ at))))

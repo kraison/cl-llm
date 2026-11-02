@@ -234,3 +234,32 @@ them a small local model with `:rewrite-persona` and
 `:rewrite`, `:answer` and `:compaction` runs. A turn never signals. A
 turn that fails or stops leaves the stored conversation exactly as it
 was.
+
+### What the answer model sees of history
+
+- **`:history :questions`** (the default) gives the answer model the
+  earlier questions only, as text in its input, each with the query it
+  was searched as.
+- **`:history :turns`** gives it the earlier questions and answers as
+  messages, compacted: the messages after the summary, with the summary
+  after its system prompt. The stored conversation is never handed to
+  the run, only a copy of what a model reads.
+
+### Carry-forward
+
+`:carry-forward t` lets a turn reuse the previous turn's sources:
+`:carry-filter`, a function of `(standalone-question hits)`, chooses
+which of them join the new hits (default: none). They follow the new
+hits, each source once. To carry them, each turn's annotation stores
+its sources' text as well as their ids and titles, so conversations
+grow. A consumer whose retrieval gates sources against the query (for
+example, by a designation it names) should apply the same gate in the
+filter, or a change of subject brings the old subject's passages along.
+
+### Compaction in the turn
+
+Each turn first compacts the conversation (`:history-budget`, default
+6000 tokens, and `:keep-recent`, default 4) with the compaction
+persona as `summarize`. The rewrite reads the summary; under
+`:questions` the answer model does not. A failed compaction run fails
+the turn, and the conversation's summary is put back as it was.

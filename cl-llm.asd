@@ -339,7 +339,8 @@ answer, each a harness run (#90)."
   :pathname "tests-rag-chat/"
   :components ((:file "packages")
                (:file "suite")
-               (:file "turn-tests"))
+               (:file "turn-tests")
+               (:file "options-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-rag-chat :keyword))

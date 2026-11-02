@@ -149,13 +149,64 @@ turns, questions and answers, as text."
     (unless (string= standalone question)
       (format out "STANDALONE: ~a~%" standalone))))
 
-(defun %grounded (persona)
+(defun %grounded (persona &optional summary)
   "PERSONA with its system prompt composed WITH the grounding
-instructions, never replaced by them (rag-ask's rule)."
+instructions, never replaced by them (rag-ask's rule); under :TURNS,
+followed by the running SUMMARY."
   (%persona-like persona
-                 :system (format nil "~@[~a~%~%~]~a"
+                 :system (format nil "~@[~a~%~%~]~a~@[~%~%Summary of the ~
+                                  earlier conversation:~%~a~]"
                                  (harness:persona-system persona)
-                                 rag:*grounding-instructions*)))
+                                 rag:*grounding-instructions*
+                                 summary)))
+
+(defun %summary-input (previous messages)
+  "What the compaction model reads: the summary so far, then the turns
+being folded, as text."
+  (with-output-to-string (out)
+    (when previous
+      (format out "Summary so far:~%~a~%~%" previous))
+    (format out "Conversation to add to it:~%")
+    (dolist (m messages)
+      (let ((text (%text m)))
+        (when (plusp (length text))
+          (format out "~:[Assistant~;User~]: ~a~%"
+                  (eq :user (llm:message-role m)) text))))))
+
+;;; Carry-forward (off by default; owner, 2026-11-02)
+
+(defun %hit-key (hit)
+  (let ((c (rag:hit-chunk hit)))
+    (cons (rag:chunk-document-id c) (rag:chunk-text c))))
+
+(defun %carried-hits (sc)
+  "The previous turn's sources as hits, from its annotation; only
+sources stored with their text (carry-forward on) can be carried."
+  (let ((ann (car (last (llm:stored-conversation-turns sc)))))
+    (when (hash-table-p ann)
+      (loop for source across (or (gethash "sources" ann) #())
+            for text = (gethash "text" source)
+            when text
+              collect (rag:make-hit
+                       (rag:make-chunk text
+                                       :document-id (gethash "document-id"
+                                                             source)
+                                       :metadata (list :title
+                                                       (gethash "title"
+                                                                source)))
+                       0.0)))))
+
+(defun %with-carried (chat sc standalone hits)
+  "HITS, then the previous turn's hits CARRY-FILTER keeps, each once."
+  (if (not (chat-carry-forward chat))
+      hits
+      (let ((kept (funcall (chat-carry-filter chat) standalone
+                           (%carried-hits sc))))
+        (append hits
+                (remove-if (lambda (h)
+                             (member (%hit-key h) hits
+                                     :key #'%hit-key :test #'equal))
+                           kept)))))
 
 (defun %clean-query (text)
   "The rewrite's first line, trimmed of whitespace and quotes."
@@ -170,7 +221,7 @@ instructions, never replaced by them (rag-ask's rule)."
 
 ;;; Recording
 
-(defun %annotation (standalone hits run)
+(defun %annotation (standalone hits run &key with-text)
   (let ((ann (make-hash-table :test #'equal)))
     (setf (gethash "standalone" ann) standalone
           (gethash "sources" ann)
@@ -178,7 +229,8 @@ instructions, never replaced by them (rag-ask's rule)."
                          (let ((c (rag:hit-chunk hit)))
                            (json:jobject
                             "document-id" (rag:chunk-document-id c)
-                            "title" (getf (rag:chunk-metadata c) :title))))
+                            "title" (getf (rag:chunk-metadata c) :title)
+                            "text" (and with-text (rag:chunk-text c)))))
                hits)
           (gethash "run" ann)
           (json:jobject "id" (harness:run-id run)
@@ -226,6 +278,21 @@ signals."
              (note (step run)
                (setf (getf (rag-turn-runs turn) step) run)
                run))
+        (handler-case
+            (llm:compact-conversation
+             sc :budget (chat-history-budget chat)
+                :keep-recent (chat-keep-recent chat)
+                :summarize
+                (lambda (previous messages)
+                  (let ((r (note :compaction
+                                 (harness:run-persona
+                                  (chat-compaction-persona chat)
+                                  (%summary-input previous messages)))))
+                    (unless (%ok-p r)
+                      (fail (harness:run-stop-reason r)
+                            (harness:run-error r)))
+                    (harness:run-text r))))
+          (error (e) (fail :error e)))
         (let ((standalone question))
           (when (%questions sc)
             (let ((r (note :rewrite
@@ -239,22 +306,36 @@ signals."
               (when (string= standalone "")
                 (fail :error "the rewrite model returned no query"))))
           (setf (rag-turn-standalone turn) standalone)
-          (let ((hits (handler-case
-                          (funcall (chat-retrieve chat) standalone
-                                   (chat-k chat))
-                        (error (e) (fail :error e)))))
+          (let ((hits (%with-carried
+                       chat sc standalone
+                       (handler-case
+                           (funcall (chat-retrieve chat) standalone
+                                    (chat-k chat))
+                         (error (e) (fail :error e)))))
+                (turns-p (eq :turns (chat-history chat))))
             (setf (rag-turn-hits turn) hits)
             (let ((r (note :answer
                            (harness:run-persona
-                            (%grounded (chat-answer-persona chat))
+                            (%grounded (chat-answer-persona chat)
+                                       (and turns-p
+                                            (llm:stored-conversation-summary
+                                             sc)))
                             (%answer-input chat sc question standalone
                                            (funcall (chat-assemble chat)
-                                                    hits))))))
+                                                    hits))
+                            ;; :TURNS lends a copy of what a model reads;
+                            ;; SC itself is never handed to the run.
+                            :conversation
+                            (and turns-p
+                                 (llm:conversation-for-model sc
+                                                             :system nil))))))
               (unless (%ok-p r)
                 (fail (harness:run-stop-reason r) (harness:run-error r)))
               (setf (rag-turn-answer turn) (harness:run-text r))
               (llm:record-turn sc question (harness:run-text r)
-                               (%annotation standalone hits r))
+                               (%annotation standalone hits r
+                                            :with-text
+                                            (chat-carry-forward chat)))
               (when store
                 (handler-case (llm:save-conversation store sc)
                   (error (e) (fail :error e))))
