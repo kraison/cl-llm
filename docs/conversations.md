@@ -12,7 +12,7 @@ needs to keep it:
 
 | Accessor | Holds |
 |---|---|
-| `stored-conversation-id` | `c-<time>-<counter>-<salt>`, canonical `[a-z0-9-]+` |
+| `stored-conversation-id` | `c-<time>-<counter>-<salt>`, canonical `[a-z0-9-]+`; unique within an image, and with high probability across images |
 | `stored-conversation-owner`, `-title` | strings, or NIL |
 | `stored-conversation-created`, `-updated` | universal times |
 | `stored-conversation-conversation` | the `llm:conversation`: system, model, parameters, messages |
@@ -63,7 +63,9 @@ convert to and from one JSON object:
 - **Unknown keys are ignored** and missing optional ones default, so an
   older reader takes a newer record.
 - **An id that is not `[a-z0-9-]+` is refused** with `llm-parse-error`:
-  an id becomes a file name and an index key.
+  an id becomes a file name and an index key. So is a field of the
+  wrong type (a non-integer `updated`, a `messages` that is not an
+  array), rather than failing later in a sort or a compaction.
 - A float parameter comes back as a double-float.
 
 ## Stores
@@ -80,6 +82,12 @@ and inherits the rest:
 | `(current-conversation store owner)` | OWNER's current one, or NIL |
 | `(make-conversation-current store sc)` | SC current, the owner's others not |
 | `(new-conversation store owner &key title system parameters model)` | a fresh one, saved and made current |
+
+**Concurrency.** Neither store serialises writers. A server that may
+save one owner's conversations from two threads at once must hold its
+own lock per owner around `new-conversation`, `save-conversation` and
+`make-conversation-current`; otherwise two current conversations, or
+two records for one id, are possible. Reads need no lock.
 
 Starting afresh never deletes anything: the previous conversation is
 kept, no longer current, and can be loaded and continued. Pass
@@ -203,7 +211,8 @@ depends on `cl-llm/rag` and `cl-llm/harness`.
    and, when it differs, `STANDALONE:`.
 4. **Record.** Only a completed answer is recorded: `record-turn` with
    an annotation holding the standalone question, the sources' document
-   ids and titles, and the answer run's id, stop reason and tokens. With
+   ids and titles, and the answer run's id, stop reason, tokens and
+   elapsed seconds. With
    `:store`, the conversation is saved.
 
 **The answer model never sees an earlier answer** under the default
@@ -239,7 +248,9 @@ was.
 
 - **`:history :questions`** (the default) gives the answer model the
   earlier questions only, as text in its input, each with the query it
-  was searched as.
+  was searched as: those of the turns compaction has not folded, so the
+  prompt stays bounded. Folded questions live in the summary, which
+  this model never sees.
 - **`:history :turns`** gives it the earlier questions and answers as
   messages, compacted: the messages after the summary, with the summary
   after its system prompt. The stored conversation is never handed to

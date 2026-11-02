@@ -47,6 +47,8 @@ of tool results belongs to the turn before it."
 fold the oldest BLOCK turns not among the last KEEP-RECENT into the
 running summary: (funcall SUMMARIZE previous-summary messages) returns
 the new summary.  Never splits a turn.  Returns (values SC COMPACTED-P)."
+  (check-type block (integer 1))        ; 0 folds nothing, forever
+  (check-type keep-recent (integer 0))
   (let ((messages (conversation-messages
                    (stored-conversation-conversation sc)))
         (compacted nil))

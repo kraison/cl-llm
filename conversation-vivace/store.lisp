@@ -75,7 +75,14 @@ whose name was declared with DEFINE-CONVERSATION-STORE."))
 (defmethod llm:list-conversations ((store graph-conversation-store) owner)
   (let* ((graph (graph-conversation-store-graph store))
          (gdb:*graph* graph))
-    (sort (mapcar (lambda (vertex)
-                    (llm:stored-conversation-from-json (cv-json vertex)))
-                  (%vertices graph 'cv-owner (%owner-key owner)))
+    (sort (loop for vertex in (%vertices graph 'cv-owner
+                                         (%owner-key owner))
+                for sc = (handler-case
+                             (llm:stored-conversation-from-json
+                              (cv-json vertex))
+                           (error (e)
+                             (warn "skipping unreadable conversation ~a: ~a"
+                                   (cv-id vertex) e)
+                             nil))
+                when sc collect sc)
           #'> :key #'llm:stored-conversation-updated)))

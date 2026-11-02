@@ -106,3 +106,22 @@
                               (first (llm:conversation-messages
                                       (llm:stored-conversation-conversation
                                        back))))))))))))
+
+(test file-store-skips-a-wrongly-typed-file
+  (with-temp-dir (dir)
+    (let ((store (llm:make-file-conversation-store dir))
+          (warnings 0))
+      (llm:new-conversation store "ada")
+      (let ((object (json:parse (llm:stored-conversation-to-json
+                                 (llm:make-stored-conversation :owner "ada")))))
+        (setf (gethash "updated" object) "later")
+        (with-open-file (s (merge-pathnames
+                            (format nil "~a.json" (gethash "id" object)) dir)
+                           :direction :output)
+          (write-string (json:to-json object) s)))
+      (let ((listed (handler-bind ((warning (lambda (w)
+                                               (incf warnings)
+                                               (muffle-warning w))))
+                      (llm:list-conversations store "ada"))))
+        (is (= 1 (length listed)))
+        (is (= 1 warnings))))))

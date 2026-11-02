@@ -99,3 +99,20 @@
         (ignore-errors (gdb:close-graph other))
         (ignore-errors (uiop:delete-directory-tree (pathname other-dir)
                                                    :validate t))))))
+
+(test graph-store-skips-a-corrupt-vertex
+  (with-graph (g)
+    (let ((store (cv:make-graph-conversation-store g))
+          (warnings 0))
+      (llm:new-conversation store "ada")
+      (let ((gdb:*graph* g))
+        (gdb:with-transaction (:graph g)
+          (cl-llm.conversation.vivace::make-stored-conversation-vertex
+           :cv-id "c-bad" :cv-owner "ada" :cv-updated 0 :cv-current nil
+           :cv-json "not json" :graph g)))
+      (let ((listed (handler-bind ((warning (lambda (w)
+                                               (incf warnings)
+                                               (muffle-warning w))))
+                      (llm:list-conversations store "ada"))))
+        (is (= 1 (length listed)))
+        (is (= 1 warnings))))))

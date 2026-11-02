@@ -270,6 +270,12 @@ protocol (a file store ships in core, a graph store in
 `cl-llm/conversation/vivace`), and compaction for long histories.
 Guide: [`docs/conversations.md`](docs/conversations.md).
 
+`cl-llm/rag/chat` makes a RAG answer conversational: a follow-up such
+as "how is it powered?" is rewritten into a standalone question before
+retrieval, and each model call (rewrite, answer, compaction) is a
+harness run. By default the answer model sees earlier questions, never
+earlier answers. Same guide.
+
 ### The agent harness (`cl-llm/harness`)
 
 A persona is data: a system prompt, tools by name, a provider (with

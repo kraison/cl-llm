@@ -100,3 +100,53 @@ request (the last one logged) is what the tests read."
         (is (string= "SUMMARY-TEXT" (llm:stored-conversation-summary sc)))
         (is (search "SUMMARY-TEXT"
                     (getf (first (funcall rewrite-log)) :all)))))))
+
+;;; Final review (conversations-89-90)
+
+(test rewrite-reply-with-surrounding-newlines-kept-whole
+  (dolist (reply (list (format nil "~%How is device X powered?~%")
+                       (format nil "  How is device X powered?~%")
+                       (format nil "~%~%How is device X powered?~%more")))
+    (multiple-value-bind (chat answer-log rewrite-log queries)
+        (chat-with :rewrite reply)
+      (declare (ignore answer-log rewrite-log))
+      (chat:rag-chat-turn chat (sc-with-turn) "how is it powered?")
+      (is (equal '("How is device X powered?") (funcall queries))
+          "reply ~s searched as ~s" reply (funcall queries)))))
+
+(test questions-history-skips-summarized-turns
+  ;; The answer prompt must not grow without bound: folded questions
+  ;; are in the summary, which the answer model does not see.
+  (multiple-value-bind (chat answer-log) (chat-with)
+    (let ((sc (sc-with-turn)))
+      (llm:record-turn sc "SECOND-QUESTION" "second answer")
+      (setf (llm:stored-conversation-summary sc) "SUMMARY-X"
+            (llm:stored-conversation-summarized sc) 2)
+      (chat:rag-chat-turn chat sc "third?")
+      (let ((user (getf (first (funcall answer-log)) :user)))
+        (is (search "SECOND-QUESTION" user))
+        (is (not (search "Tell me about device X" user)))
+        (is (not (search "SUMMARY-X" user)))))))
+
+(test failing-filter-fails-turn
+  (multiple-value-bind (chat)
+      (options-chat :carry-forward t
+                    :carry-filter (lambda (q hits)
+                                    (declare (ignore q hits))
+                                    (error "filter bug"))
+                    :retrieve (sequenced-retriever
+                               (list (hit "doc-a" "A"))
+                               (list (hit "doc-b" "B"))))
+    (let ((sc (llm:make-stored-conversation :owner "ada")))
+      (chat:rag-chat-turn chat sc "first")
+      (let* ((before (snapshot sc))
+             (turn (chat:rag-chat-turn chat sc "second")))
+        (is (eq :error (chat:rag-turn-stop-reason turn)))
+        (is (equal before (snapshot sc)))))))
+
+(test turn-annotation-records-timing
+  (multiple-value-bind (chat) (chat-with)
+    (let ((sc (llm:make-stored-conversation)))
+      (chat:rag-chat-turn chat sc "q")
+      (let ((run (gethash "run" (first (llm:stored-conversation-turns sc)))))
+        (is (realp (gethash "elapsed" run)))))))

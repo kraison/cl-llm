@@ -122,3 +122,30 @@
     (is (eq ann (first (last (llm:stored-conversation-turns sc)))))
     (is (>= (llm:stored-conversation-updated sc)
             (llm:stored-conversation-created sc)))))
+
+;;; Final review (conversations-89-90)
+
+(test stored-conversation-wrong-types-refused
+  ;; A typed field of the wrong type is a parse error, not a TYPE-ERROR
+  ;; later in a sort or an NTHCDR.
+  (dolist (bad '(("updated" . "later") ("summarized" . "two")
+                 ("owner" . 7) ("messages" . "none")))
+    (let ((object (json:parse (llm:stored-conversation-to-json
+                               (llm:make-stored-conversation :owner "ada")))))
+      (setf (gethash (car bad) object) (cdr bad))
+      (signals llm:llm-parse-error
+        (llm:stored-conversation-from-json (json:to-json object))))))
+
+(test stored-conversation-string-stop-round-trips
+  (let ((sc (llm:make-stored-conversation :parameters '(:stop "END"))))
+    (is (equal "END" (getf (llm:conversation-parameters
+                            (llm:stored-conversation-conversation
+                             (%round-trip sc)))
+                           :stop)))))
+
+(test conversation-id-state-seeded-on-first-use
+  ;; A saved core restarts with whatever state was loaded; the state is
+  ;; made on first use instead, and again after an image restore.
+  (let ((llm::*conversation-id-random* nil))
+    (is (%canonical-id-p (llm:make-conversation-id)))
+    (is (random-state-p llm::*conversation-id-random*))))

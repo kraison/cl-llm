@@ -39,18 +39,25 @@ deadline and RUN-ELAPSED read.  Tests rebind it.")
     (format stream "~a ~a ~s" (run-persona-name r) (run-id r)
             (run-stop-reason r))))
 
-;;; Ids.  A fresh random state per image: the default one repeats in
-;;; every process, and two images could then mint the same id.
+;;; Ids.  The random state is made on first use, and again after an
+;;; image restore: one made at load repeats in every process started
+;;; from a saved core.
 
 (defvar *id-lock* (bt:make-lock "cl-llm.harness run ids"))
 (defvar *id-counter* 0)
-(defvar *id-random* (make-random-state t))
+(defvar *id-random* nil)
+
+(uiop:register-image-restore-hook (lambda () (setf *id-random* nil)) nil)
 
 (defun make-run-id ()
-  "A run id, canonical [a-z0-9-]+ and unique within the host."
+  "A run id, canonical [a-z0-9-]+: unique within the image, and with
+high probability across images (a 36^6 random salt)."
   (multiple-value-bind (counter salt)
       (bt:with-lock-held (*id-lock*)
-        (values (incf *id-counter*) (random (expt 36 4) *id-random*)))
+        (values (incf *id-counter*)
+                (random (expt 36 6)
+                        (or *id-random*
+                            (setf *id-random* (make-random-state t))))))
     (string-downcase
      (format nil "r-~36r-~36r-~36r" (get-universal-time) counter salt))))
 

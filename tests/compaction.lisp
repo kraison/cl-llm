@@ -112,3 +112,20 @@ the question starting \"Q<i>\"."
       (is (equal (nthcdr 2 before) (llm:conversation-messages c)))
       (is (null (llm:conversation-provider c))))
     (is (equal before (%messages sc)) "the stored record changed")))
+
+(define-condition %looped (error) ()
+  (:documentation "Raised by a SUMMARIZE called more often than any
+terminating compaction would call it."))
+
+(test compaction-refuses-a-zero-block
+  ;; :BLOCK 0 folds nothing and would loop forever; SUMMARIZE raises
+  ;; %LOOPED after three calls so the old code fails here, not hangs.
+  (let ((calls 0))
+    (signals type-error
+      (llm:compact-conversation
+       (%turns-sc 6)
+       :summarize (lambda (previous messages)
+                    (declare (ignore previous messages))
+                    (when (> (incf calls) 3) (error '%looped))
+                    "S")
+       :budget 1 :block 0))))

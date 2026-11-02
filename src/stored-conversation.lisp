@@ -32,19 +32,26 @@ oldest first.")
     (format stream "~a ~@[~a~]" (stored-conversation-id sc)
             (stored-conversation-owner sc))))
 
-;;; Ids.  A fresh random state per image: the default one repeats in
-;;; every process, so two images could mint the same id.
+;;; Ids.  The random state is made on first use, and again after an
+;;; image restore: one made at load would repeat in every process
+;;; started from a saved core.
 
 (defvar *conversation-id-counter* 0)
-(defvar *conversation-id-random* (make-random-state t))
+(defvar *conversation-id-random* nil)
+
+(uiop:register-image-restore-hook
+ (lambda () (setf *conversation-id-random* nil)) nil)
 
 (defun make-conversation-id ()
   "A conversation id, canonical [a-z0-9-]+: it becomes a file name and
-an index key."
-  (string-downcase
-   (format nil "c-~36r-~36r-~36r" (get-universal-time)
-           (incf *conversation-id-counter*)
-           (random (expt 36 6) *conversation-id-random*))))
+an index key.  Unique within an image; across images and threads, with
+high probability (a 36^10 random salt; core takes no lock)."
+  (let ((state (or *conversation-id-random*
+                   (setf *conversation-id-random* (make-random-state t)))))
+    (string-downcase
+     (format nil "c-~36r-~36r-~36r" (get-universal-time)
+             (incf *conversation-id-counter*)
+             (random (expt 36 10) state)))))
 
 (defun %canonical-id-p (id)
   (and (stringp id) (plusp (length id))
@@ -141,33 +148,51 @@ conversation, and ANNOTATION to its turns.  Returns SC."
   (error 'c:llm-parse-error
          :message (apply #'format nil control args)))
 
+(defun %typed (object key predicate what &optional default)
+  "OBJECT's KEY when it satisfies PREDICATE, DEFAULT when absent or
+null; anything else signals LLM-PARSE-ERROR naming KEY."
+  (let ((value (and (hash-table-p object) (gethash key object))))
+    (cond ((null value) default)
+          ((funcall predicate value) value)
+          (t (%bad-json "~s must be ~a, not ~s" key what value)))))
+
+(defun %array-p (v) (and (vectorp v) (not (stringp v))))
+(defun %count-p (v) (and (integerp v) (>= v 0)))
+
 (defun %json->part (object)
+  (unless (hash-table-p object) (%bad-json "a message part must be an object"))
   (let ((type (json:jget object "type")))
-    (cond ((equal type "text") (make-text-part (json:jget object "text")))
+    (cond ((equal type "text")
+           (make-text-part (%typed object "text" #'stringp "a string" "")))
           ((equal type "tool-use")
-           (make-tool-use-part (json:jget object "id")
-                               (json:jget object "name")
-                               (or (json:jget object "arguments")
-                                   (make-hash-table :test #'equal))))
+           (make-tool-use-part (%typed object "id" #'stringp "a string")
+                               (%typed object "name" #'stringp "a string")
+                               (%typed object "arguments" #'hash-table-p
+                                       "an object"
+                                       (make-hash-table :test #'equal))))
           ((equal type "tool-result")
-           (make-tool-result-part (json:jget object "tool-use-id")
-                                  (json:jget object "content")
-                                  :errorp (json:jget object "error")))
+           (make-tool-result-part
+            (%typed object "tool-use-id" #'stringp "a string")
+            (%typed object "content" #'stringp "a string" "")
+            :errorp (json:jget object "error")))
           (t (%bad-json "unknown message part type ~s" type)))))
 
 (defun %json->message (object)
+  (unless (hash-table-p object) (%bad-json "a message must be an object"))
   (let ((role (json:jget object "role")))
     (make-message (cond ((equal role "user") :user)
                         ((equal role "assistant") :assistant)
                         (t (%bad-json "unknown message role ~s" role)))
                   (map 'list #'%json->part
-                       (or (json:jget object "content") #())))))
+                       (%typed object "content" #'%array-p "an array"
+                               #())))))
 
 (defun %json->parameters (object)
+  ;; A string :STOP stays a string: it is a vector too.
   (loop for (name . key) in +parameter-keys+
-        for value = (and object (json:jget object name))
+        for value = (and (hash-table-p object) (json:jget object name))
         when value
-          append (list key (if (vectorp value)
+          append (list key (if (%array-p value)
                                (coerce value 'list)
                                value))))
 
@@ -180,18 +205,24 @@ message, signals LLM-PARSE-ERROR."
          (id (and (hash-table-p object) (json:jget object "id"))))
     (unless (%canonical-id-p id)
       (%bad-json "stored conversation id ~s is not [a-z0-9-]+" id))
-    (flet ((get* (key &optional default)
-             (multiple-value-bind (value found) (gethash key object)
-               (if found value default))))
-      (make-instance
-       'stored-conversation
-       :id id :owner (get* "owner") :title (get* "title")
-       :created (get* "created" 0) :updated (get* "updated" 0)
-       :current-p (and (get* "current") t)
-       :summary (get* "summary") :summarized (or (get* "summarized") 0)
-       :turns (coerce (or (get* "turns") #()) 'list)
-       :conversation (make-conversation
-                      :system (get* "system") :model (get* "model")
-                      :parameters (%json->parameters (get* "parameters"))
-                      :messages (map 'list #'%json->message
-                                     (or (get* "messages") #())))))))
+    (flet ((str (key) (%typed object key #'stringp "a string or null"))
+           (count* (key) (%typed object key #'%count-p "a count" 0)))
+      (let ((turns (coerce (%typed object "turns" #'%array-p "an array" #())
+                           'list)))
+        (unless (every #'hash-table-p turns)
+          (%bad-json "every turn annotation must be an object"))
+        (make-instance
+         'stored-conversation
+         :id id :owner (str "owner") :title (str "title")
+         :created (count* "created") :updated (count* "updated")
+         :current-p (and (gethash "current" object) t)
+         :summary (str "summary") :summarized (count* "summarized")
+         :turns turns
+         :conversation (make-conversation
+                        :system (str "system") :model (str "model")
+                        :parameters (%json->parameters
+                                     (%typed object "parameters"
+                                             #'hash-table-p "an object"))
+                        :messages (map 'list #'%json->message
+                                       (%typed object "messages" #'%array-p
+                                               "an array" #()))))))))
