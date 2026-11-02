@@ -238,3 +238,21 @@ Second value: a function returning how many requests it has had."
          (result (getf (first (harness:run-tool-calls r)) :result))
          (left (let ((*read-eval* nil)) (read-from-string result))))
     (is (and (realp left) (<= left 60)) "time-left was ~s" result)))
+
+(test run-borrowed-conversation-model-is-lent
+  ;; Final review: a borrowed conversation's :model must not override
+  ;; the persona's provider for the run, and comes back afterwards.
+  (let* ((seen :unset)
+         (c (llm:make-conversation :model "borrowed-model"))
+         (r (harness:run-persona
+             (harness:make-persona
+              :name "t-model"
+              :provider (llm:make-mock-provider
+                         :responder (lambda (conv)
+                                      (setf seen
+                                            (llm:conversation-model conv))
+                                      (text-response "ok"))))
+             "x" :conversation c)))
+    (is (eq :end-turn (harness:run-stop-reason r)))
+    (is (null seen) "the run used the conversation's model ~s" seen)
+    (is (equal "borrowed-model" (llm:conversation-model c)))))

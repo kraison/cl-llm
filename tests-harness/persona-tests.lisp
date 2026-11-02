@@ -87,3 +87,18 @@
       (write-text key (format nil "k2~%"))
       (is (string= "k2" (llm:provider-api-key
                          (harness:persona-make-provider p)))))))
+
+(test persona-file-improper-list-refused
+  ;; Final review: a dotted or circular plist is a PERSONA-ERROR, never
+  ;; a TYPE-ERROR or a hang.  #1= is not stopped by *READ-EVAL* NIL.
+  (with-scratch-dir (dir)
+    (dolist (text '("(:name . \"x\")"
+                    "#1=(:name \"x\" . #1#)"))
+      (let ((path (write-text (merge-pathnames "odd.persona" dir) text)))
+        (handler-case
+            (bt:with-timeout (5)
+              (harness:load-persona-file path)
+              (fail "~a was accepted" text))
+          (harness:persona-error () (pass))
+          (bt:timeout () (fail "~a hung the loader" text))
+          (error (e) (fail "~a escaped as ~a" text (type-of e))))))))

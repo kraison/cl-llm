@@ -46,7 +46,7 @@ lands.
 
   ```sh
   sbcl --non-interactive \
-    --eval '(push #p"/Users/raison/work/worktrees/cl-llm-harness-85/" asdf:*central-registry*)' \
+    --eval '(push #p"<worktree>/" asdf:*central-registry*)' \
     --eval '(format t "~&SRC ~a~%" (asdf:system-source-directory "cl-llm"))' \
     --eval '(ql:quickload :SYSTEM/tests :silent t)' \
     --eval '(asdf:test-system :SYSTEM)' 2>&1 | tail -25
@@ -56,13 +56,11 @@ lands.
   `Fail: 0`. For core, SYSTEM is `cl-llm`; for the harness,
   `cl-llm/harness`; for the agent, `cl-llm/agent`.
 - **LIVE:** the live suite runs only with `CL_LLM_LIVE=1`, plus
-  `CL_LLM_LLAMA_BASE_URL=http://127.0.0.1:8080/v1`,
-  `CL_LLM_LLAMA_MODEL=qwen3.8-flash-next` and
-  `CL_LLM_LLAMA_KEY_FILE=$HOME/.config/local-agent/thoth.key`. Start
-  the server first with infra's `hosts/thoth/llama/serve-qwen.sh`
-  (detached, as `hosts/thoth/local-agent`'s `ensure_server` does) and
-  wait for `GET /health` to answer `ok`. A cold first reply can take
-  two minutes.
+  `CL_LLM_LLAMA_BASE_URL` (e.g. `http://127.0.0.1:8080/v1`),
+  `CL_LLM_LLAMA_MODEL` (the server's model alias) and
+  `CL_LLM_LLAMA_KEY_FILE` (its API key file, if it has one). Start
+  llama-server first and wait for `GET /health` to answer `ok`. A cold
+  first reply loads the model and can take minutes.
 
 ## Review focus
 

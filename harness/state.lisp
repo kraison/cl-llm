@@ -88,6 +88,10 @@ operators; never while that persona has runs in flight."
                                                (persona-state-lock state))))
                       (%roll-day state)
                       (cond ((%day-spent-p persona state)
+                             ;; Pass the one notify on, or the next
+                             ;; waiter never hears of the vacancy.
+                             (bt:condition-notify
+                              (persona-state-vacancy state))
                              (return :daily-budget))
                             ((vacant-p) (return (take)))))
                  (decf (persona-state-waiting state)))))))))

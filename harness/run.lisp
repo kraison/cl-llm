@@ -55,7 +55,7 @@ deadline and RUN-ELAPSED read.  Tests rebind it.")
      (format nil "r-~36r-~36r-~36r" (get-universal-time) counter salt))))
 
 (defun host-principal ()
-  "This machine's short name, canonical: thoth.local becomes thoth."
+  "This machine's short name, canonical: box.local becomes box."
   (let* ((name (or (machine-instance) "unknown-host"))
          (short (subseq name 0 (or (position #\. name) (length name))))
          (canon (map 'string (lambda (ch)

@@ -5,14 +5,14 @@
 (in-package #:cl-llm.harness/tests)
 (in-suite :cl-llm-harness)
 
-(defun blocking-provider (entered gate)
+(defun blocking-provider (entered gate &key (in 10) (out 5))
   "A provider that signals ENTERED, then waits on GATE, then answers."
   (llm:make-mock-provider
    :responder (lambda (c)
                 (declare (ignore c))
                 (bt:signal-semaphore entered)
                 (bt:wait-on-semaphore gate :timeout 30)
-                (text-response "held"))))
+                (text-response "held" :in in :out out))))
 
 (defun wait-until (predicate &key (timeout 10))
   "Poll PREDICATE until true or TIMEOUT seconds pass; its last value."
@@ -127,3 +127,41 @@
     (is (eq :end-turn (harness:run-stop-reason (harness:run-persona p "1"))))
     (is (eq :daily-budget
             (harness:run-stop-reason (harness:run-persona p "2"))))))
+
+(test spent-day-wakes-every-waiter
+  ;; Final review: one notify per release, and a waiter that finds the
+  ;; day spent must pass the vacancy on, or the next waits forever.
+  (harness:reset-persona-state)
+  (let* ((entered (bt:make-semaphore)) (gate (bt:make-semaphore))
+         (holder (harness:make-persona
+                  :name "t-wake" :max-queued 2 :daily-token-budget 50
+                  :provider (blocking-provider entered gate :in 60)))
+         (waiter (harness:make-persona
+                  :name "t-wake" :max-queued 2 :daily-token-budget 50
+                  :max-seconds 10
+                  :provider (scripted (text-response "w"))))
+         (first-thread (bt:make-thread
+                        (lambda () (harness:run-persona holder "first"))))
+         (threads '()))
+    (unwind-protect
+         (progn
+           (is (bt:wait-on-semaphore entered :timeout 10))
+           (dotimes (i 2)
+             (push (bt:make-thread
+                    (lambda ()
+                      (let* ((start (get-internal-real-time))
+                             (r (harness:run-persona waiter "queued")))
+                        (cons (harness:run-stop-reason r)
+                              (/ (- (get-internal-real-time) start)
+                                 internal-time-units-per-second)))))
+                   threads))
+           (is (eql 2 (wait-until (lambda ()
+                                    (let ((n (waiting-count "t-wake")))
+                                      (and (= n 2) n)))))
+               "both runs never queued"))
+      (bt:signal-semaphore gate)
+      (bt:join-thread first-thread)
+      (dolist (thread threads)
+        (destructuring-bind (reason . seconds) (bt:join-thread thread)
+          (is (eq :daily-budget reason))
+          (is (< seconds 5) "a queued run waited ~,1f s" seconds))))))

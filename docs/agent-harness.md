@@ -95,14 +95,14 @@ deadline without waiting.
 ### Attribution
 
 A run's producer is `<persona>/<host>/<run-id>`, with the host from
-`host-principal` (`thoth.local` becomes `thoth`). Pass `:producer
+`host-principal` (`box.local` becomes `box`). Pass `:producer
 "<agent>/<host>"` to `run-persona` to name the principal yourself; the
 run id is still appended. Either way the result must be canonical
 `[a-z0-9-/]+`, or `run-producer-for` signals `persona-error`.
 
 Every run is its own producer, so every claim a run writes is traceable
 to the input that caused it. The memory store's recall reads a
-producer ending in `/` as a prefix (#82), so `"summariser/thoth/"`
+producer ending in `/` as a prefix (#82), so `"summariser/box/"`
 answers for every run of that persona on that host.
 
 ## Running a persona
@@ -120,8 +120,8 @@ answers for every run of that persona on that host.
 - `conversation`, when given, is continued: the user turn and the
   replies stay on success and are rolled back on any stop (`llm:send`'s
   rule). It lends its messages only: for the run, the persona's system
-  prompt, provider and parameters apply, and the conversation's own
-  come back afterwards. Without one, the run gets a fresh conversation.
+  prompt, provider, model and parameters apply, and the conversation's
+  own come back afterwards. Without one, the run gets a fresh conversation.
 - `producer` names the principal (above).
 
 Every failure is a returned run with a stop reason, never a signalled
@@ -212,7 +212,7 @@ Recall them by the run's subject, or every run of a persona on a host
 by producer prefix:
 
 ```lisp
-(mem:recall graph (cons :run run-id) :producer "summariser/thoth/")
+(mem:recall graph (cons :run run-id) :producer "summariser/box/")
 ```
 
 `record-run` owns its transactions, like `mem:conclude`: call it

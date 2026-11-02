@@ -19,8 +19,8 @@ then the deftool registry."
 
 (defun %call-with-conversation (conversation persona provider fn)
   "Call FN with CONVERSATION, or a fresh one, set up for PERSONA.  A
-supplied conversation lends its messages only: its system, provider and
-parameters come back on every exit."
+supplied conversation lends its messages only: its system, provider,
+model and parameters come back on every exit."
   (if (null conversation)
       (funcall fn (llm:make-conversation
                    :system (persona-system persona)
@@ -28,17 +28,21 @@ parameters come back on every exit."
                    :parameters (copy-list (persona-parameters persona))))
       (let ((system (llm:conversation-system conversation))
             (lent (llm:conversation-provider conversation))
+            (model (llm:conversation-model conversation))
             (parameters (llm:conversation-parameters conversation)))
         (unwind-protect
              (progn
                (setf (llm:conversation-system conversation)
                      (persona-system persona)
                      (llm:conversation-provider conversation) provider
+                     ;; NIL: the persona's provider names the model.
+                     (llm:conversation-model conversation) nil
                      (llm:conversation-parameters conversation)
                      (copy-list (persona-parameters persona)))
                (funcall fn conversation))
           (setf (llm:conversation-system conversation) system
                 (llm:conversation-provider conversation) lent
+                (llm:conversation-model conversation) model
                 (llm:conversation-parameters conversation) parameters)))))
 
 (defun %fail (run condition)

@@ -51,8 +51,13 @@
     :daily-token-budget :daily-run-budget))
 
 (defun %check-plist (plist allowed what)
-  (unless (and (listp plist) (evenp (length plist)))
-    (%persona-error "~a must be a property list, not ~s" what plist))
+  ;; LIST-LENGTH: NIL for a circular list (#1= survives *READ-EVAL*
+  ;; NIL), an error for a dotted one; both are refused here.
+  (let ((n (and (listp plist)
+                (handler-case (list-length plist) (type-error () nil)))))
+    (unless (and n (evenp n))
+      (let ((*print-circle* t))
+        (%persona-error "~a must be a property list, not ~s" what plist))))
   (loop for key in plist by #'cddr
         unless (member key allowed)
           do (%persona-error "unknown key ~s in ~a" key what)))
