@@ -9,7 +9,8 @@
                     (#:gdb #:graph-db)
                     (#:te #:temporal-extent)
                     (#:rag #:cl-llm.rag)
-                    (#:claims #:cl-llm.rag.claims))
+                    (#:claims #:cl-llm.rag.claims)
+                    (#:harness #:cl-llm.harness))
   (:export
    ;; scope
    #:scope #:make-scope #:scope-stores #:scope-write-store
@@ -28,4 +29,6 @@
    #:endpoint-embedder-ready
    #:make-hybrid-key-extractor
    ;; annotate
-   #:annotation-tools #:annotate-banners #:*annotation-instructions*))
+   #:annotation-tools #:annotate-banners #:*annotation-instructions*
+   ;; accounting (#85)
+   #:record-run))

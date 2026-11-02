@@ -13,6 +13,10 @@ vocabulary below (belief, standing, cite, decision) is unfamiliar.
 one more tool, `query`, and with it `graph-db/query`, the engine's
 web-free guarded query subsystem (kraison/vivace-graph#322).
 
+A run of these tools under a named persona, with its guards and a
+record of what it did, is the harness's job: `docs/agent-harness.md`.
+`agent:record-run` writes that record back into the memory as claims.
+
 ## One memory, partitioned by trust
 
 A user runs one model across many concerns — coding, business,

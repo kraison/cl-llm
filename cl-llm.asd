@@ -293,7 +293,8 @@ concurrency limit needs a lock."
 retrieval planner (#14 unit 2)."
   :license "MIT"
   ;; No web stack: the guarded query tool lives in cl-llm/agent/prolog.
-  :depends-on ("cl-llm" "cl-llm/memory" "cl-llm/rag/claims")
+  :depends-on ("cl-llm" "cl-llm/memory" "cl-llm/rag/claims"
+               "cl-llm/harness")
   :serial t
   :pathname "agent/"
   ;; EXTRACT before SCOPE: MAKE-SCOPE checks ENDPOINT-EMBEDDER-P (#78).
@@ -305,7 +306,8 @@ retrieval planner (#14 unit 2)."
                (:file "taxonomy-tool")
                (:file "planner-tools")
                (:file "agent")
-               (:file "annotate"))
+               (:file "annotate")
+               (:file "accounting"))
   :in-order-to ((test-op (test-op "cl-llm/agent/tests"))))
 
 (defsystem "cl-llm/agent/tests"
@@ -323,7 +325,8 @@ retrieval planner (#14 unit 2)."
                (:file "extract-tests")
                (:file "planner-tools-tests")
                (:file "loop-tests")
-               (:file "annotate-tests"))
+               (:file "annotate-tests")
+               (:file "accounting-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! :cl-llm-agent)
                (error "cl-llm/agent suite failed."))))

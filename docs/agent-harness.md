@@ -185,3 +185,36 @@ the day's tokens and runs, and the runs active and waiting.
 **A restart resets the day's counters** (v1). The day is read from
 `harness:*wall-clock*`, a function returning universal time, which
 tests rebind.
+
+## Accounting (`cl-llm/agent`)
+
+`agent:record-run` writes a run into a memory store as claims, so a
+dashboard sees what ran, on what, for how much:
+
+```lisp
+(agent:record-run graph run &key (scope (list graph)))
+;; => one decision per fact
+```
+
+Each fact is an observed belief about the subject `(:run . <run-id>)`,
+concluded under the run's own producer and the rule `harness-run`:
+
+| Relation | Object |
+|---|---|
+| `ran-as` | `(:persona . <name>)` |
+| `stopped` | `(:stop-reason . "end-turn")`, and so on |
+| `turns` | `(:count . "<n>")` |
+| `input-tokens`, `output-tokens` | `(:count . "<n>")` |
+| `elapsed-ms` | `(:count . "<ms>")` |
+| `started` | `(:instant . "<RFC 3339>")` |
+
+Recall them by the run's subject, or every run of a persona on a host
+by producer prefix:
+
+```lisp
+(mem:recall graph (cons :run run-id) :producer "summariser/thoth/")
+```
+
+`record-run` owns its transactions, like `mem:conclude`: call it
+outside one. It lives in `cl-llm/agent` because it needs the memory
+store; `cl-llm/harness` itself has no vivace-graph dependency.
