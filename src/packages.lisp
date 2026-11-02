@@ -116,4 +116,8 @@
    #:stored-conversation-summary #:stored-conversation-summarized
    #:stored-conversation-turns #:stored-conversation-current-p
    #:stored-conversation-to-json #:stored-conversation-from-json
-   #:record-turn))
+   #:record-turn
+   ;; the conversation store protocol (#89)
+   #:new-conversation #:load-conversation #:save-conversation
+   #:list-conversations #:current-conversation #:make-conversation-current
+   #:file-conversation-store #:make-file-conversation-store))

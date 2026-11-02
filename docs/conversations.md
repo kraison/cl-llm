@@ -65,3 +65,36 @@ convert to and from one JSON object:
 - **An id that is not `[a-z0-9-]+` is refused** with `llm-parse-error`:
   an id becomes a file name and an index key.
 - A float parameter comes back as a double-float.
+
+## Stores
+
+A store keeps an owner's conversations. The protocol is six generic
+functions; a store implements the first three plus `list-conversations`
+and inherits the rest:
+
+| Function | Does |
+|---|---|
+| `(save-conversation store sc)` | write SC, replacing any earlier version |
+| `(load-conversation store id &key owner)` | SC, or NIL when absent **or when OWNER differs** |
+| `(list-conversations store owner)` | OWNER's conversations, newest `updated` first |
+| `(current-conversation store owner)` | OWNER's current one, or NIL |
+| `(make-conversation-current store sc)` | SC current, the owner's others not |
+| `(new-conversation store owner &key title system parameters model)` | a fresh one, saved and made current |
+
+Starting afresh never deletes anything: the previous conversation is
+kept, no longer current, and can be loaded and continued. Pass
+`:owner` to `load-conversation` whenever the id comes from outside, so
+someone else's conversation answers as not found.
+
+### The file store (core)
+
+```lisp
+(defvar *store* (llm:make-file-conversation-store "~/conversations/"))
+(llm:new-conversation *store* "ada" :system "Be terse.")
+```
+
+One `<id>.json` per conversation in one directory, written through a
+temporary file and a rename so a crash never leaves half a record.
+Listing reads every `*.json`; a file that does not parse is skipped
+with a `warning`. It reads every file to list one owner's, so it suits
+scripts and tests. A server wants the graph store.
