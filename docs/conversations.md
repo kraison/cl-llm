@@ -137,3 +137,31 @@ that returns something other than a string signals `llm-parse-error`.
 `summarize` is the caller's: the conversational turn (below) runs a
 harness persona for it, so the summary call has its own time and token
 limits.
+
+### The graph store (`cl-llm/conversation/vivace`)
+
+Conversations in a graph-db graph the caller owns, beside its other
+data. The system depends on `cl-llm` and `graph-db/core` only.
+
+```lisp
+;; Before the graph is opened, as with mem:define-memory-store:
+(cv:define-conversation-store :my-conversations)
+
+(defvar *graph* (gdb:open-graph :my-conversations "/data/conversations/"))
+(defvar *store* (cv:make-graph-conversation-store *graph*))
+(llm:new-conversation *store* "ada")
+```
+
+- **One vertex per conversation,** of type `stored-conversation-vertex`:
+  its id, owner, updated time and current flag, and the whole
+  conversation as its JSON. Lookups by id and by owner go through two
+  `def-index`es, never a scan. An update is `gdb:copy` and `gdb:save`
+  in a transaction.
+- **It borrows the graph.** The store never opens or closes it. Every
+  operation binds `graph-db:*graph*` to the store's graph and restores
+  the caller's afterwards, so an application holding several graphs in
+  one image never reads a node under the wrong one.
+- **Declare before opening.** `define-conversation-store` defines the
+  vertex class; a reopened graph needs the class before its vertices
+  can be read.
+- A conversation with no owner is indexed under the empty string.

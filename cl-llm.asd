@@ -261,6 +261,32 @@
              (unless (symbol-call :fiveam :run! :cl-llm-memory)
                (error "cl-llm/memory suite failed."))))
 
+(defsystem "cl-llm/conversation/vivace"
+  :description "Stored conversations in a caller-owned graph-db graph (#89)."
+  :license "MIT"
+  ;; graph-db/CORE: no web stack, as cl-llm/rag/vivace.
+  :depends-on ("cl-llm" "graph-db/core")
+  :serial t
+  :pathname "conversation-vivace/"
+  :components ((:file "packages")
+               (:file "store"))
+  :in-order-to ((test-op (test-op "cl-llm/conversation/vivace/tests"))))
+
+(defsystem "cl-llm/conversation/vivace/tests"
+  :description "On-disk graph tests for cl-llm/conversation/vivace."
+  :license "MIT"
+  :depends-on ("cl-llm/conversation/vivace" "fiveam")
+  :serial t
+  :pathname "tests-conversation-vivace/"
+  :components ((:file "packages")
+               (:file "suite")
+               (:file "store-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-conversation-vivace
+                                                :keyword))
+               (error "cl-llm/conversation/vivace test suite failed."))))
+
 (defsystem "cl-llm/harness"
   :description "Run a named persona as a bounded, attributed, guarded run
 (#85).  The one cl-llm system that uses threads: the per-persona
