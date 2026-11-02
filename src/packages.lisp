@@ -107,4 +107,13 @@
    #:next-event #:next-delta #:finish-response
    #:with-streamed-response #:do-deltas
    ;; mock provider
-   #:mock-provider #:make-mock-provider #:mock-provider-responder))
+   #:mock-provider #:make-mock-provider #:mock-provider-responder
+   ;; stored conversations (#89)
+   #:stored-conversation #:make-stored-conversation #:make-conversation-id
+   #:stored-conversation-id #:stored-conversation-owner
+   #:stored-conversation-title #:stored-conversation-created
+   #:stored-conversation-updated #:stored-conversation-conversation
+   #:stored-conversation-summary #:stored-conversation-summarized
+   #:stored-conversation-turns #:stored-conversation-current-p
+   #:stored-conversation-to-json #:stored-conversation-from-json
+   #:record-turn))
