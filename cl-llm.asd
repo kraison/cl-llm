@@ -65,7 +65,7 @@
 (defsystem "cl-llm/live"
   :description "Live-endpoint tests for cl-llm. Requires CL_LLM_LIVE=1."
   :license "MIT"
-  :depends-on ("cl-llm" "cl-llm/harness" "fiveam")
+  :depends-on ("cl-llm" "cl-llm/harness" "cl-llm/rag/chat" "fiveam")
   :serial t
   :components ((:module "live"
                 :serial t
