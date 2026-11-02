@@ -262,6 +262,20 @@ concludes what it overturns, live-tested under `cl-llm/agent/live`
 reached from a session over SWANK (`docs/agent-memory.md`, "Running a
 memory image").
 
+### Conversations
+
+A conversation can be kept: `stored-conversation` adds an id, owner,
+title and per-turn notes to a conversation, with a JSON form, a store
+protocol (a file store ships in core, a graph store in
+`cl-llm/conversation/vivace`), and compaction for long histories.
+Guide: [`docs/conversations.md`](docs/conversations.md).
+
+`cl-llm/rag/chat` makes a RAG answer conversational: a follow-up such
+as "how is it powered?" is rewritten into a standalone question before
+retrieval, and each model call (rewrite, answer, compaction) is a
+harness run. By default the answer model sees earlier questions, never
+earlier answers. Same guide.
+
 ### The agent harness (`cl-llm/harness`)
 
 A persona is data: a system prompt, tools by name, a provider (with

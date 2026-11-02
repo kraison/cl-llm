@@ -155,3 +155,47 @@
       (is (string= "live-add"
                    (getf (first (harness:run-tool-calls r)) :name)))
       (is (plusp (harness:run-input-tokens r))))))
+
+(defparameter +pump-documents+
+  '(("zephyr" "Zephyr-9"
+     "The Zephyr-9 is a compact water pump. It is powered by a two-stroke
+diesel engine and moves 900 litres a minute.")
+    ("aquila" "Aquila-4"
+     "The Aquila-4 is an electric water pump, powered from a 24 V battery.")
+    ("lisp" "Lisp" "Lisp is a family of programming languages."))
+  "(id title text) for the follow-up test's tiny corpus.")
+
+(test live-llama-rag-chat-follow-up
+  "A follow-up rewritten to name its subject, on the local model (#90)."
+  (with-llama ()
+    (harness:reset-persona-state)
+    (let* ((index (rag:make-index :embedder (rag:make-mock-embedder)))
+           (chat (progn
+                   (rag:add-documents
+                    index
+                    (loop for (id title text) in +pump-documents+
+                          collect (rag:make-document
+                                   text :id id
+                                        :metadata (list :title title))))
+                   (chat:make-rag-chat
+                    :answer-persona (harness:make-persona
+                                     :name "live-kb" :system "Be brief."
+                                     :provider llm:*provider*
+                                     :parameters '(:max-tokens 12000)
+                                     :max-seconds 600)
+                    :retrieve (lambda (query k)
+                                (rag:retrieve index query :k k)))))
+           (sc (llm:make-stored-conversation :owner "live"))
+           (one (chat:rag-chat-turn chat sc "Tell me about the Zephyr-9 pump."))
+           (two (chat:rag-chat-turn chat sc "How is it powered?")))
+      (is (eq :end-turn (chat:rag-turn-stop-reason one))
+          "turn 1 stopped ~s: ~a" (chat:rag-turn-stop-reason one)
+          (chat:rag-turn-error one))
+      (is (eq :end-turn (chat:rag-turn-stop-reason two))
+          "turn 2 stopped ~s: ~a" (chat:rag-turn-stop-reason two)
+          (chat:rag-turn-error two))
+      (is (search "zephyr-9" (string-downcase
+                              (or (chat:rag-turn-standalone two) "")))
+          "the follow-up was searched as ~s" (chat:rag-turn-standalone two))
+      (is (= 4 (length (llm:conversation-messages
+                        (llm:stored-conversation-conversation sc))))))))

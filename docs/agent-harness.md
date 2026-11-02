@@ -76,7 +76,7 @@ consumer needs one.
 
 | Reader | What it holds |
 |---|---|
-| `run-id` | `r-<time>-<counter>-<salt>`, base 36, unique within the host |
+| `run-id` | `r-<time>-<counter>-<salt>`, base 36; unique within an image, and with high probability across images |
 | `run-persona-name`, `run-input` | which persona ran, on what |
 | `run-producer` | the attribution every claim the run writes carries |
 | `run-started`, `run-finished` | universal times |

@@ -25,7 +25,10 @@
                              (:file "tool-loop")
                              (:file "facade")
                              (:file "streaming")
-                             (:file "mock"))))
+                             (:file "mock")
+                             (:file "stored-conversation")
+                             (:file "conversation-store")
+                             (:file "compaction"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
 (defsystem "cl-llm/tests"
@@ -51,7 +54,10 @@
                              (:file "tool-loop")
                              (:file "streaming")
                              (:file "openai")
-                             (:file "mock"))))
+                             (:file "mock")
+                             (:file "stored-conversation")
+                             (:file "conversation-store")
+                             (:file "compaction"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))
@@ -59,7 +65,7 @@
 (defsystem "cl-llm/live"
   :description "Live-endpoint tests for cl-llm. Requires CL_LLM_LIVE=1."
   :license "MIT"
-  :depends-on ("cl-llm" "cl-llm/harness" "fiveam")
+  :depends-on ("cl-llm" "cl-llm/harness" "cl-llm/rag/chat" "fiveam")
   :serial t
   :components ((:module "live"
                 :serial t
@@ -255,6 +261,32 @@
              (unless (symbol-call :fiveam :run! :cl-llm-memory)
                (error "cl-llm/memory suite failed."))))
 
+(defsystem "cl-llm/conversation/vivace"
+  :description "Stored conversations in a caller-owned graph-db graph (#89)."
+  :license "MIT"
+  ;; graph-db/CORE: no web stack, as cl-llm/rag/vivace.
+  :depends-on ("cl-llm" "graph-db/core")
+  :serial t
+  :pathname "conversation-vivace/"
+  :components ((:file "packages")
+               (:file "store"))
+  :in-order-to ((test-op (test-op "cl-llm/conversation/vivace/tests"))))
+
+(defsystem "cl-llm/conversation/vivace/tests"
+  :description "On-disk graph tests for cl-llm/conversation/vivace."
+  :license "MIT"
+  :depends-on ("cl-llm/conversation/vivace" "fiveam")
+  :serial t
+  :pathname "tests-conversation-vivace/"
+  :components ((:file "packages")
+               (:file "suite")
+               (:file "store-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-conversation-vivace
+                                                :keyword))
+               (error "cl-llm/conversation/vivace test suite failed."))))
+
 (defsystem "cl-llm/harness"
   :description "Run a named persona as a bounded, attributed, guarded run
 (#85).  The one cl-llm system that uses threads: the per-persona
@@ -287,6 +319,32 @@ concurrency limit needs a lock."
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-harness :keyword))
                (error "cl-llm/harness test suite failed."))))
+
+(defsystem "cl-llm/rag/chat"
+  :description "A RAG turn that understands follow-ups: rewrite, retrieve,
+answer, each a harness run (#90)."
+  :license "MIT"
+  :depends-on ("cl-llm/rag" "cl-llm/harness")
+  :serial t
+  :pathname "rag-chat/"
+  :components ((:file "packages")
+               (:file "turn"))
+  :in-order-to ((test-op (test-op "cl-llm/rag/chat/tests"))))
+
+(defsystem "cl-llm/rag/chat/tests"
+  :description "Offline test suite for cl-llm/rag/chat."
+  :license "MIT"
+  :depends-on ("cl-llm/rag/chat" "fiveam")
+  :serial t
+  :pathname "tests-rag-chat/"
+  :components ((:file "packages")
+               (:file "suite")
+               (:file "turn-tests")
+               (:file "options-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-rag-chat :keyword))
+               (error "cl-llm/rag/chat test suite failed."))))
 
 (defsystem "cl-llm/agent"
   :description "The agent tool surface over cl-llm/memory and the

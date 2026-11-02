@@ -32,3 +32,9 @@
 (test producer-uncanonical-refused
   (signals harness:persona-error
     (harness:run-producer-for "echo" "r-1" :producer "Agent/Box")))
+
+(test run-id-state-seeded-on-first-use
+  ;; As conversation ids: made on first use, not when the FASL loads.
+  (let ((cl-llm.harness::*id-random* nil))
+    (is (all-in-alphabet-p (harness:make-run-id) +id-alphabet+))
+    (is (random-state-p cl-llm.harness::*id-random*))))
