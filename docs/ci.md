@@ -1,7 +1,8 @@
 # CI
 
 `.github/workflows/test.yml` runs the offline suites (core, rag,
-claims, memory, agent, agent/prolog, agent/mcp) once per push to
+claims, memory, agent, agent/prolog, agent/mcp, harness,
+conversation/vivace, rag/chat) once per push to
 `main` and once per pull request, on the ma-dev self-hosted runner
 (per-repo runner, `gh-runner-cl-llm.service` under the sitrep user).
 The claims suite needs graph-db/spacetime, refreshed each run to

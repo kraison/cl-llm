@@ -68,7 +68,10 @@ jobs:
                                         :cl-llm/memory/tests
                                         :cl-llm/agent/tests
                                         :cl-llm/agent/prolog/tests
-                                        :cl-llm/agent/mcp/tests)
+                                        :cl-llm/agent/mcp/tests
+                                        :cl-llm/harness/tests
+                                        :cl-llm/conversation/vivace/tests
+                                        :cl-llm/rag/chat/tests)
                                   :silent t)' \
             --eval '(asdf:test-system :cl-llm)' \
             --eval '(asdf:test-system :cl-llm/rag)' \
@@ -76,4 +79,7 @@ jobs:
             --eval '(asdf:test-system :cl-llm/memory)' \
             --eval '(asdf:test-system :cl-llm/agent)' \
             --eval '(asdf:test-system :cl-llm/agent/prolog)' \
-            --eval '(asdf:test-system :cl-llm/agent/mcp)'
+            --eval '(asdf:test-system :cl-llm/agent/mcp)' \
+            --eval '(asdf:test-system :cl-llm/harness)' \
+            --eval '(asdf:test-system :cl-llm/conversation/vivace)' \
+            --eval '(asdf:test-system :cl-llm/rag/chat)'
