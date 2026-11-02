@@ -21,4 +21,6 @@
    #:run-text #:run-tool-calls #:run-response
    #:make-run-id #:host-principal #:run-producer-for #:*clock*
    ;; running
-   #:run-persona #:time-left))
+   #:run-persona #:time-left
+   ;; per-persona state
+   #:*wall-clock* #:persona-usage #:reset-persona-state))

@@ -160,3 +160,28 @@ and the call is recorded.
   the time left, but `llm:*retries*` can retry it within that cap.
 - **The token budget is checked before a request,** so the request
   that crosses it completes and is counted.
+
+## Per-persona limits
+
+Two personas answering each other is the obvious runaway, so each
+persona name has its own limits across every run in the image.
+
+- **Concurrency.** At most `:max-concurrent` runs at once (default 1)
+  and `:max-queued` waiting (default 0). A run beyond both returns at
+  once with `:busy`. A queued run waits for a slot until its deadline,
+  and returns `:deadline` if the deadline passes first.
+- **A daily budget.** `:daily-run-budget` caps the runs a persona
+  starts per UTC day, and `:daily-token-budget` caps the tokens they
+  use. A run that would start past either returns `:daily-budget`
+  without calling the model. A run whose tokens push the day past
+  its token budget is stopped with `:daily-budget` before its next
+  request.
+
+State is kept per persona *name* in the image, so two persona objects
+with the same name share it. `(harness:persona-usage name)` returns
+the day's tokens and runs, and the runs active and waiting.
+`(harness:reset-persona-state)` forgets them, for tests and operators.
+
+**A restart resets the day's counters** (v1). The day is read from
+`harness:*wall-clock*`, a function returning universal time, which
+tests rebind.

@@ -267,6 +267,7 @@ concurrency limit needs a lock."
                (:file "persona")
                (:file "run")
                (:file "guard")
+               (:file "state")
                (:file "run-persona"))
   :in-order-to ((test-op (test-op "cl-llm/harness/tests"))))
 
@@ -280,7 +281,8 @@ concurrency limit needs a lock."
                (:file "suite")
                (:file "persona-tests")
                (:file "run-tests")
-               (:file "run-persona-tests"))
+               (:file "run-persona-tests")
+               (:file "state-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-harness :keyword))
