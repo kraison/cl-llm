@@ -24,6 +24,7 @@ Each example is its own package (`examples/<name>`) so they don't clash.
 | File | What it shows | Needs a network call? |
 |------|---------------|------------------------|
 | [quickstart.lisp](quickstart.lisp) | `ask`; Anthropic and local providers; specials vs. keywords | yes (a provider) |
+| [local-llama.lisp](local-llama.lisp) | A model on a local llama-server: ask, a conversation, a tool call, streaming; the timeout and token headroom it needs | yes (a local llama-server) |
 | [ollama-cloud.lisp](ollama-cloud.lisp) | Remote cloud models via the local Ollama proxy — big models, zero local RAM | yes (Ollama + cloud) |
 | [streaming.lisp](streaming.lisp) | Pull-based, thread-free streaming | yes |
 | [conversations.lisp](conversations.lisp) | Multi-turn chat with a system prompt | yes |
@@ -33,6 +34,7 @@ Each example is its own package (`examples/<name>`) so they don't clash.
 | [rag-crosslingual.lisp](rag-crosslingual.lisp) | Index Russian & Ukrainian sources, ask in English — cross-lingual retrieval via `bge-m3` | yes (Ollama + `bge-m3`) |
 | [rag-eval.lisp](rag-eval.lisp) | Measure a RAG system: retrieval recall@k / MRR (standalone) + groundedness & abstention (`cl-llm/eval`) | yes (Ollama + `bge-m3`) |
 | [rag-vivace.lisp](rag-vivace.lisp) | Back the RAG store with a vivace-graph (`graph-db`) graph: drop-in `make-graph-store`, the `:segment`/`:cache`/`:scan` strategies, persistence + hydrate | **no** — offline via mocks (needs `graph-db` on the ASDF path) |
+| [agent-harness.lisp](agent-harness.lisp) | `cl-llm/harness`: a persona as data, `run-persona`, guards stopping a runaway model, the run record; [local-adder.persona](local-adder.persona) is a persona file | `offline` **no**; `run` yes (a local llama-server) |
 | [errors-and-retries.lisp](errors-and-retries.lisp) | The condition hierarchy, timeouts, the `retry-request` restart | some (parts are offline) |
 | [evaluation.lisp](evaluation.lisp) | `defsuite` / scorers / judge / `report` | **no** — runs offline via the mock |
 | [testing-with-mock.lisp](testing-with-mock.lisp) | `mock-provider`: test your own cl-llm code with no network | **no** — offline |

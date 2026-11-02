@@ -319,3 +319,17 @@ function and derives the same schema DEFTOOL would."
       (is (equal '("ada" 1) seen)))
     (is (null (gethash "greet" cl-llm::*tools-registry*))
         "MAKE-TOOL does not register")))
+
+(test copy-tool-swaps-function-only
+  "COPY-TOOL keeps the name, schema and argument order; only the body
+changes (the harness wraps tools this way, #85)."
+  (let* ((orig (llm:make-tool 'sub "Subtract."
+                              '((a :type integer) (b :type integer))
+                              (lambda (a b) (- a b))))
+         (copy (llm:copy-tool orig :function (lambda (a b) (list a b))))
+         (args (make-hash-table :test #'equal)))
+    (setf (gethash "a" args) 5 (gethash "b" args) 3)
+    (is (string= (llm:tool-name orig) (llm:tool-name copy)))
+    (is (eq (llm:tool-schema orig) (llm:tool-schema copy)))
+    (is (= 2 (llm:call-tool orig args)))
+    (is (equal '(5 3) (llm:call-tool copy args)))))

@@ -10,6 +10,7 @@
                     (#:gdb #:graph-db)
                     (#:te #:temporal-extent)
                     (#:rag #:cl-llm.rag)
+                    (#:harness #:cl-llm.harness)
                     ;; %REPLACE-ALL-IN-FILE, shared rather than
                     ;; duplicated (#14 unit 3 residual).
                     (#:memt #:cl-llm.memory/tests))

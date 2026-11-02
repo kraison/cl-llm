@@ -267,3 +267,25 @@ not NIL."
     (let ((llm:*provider* (test-openai-provider)))
       (llm:with-streamed-response (r "hi")
         (is (eq :end-turn (llm:response-stop-reason (llm:finish-response r))))))))
+
+;;; llama-server returns reasoning beside the answer (#88)
+
+(test openai-reasoning-content-is-not-answer-text
+  "A reasoning model's message.reasoning_content never reaches the text."
+  (let ((r (llm:decode-response
+            (test-openai-provider)
+            (json:parse "{\"model\":\"m\",\"choices\":[{\"message\":
+              {\"role\":\"assistant\",\"content\":\"pong\",
+               \"reasoning_content\":\"think think\"},
+              \"finish_reason\":\"stop\"}],
+              \"usage\":{\"prompt_tokens\":5,\"completion_tokens\":7}}"))))
+    (is (string= "pong" (llm:response-text r)))
+    (is (= 7 (llm:usage-output-tokens (llm:response-usage r))))))
+
+(test openai-reasoning-delta-is-ignored-in-streams
+  "A streamed reasoning_content delta is neither text nor a stop."
+  (let ((data (concatenate 'string "{\"choices\":[{\"delta\":"
+                           "{\"reasoning_content\":\"hm\"}}]}")))
+    (is (eq :ignore
+            (llm:parse-stream-event (test-openai-provider)
+                                    (sse:make-sse-event nil data))))))

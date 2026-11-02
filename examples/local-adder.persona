@@ -1,0 +1,10 @@
+(:name "local-adder"
+ :system "You are terse. Use tools when asked to."
+ :tools ("add-integers")
+ :provider (:kind :openai-compatible
+            :base-url "http://127.0.0.1:8080/v1"
+            :model "local"
+            :api-key-file "~/.config/llama-server/key")
+ :parameters (:temperature 0.2 :max-tokens 12000)
+ :budgets (:max-turns 4 :max-seconds 600 :max-run-tokens 60000
+           :daily-run-budget 100))

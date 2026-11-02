@@ -59,7 +59,7 @@
 (defsystem "cl-llm/live"
   :description "Live-endpoint tests for cl-llm. Requires CL_LLM_LIVE=1."
   :license "MIT"
-  :depends-on ("cl-llm" "fiveam")
+  :depends-on ("cl-llm" "cl-llm/harness" "fiveam")
   :serial t
   :components ((:module "live"
                 :serial t
@@ -255,12 +255,46 @@
              (unless (symbol-call :fiveam :run! :cl-llm-memory)
                (error "cl-llm/memory suite failed."))))
 
+(defsystem "cl-llm/harness"
+  :description "Run a named persona as a bounded, attributed, guarded run
+(#85).  The one cl-llm system that uses threads: the per-persona
+concurrency limit needs a lock."
+  :license "MIT"
+  :depends-on ("cl-llm" "bordeaux-threads")
+  :serial t
+  :pathname "harness/"
+  :components ((:file "packages")
+               (:file "persona")
+               (:file "run")
+               (:file "guard")
+               (:file "state")
+               (:file "run-persona"))
+  :in-order-to ((test-op (test-op "cl-llm/harness/tests"))))
+
+(defsystem "cl-llm/harness/tests"
+  :description "Offline test suite for cl-llm/harness."
+  :license "MIT"
+  :depends-on ("cl-llm/harness" "fiveam")
+  :serial t
+  :pathname "tests-harness/"
+  :components ((:file "packages")
+               (:file "suite")
+               (:file "persona-tests")
+               (:file "run-tests")
+               (:file "run-persona-tests")
+               (:file "state-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-harness :keyword))
+               (error "cl-llm/harness test suite failed."))))
+
 (defsystem "cl-llm/agent"
   :description "The agent tool surface over cl-llm/memory and the
 retrieval planner (#14 unit 2)."
   :license "MIT"
   ;; No web stack: the guarded query tool lives in cl-llm/agent/prolog.
-  :depends-on ("cl-llm" "cl-llm/memory" "cl-llm/rag/claims")
+  :depends-on ("cl-llm" "cl-llm/memory" "cl-llm/rag/claims"
+               "cl-llm/harness")
   :serial t
   :pathname "agent/"
   ;; EXTRACT before SCOPE: MAKE-SCOPE checks ENDPOINT-EMBEDDER-P (#78).
@@ -272,7 +306,8 @@ retrieval planner (#14 unit 2)."
                (:file "taxonomy-tool")
                (:file "planner-tools")
                (:file "agent")
-               (:file "annotate"))
+               (:file "annotate")
+               (:file "accounting"))
   :in-order-to ((test-op (test-op "cl-llm/agent/tests"))))
 
 (defsystem "cl-llm/agent/tests"
@@ -290,7 +325,8 @@ retrieval planner (#14 unit 2)."
                (:file "extract-tests")
                (:file "planner-tools-tests")
                (:file "loop-tests")
-               (:file "annotate-tests"))
+               (:file "annotate-tests")
+               (:file "accounting-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run! :cl-llm-agent)
                (error "cl-llm/agent suite failed."))))

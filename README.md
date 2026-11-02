@@ -143,6 +143,12 @@ Streaming tool calls are not: `parse-stream-event` terminates the stream
 cleanly on a `tool_calls` delta but does not assemble it into a tool-use part,
 so a streamed response that needs tool use should fall back to `chat-request`.
 
+A local llama-server needs two settings a hosted model does not: a
+timeout long enough for a cold model load, and max-tokens with room for
+a reasoning model's thinking, which shares the budget. Its reasoning
+output stays out of the answer text.
+[`examples/local-llama.lisp`](examples/local-llama.lisp) shows both.
+
 ### Errors
 
 Everything signals under `cl-llm:llm-error`: `llm-http-error`, `llm-api-error`,
@@ -255,6 +261,14 @@ concludes what it overturns, live-tested under `cl-llm/agent/live`
 `scripts/run-memory.sh` runs one long-lived image over the store,
 reached from a session over SWANK (`docs/agent-memory.md`, "Running a
 memory image").
+
+### The agent harness (`cl-llm/harness`)
+
+A persona is data: a system prompt, tools by name, a provider (with
+the path of its API-key file, never the key) and budgets, loadable
+from a file that is read, never evaluated. `run-persona` runs one as
+a bounded, attributed run and returns a record of it. Guide:
+[`docs/agent-harness.md`](docs/agent-harness.md).
 
 ### Graph-backed stores (`cl-llm/rag/vivace`)
 
@@ -454,7 +468,10 @@ sbcl --dynamic-space-size 4096 --non-interactive \
 The live suite (`cl-llm/live`) is a separate ASDF system that hits real
 endpoints: Anthropic (needs `ANTHROPIC_API_KEY`) and, optionally, a local
 OpenAI-compatible server (`CL_LLM_LOCAL_BASE_URL` / `CL_LLM_LOCAL_MODEL`,
-defaulting to an Ollama instance at `http://localhost:11434/v1`). With
+defaulting to an Ollama instance at `http://localhost:11434/v1`), and a
+local llama-server (`CL_LLM_LLAMA_BASE_URL`, `CL_LLM_LLAMA_MODEL`,
+`CL_LLM_LLAMA_KEY_FILE`): ask, a conversation, a tool call and
+streaming, skipped unless the base URL is set. With
 `CL_LLM_LIVE` unset or `0`, every live test skips via FiveAM's `skip` — no
 network call is attempted and no key is required, so contributors without
 credentials are never blocked.
