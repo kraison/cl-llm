@@ -262,6 +262,14 @@ concludes what it overturns, live-tested under `cl-llm/agent/live`
 reached from a session over SWANK (`docs/agent-memory.md`, "Running a
 memory image").
 
+### The agent harness (`cl-llm/harness`)
+
+A persona is data: a system prompt, tools by name, a provider (with
+the path of its API-key file, never the key) and budgets, loadable
+from a file that is read, never evaluated. `run-persona` runs one as
+a bounded, attributed run and returns a record of it. Guide:
+[`docs/agent-harness.md`](docs/agent-harness.md).
+
 ### Graph-backed stores (`cl-llm/rag/vivace`)
 
 `cl-llm/rag/vivace` lets a persistent [vivace-graph](https://github.com/kraison/vivace-graph)

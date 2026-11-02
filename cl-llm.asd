@@ -255,6 +255,32 @@
              (unless (symbol-call :fiveam :run! :cl-llm-memory)
                (error "cl-llm/memory suite failed."))))
 
+(defsystem "cl-llm/harness"
+  :description "Run a named persona as a bounded, attributed, guarded run
+(#85).  The one cl-llm system that uses threads: the per-persona
+concurrency limit needs a lock."
+  :license "MIT"
+  :depends-on ("cl-llm" "bordeaux-threads")
+  :serial t
+  :pathname "harness/"
+  :components ((:file "packages")
+               (:file "persona"))
+  :in-order-to ((test-op (test-op "cl-llm/harness/tests"))))
+
+(defsystem "cl-llm/harness/tests"
+  :description "Offline test suite for cl-llm/harness."
+  :license "MIT"
+  :depends-on ("cl-llm/harness" "fiveam")
+  :serial t
+  :pathname "tests-harness/"
+  :components ((:file "packages")
+               (:file "suite")
+               (:file "persona-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-harness :keyword))
+               (error "cl-llm/harness test suite failed."))))
+
 (defsystem "cl-llm/agent"
   :description "The agent tool surface over cl-llm/memory and the
 retrieval planner (#14 unit 2)."
