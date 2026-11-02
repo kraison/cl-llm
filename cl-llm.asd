@@ -320,6 +320,31 @@ concurrency limit needs a lock."
                                   (find-symbol* :cl-llm-harness :keyword))
                (error "cl-llm/harness test suite failed."))))
 
+(defsystem "cl-llm/rag/chat"
+  :description "A RAG turn that understands follow-ups: rewrite, retrieve,
+answer, each a harness run (#90)."
+  :license "MIT"
+  :depends-on ("cl-llm/rag" "cl-llm/harness")
+  :serial t
+  :pathname "rag-chat/"
+  :components ((:file "packages")
+               (:file "turn"))
+  :in-order-to ((test-op (test-op "cl-llm/rag/chat/tests"))))
+
+(defsystem "cl-llm/rag/chat/tests"
+  :description "Offline test suite for cl-llm/rag/chat."
+  :license "MIT"
+  :depends-on ("cl-llm/rag/chat" "fiveam")
+  :serial t
+  :pathname "tests-rag-chat/"
+  :components ((:file "packages")
+               (:file "suite")
+               (:file "turn-tests"))
+  :perform (test-op (op c)
+             (unless (symbol-call :fiveam :run!
+                                  (find-symbol* :cl-llm-rag-chat :keyword))
+               (error "cl-llm/rag/chat test suite failed."))))
+
 (defsystem "cl-llm/agent"
   :description "The agent tool surface over cl-llm/memory and the
 retrieval planner (#14 unit 2)."

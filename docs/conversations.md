@@ -165,3 +165,72 @@ data. The system depends on `cl-llm` and `graph-db/core` only.
   vertex class; a reopened graph needs the class before its vertices
   can be read.
 - A conversation with no owner is indexed under the empty string.
+
+## The conversational turn (`cl-llm/rag/chat`)
+
+A RAG answer that understands a follow-up. Ask "tell me about device
+X", then "how is it powered?": the second question is rewritten into
+"How is device X powered?" before anything is searched. The system
+depends on `cl-llm/rag` and `cl-llm/harness`.
+
+```lisp
+(defvar *chat*
+  (chat:make-rag-chat
+   :answer-persona (harness:make-persona :name "kb" :system "You are terse."
+                                         :provider provider)
+   :retrieve (lambda (query k) (rag:retrieve index query :k k))))
+
+(chat:rag-chat-turn *chat* sc "how is it powered?" :store store)
+;; => a RAG-TURN
+```
+
+### A turn, step by step
+
+1. **Rewrite.** When the conversation has earlier turns, the rewrite
+   persona reads them (the summary, then the recent questions and
+   answers, as text) and the new question, and replies with one
+   standalone search query. The first question of a conversation is
+   used as asked. An empty or failed rewrite fails the turn; it never
+   falls back to the raw question.
+2. **Retrieve.** `retrieve`, a function of `(query k)`, is called with
+   the standalone question and returns `rag:hit`s. A consumer passes
+   its own retrieval, gates and all.
+3. **Answer.** The answer persona's system prompt is its own, composed
+   with `rag:*grounding-instructions*`, never replaced by them. Its
+   input is the earlier questions (each with the query it was searched
+   as), then `SOURCES:` and the context `assemble` builds from the hits
+   (`rag:assemble-context` unless given), then `QUESTION:` as asked
+   and, when it differs, `STANDALONE:`.
+4. **Record.** Only a completed answer is recorded: `record-turn` with
+   an annotation holding the standalone question, the sources' document
+   ids and titles, and the answer run's id, stop reason and tokens. With
+   `:store`, the conversation is saved.
+
+**The answer model never sees an earlier answer** under the default
+history, `:questions`, nor the summary, which condenses answers. An
+unsupported claim in one answer cannot become a source for the next.
+History helps the rewrite understand the question; it is not grounding.
+
+### Three personas
+
+Each model call is a harness run, with its own limits and run record:
+
+| Persona | Default |
+|---|---|
+| answer | the caller's `:answer-persona` |
+| rewrite | the answer persona's provider and budgets, named `<answer>-rewrite`, system `*rewrite-instructions*`, no tools |
+| compaction | likewise, `<answer>-compact`, system `*summary-instructions*` |
+
+Rewriting and summarising are small tasks, so a deployment can give
+them a small local model with `:rewrite-persona` and
+`:compaction-persona`, and keep them off a hosted one.
+
+### The result
+
+`rag-turn-answer`, `rag-turn-hits`, `rag-turn-standalone` (show it:
+"Searched for: …" makes a wrong rewrite visible), `rag-turn-stop-reason`
+(`:end-turn` on success, else the failing run's own stop reason, or
+`:error`), `rag-turn-error`, and `rag-turn-runs`, a plist of the
+`:rewrite`, `:answer` and `:compaction` runs. A turn never signals. A
+turn that fails or stops leaves the stored conversation exactly as it
+was.
