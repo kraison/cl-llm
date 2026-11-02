@@ -24,6 +24,7 @@ Each example is its own package (`examples/<name>`) so they don't clash.
 | File | What it shows | Needs a network call? |
 |------|---------------|------------------------|
 | [quickstart.lisp](quickstart.lisp) | `ask`; Anthropic and local providers; specials vs. keywords | yes (a provider) |
+| [local-llama.lisp](local-llama.lisp) | A model on a local llama-server: ask, a conversation, a tool call, streaming; the timeout and token headroom it needs | yes (a local llama-server) |
 | [ollama-cloud.lisp](ollama-cloud.lisp) | Remote cloud models via the local Ollama proxy — big models, zero local RAM | yes (Ollama + cloud) |
 | [streaming.lisp](streaming.lisp) | Pull-based, thread-free streaming | yes |
 | [conversations.lisp](conversations.lisp) | Multi-turn chat with a system prompt | yes |

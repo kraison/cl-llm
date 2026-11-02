@@ -143,6 +143,12 @@ Streaming tool calls are not: `parse-stream-event` terminates the stream
 cleanly on a `tool_calls` delta but does not assemble it into a tool-use part,
 so a streamed response that needs tool use should fall back to `chat-request`.
 
+A local llama-server needs two settings a hosted model does not: a
+timeout long enough for a cold model load, and max-tokens with room for
+a reasoning model's thinking, which shares the budget. Its reasoning
+output stays out of the answer text.
+[`examples/local-llama.lisp`](examples/local-llama.lisp) shows both.
+
 ### Errors
 
 Everything signals under `cl-llm:llm-error`: `llm-http-error`, `llm-api-error`,
@@ -454,7 +460,10 @@ sbcl --dynamic-space-size 4096 --non-interactive \
 The live suite (`cl-llm/live`) is a separate ASDF system that hits real
 endpoints: Anthropic (needs `ANTHROPIC_API_KEY`) and, optionally, a local
 OpenAI-compatible server (`CL_LLM_LOCAL_BASE_URL` / `CL_LLM_LOCAL_MODEL`,
-defaulting to an Ollama instance at `http://localhost:11434/v1`). With
+defaulting to an Ollama instance at `http://localhost:11434/v1`), and a
+local llama-server (`CL_LLM_LLAMA_BASE_URL`, `CL_LLM_LLAMA_MODEL`,
+`CL_LLM_LLAMA_KEY_FILE`): ask, a conversation, a tool call and
+streaming, skipped unless the base URL is set. With
 `CL_LLM_LIVE` unset or `0`, every live test skips via FiveAM's `skip` — no
 network call is attempted and no key is required, so contributors without
 credentials are never blocked.
