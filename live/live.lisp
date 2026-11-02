@@ -129,3 +129,29 @@
       (is (search "three"
                   (string-downcase
                    (apply #'concatenate 'string (reverse collected))))))))
+
+(test live-llama-persona-run
+  "A persona run on the local model under the harness's guards (#85)."
+  (with-llama ()
+    (let* ((add (llm:make-tool 'live-add "Add two integers together."
+                               '((a :type integer) (b :type integer))
+                               (lambda (a b) (+ a b))))
+           (persona (harness:make-persona
+                     :name "live-adder" :tools (list add)
+                     :provider llm:*provider*
+                     :parameters '(:max-tokens 12000)
+                     :max-seconds 600 :max-run-tokens 60000 :max-turns 4))
+           (r (progn (harness:reset-persona-state "live-adder")
+                     (harness:run-persona
+                      persona
+                      (concatenate 'string
+                                   "Use the live-add tool to add 17 and 25."
+                                   " Reply with just the number.")))))
+      (is (eq :end-turn (harness:run-stop-reason r))
+          "stopped ~s: ~a" (harness:run-stop-reason r) (harness:run-error r))
+      (is (search "42" (or (harness:run-text r) "")) "got ~s"
+          (harness:run-text r))
+      (is (= 1 (length (harness:run-tool-calls r))))
+      (is (string= "live-add"
+                   (getf (first (harness:run-tool-calls r)) :name)))
+      (is (plusp (harness:run-input-tokens r))))))
