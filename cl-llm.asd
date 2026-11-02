@@ -264,7 +264,8 @@ concurrency limit needs a lock."
   :serial t
   :pathname "harness/"
   :components ((:file "packages")
-               (:file "persona"))
+               (:file "persona")
+               (:file "run"))
   :in-order-to ((test-op (test-op "cl-llm/harness/tests"))))
 
 (defsystem "cl-llm/harness/tests"
@@ -275,7 +276,8 @@ concurrency limit needs a lock."
   :pathname "tests-harness/"
   :components ((:file "packages")
                (:file "suite")
-               (:file "persona-tests"))
+               (:file "persona-tests")
+               (:file "run-tests"))
   :perform (test-op (op c)
              (unless (symbol-call :fiveam :run!
                                   (find-symbol* :cl-llm-harness :keyword))

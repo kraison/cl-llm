@@ -69,3 +69,38 @@ persona or NIL. `make-persona-directory` is the source that ships here:
 before it becomes a path, and the file's own `:name` must match it. A
 store-backed source is a method on `find-persona`, added when a
 consumer needs one.
+
+## The run record
+
+`run-persona` returns a `run`, whatever happened. Its readers:
+
+| Reader | What it holds |
+|---|---|
+| `run-id` | `r-<time>-<counter>-<salt>`, base 36, unique within the host |
+| `run-persona-name`, `run-input` | which persona ran, on what |
+| `run-producer` | the attribution every claim the run writes carries |
+| `run-started`, `run-finished` | universal times |
+| `run-elapsed` | seconds, from `*clock*` |
+| `run-turns` | model requests made |
+| `run-input-tokens`, `run-output-tokens` | summed over every request |
+| `run-stop-reason` | how it stopped (below) |
+| `run-error` | the condition, when it stopped on an error |
+| `run-text` | the final answer's text |
+| `run-tool-calls` | oldest first, `(:name :arguments :result :error-p)` |
+| `run-response` | the last model response |
+
+`*clock*` is a function returning seconds; tests rebind it to drive the
+deadline without waiting.
+
+### Attribution
+
+A run's producer is `<persona>/<host>/<run-id>`, with the host from
+`host-principal` (`thoth.local` becomes `thoth`). Pass `:producer
+"<agent>/<host>"` to `run-persona` to name the principal yourself; the
+run id is still appended. Either way the result must be canonical
+`[a-z0-9-/]+`, or `run-producer-for` signals `persona-error`.
+
+Every run is its own producer, so every claim a run writes is traceable
+to the input that caused it. The memory store's recall reads a
+producer ending in `/` as a prefix (#82), so `"summariser/thoth/"`
+answers for every run of that persona on that host.
