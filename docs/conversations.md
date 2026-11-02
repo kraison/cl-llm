@@ -98,3 +98,42 @@ temporary file and a rename so a crash never leaves half a record.
 Listing reads every `*.json`; a file that does not parse is skipped
 with a `warning`. It reads every file to list one owner's, so it suits
 scripts and tests. A server wants the graph store.
+
+## Compaction
+
+A conversation kept for weeks outgrows what a model can read.
+`compact-conversation` keeps it within a budget without touching the
+record:
+
+```lisp
+(llm:compact-conversation sc :summarize fn :budget 6000
+                             :keep-recent 4 :block 4)
+;; => SC, COMPACTED-P
+```
+
+While what a model would read (the summary plus the messages after it)
+estimates over `budget` tokens, the oldest `block` turns that are not
+among the last `keep-recent` are folded into the running summary:
+`(funcall summarize previous-summary messages)` returns the new
+summary, which is stored with the count of messages it covers
+(`stored-conversation-summarized`). Folding moves in blocks, so the
+summary is made once per block, not on every turn, and a server's
+prompt cache stays useful. A turn is never split: a user message of
+tool results belongs to the turn before it. When nothing outside the
+kept turns is left to fold, it stops, even over budget. A `summarize`
+that returns something other than a string signals `llm-parse-error`.
+
+- **The estimate** is `estimate-tokens`: characters divided by
+  `*chars-per-token*` (4), rounded up. It is model-free and rough.
+- **The record is never changed by compaction.** Every message stays in
+  the stored conversation; only the summary and its count are added.
+- **What a model reads** is `(conversation-for-model sc &key system)`:
+  a fresh conversation of the messages after the summarized ones, with
+  the system prompt (default the stored one) followed by
+  `Summary of the earlier conversation:` and the summary. The summary
+  goes in the system prompt, not a message, so the user and assistant
+  turns still alternate.
+
+`summarize` is the caller's: the conversational turn (below) runs a
+harness persona for it, so the summary call has its own time and token
+limits.

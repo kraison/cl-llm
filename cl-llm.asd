@@ -27,7 +27,8 @@
                              (:file "streaming")
                              (:file "mock")
                              (:file "stored-conversation")
-                             (:file "conversation-store"))))
+                             (:file "conversation-store")
+                             (:file "compaction"))))
   :in-order-to ((test-op (test-op "cl-llm/tests"))))
 
 (defsystem "cl-llm/tests"
@@ -55,7 +56,8 @@
                              (:file "openai")
                              (:file "mock")
                              (:file "stored-conversation")
-                             (:file "conversation-store"))))
+                             (:file "conversation-store")
+                             (:file "compaction"))))
   :perform (test-op (op c)
              (unless (symbol-call :cl-llm.test :run-offline-suite)
                (error "cl-llm test suite failed."))))

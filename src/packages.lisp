@@ -120,4 +120,7 @@
    ;; the conversation store protocol (#89)
    #:new-conversation #:load-conversation #:save-conversation
    #:list-conversations #:current-conversation #:make-conversation-current
-   #:file-conversation-store #:make-file-conversation-store))
+   #:file-conversation-store #:make-file-conversation-store
+   ;; compaction (#89)
+   #:*chars-per-token* #:estimate-tokens #:compact-conversation
+   #:conversation-for-model))
