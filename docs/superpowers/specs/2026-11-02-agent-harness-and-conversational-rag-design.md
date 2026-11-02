@@ -175,11 +175,14 @@ through jzon). A persona can also be built in Lisp with a constructor.
   docs. When accounting claims are recorded (§6.6), the counters may
   be seeded from them at start (left to the builder).
 
-**The hook.** Rather than copying the tool loop, the builder adds a
-per-turn hook to core's `run-tool-loop` and `send` (called before
-each model call and after each response) through which the harness
-checks its guards and stops the loop. `ask` and `send` behave exactly
-as now when no hook is given.
+**No hook in core (changed in the plan, 2026-11-02).** Rather than
+copying the tool loop or adding a hook to it, the harness wraps what
+`send` is given: a provider whose `chat-request` checks the guards
+before each request and counts usage after it, and each tool through a
+new core function, `copy-tool`, that checks the deadline and records
+the call. A guard stops the run by signalling a condition that is not
+an `error`, so core's tool handlers let it through. `ask` and `send`
+are unchanged.
 
 ### 6.5 Attribution
 

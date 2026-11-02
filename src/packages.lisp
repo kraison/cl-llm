@@ -95,7 +95,7 @@
    #:chat-request #:stream-request
    ;; tools
    #:tool #:deftool #:make-tool #:find-tool #:register-tool #:unregister-tool
-   #:tool-name #:tool-description #:tool-schema #:tool-function
+   #:tool-name #:tool-description #:tool-schema #:tool-function #:copy-tool
    #:encode-tool #:call-tool
    ;; facade
    #:ask #:send

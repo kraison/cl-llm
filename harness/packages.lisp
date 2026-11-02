@@ -19,4 +19,6 @@
    #:run-started #:run-finished #:run-elapsed #:run-turns
    #:run-input-tokens #:run-output-tokens #:run-stop-reason #:run-error
    #:run-text #:run-tool-calls #:run-response
-   #:make-run-id #:host-principal #:run-producer-for #:*clock*))
+   #:make-run-id #:host-principal #:run-producer-for #:*clock*
+   ;; running
+   #:run-persona #:time-left))

@@ -236,6 +236,18 @@ graph or per scope, not per image (agent-tools design SS4)."
                  :parameter-specs (mapcar #'parameter-spec-of
                                           (remove '&optional parameters))))
 
+(defun copy-tool (tool &key (function (tool-function tool)))
+  "A new TOOL like TOOL -- name, description, schema, argument order --
+with FUNCTION as its body.  Not registered (the harness wraps tools
+this way, #85)."
+  (make-instance 'tool
+                 :name (tool-name tool)
+                 :description (tool-description tool)
+                 :schema (tool-schema tool)
+                 :function function
+                 :parameter-names (tool-parameter-names tool)
+                 :parameter-specs (tool-parameter-specs tool)))
+
 (defmacro deftool (name parameters docstring &body body)
   "Define NAME as an ordinary function AND register it as a tool the model may
 call. The JSON schema is derived from PARAMETERS and DOCSTRING.

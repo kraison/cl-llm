@@ -104,3 +104,59 @@ Every run is its own producer, so every claim a run writes is traceable
 to the input that caused it. The memory store's recall reads a
 producer ending in `/` as a prefix (#82), so `"summariser/thoth/"`
 answers for every run of that persona on that host.
+
+## Running a persona
+
+```lisp
+(harness:run-persona persona input &key conversation producer tools)
+;; => a RUN
+```
+
+- `input` is the user turn, a string.
+- `tools` are `llm:tool` objects the caller offers, such as a subset of
+  `agent:make-agent-tools`. The persona's tool names choose among them
+  first, then the `deftool` registry. Only the persona's tools reach the
+  model. An unknown name stops the run with `:error`.
+- `conversation`, when given, is continued: the user turn and the
+  replies stay on success and are rolled back on any stop (`llm:send`'s
+  rule). It lends its messages only: for the run, the persona's system
+  prompt, provider and parameters apply, and the conversation's own
+  come back afterwards. Without one, the run gets a fresh conversation.
+- `producer` names the principal (above).
+
+Every failure is a returned run with a stop reason, never a signalled
+condition: a resident process handles a run, it does not unwind from
+one. The one exception is an uncanonical `:producer`, an argument
+error that signals `persona-error` before anything runs.
+
+### Stop reasons
+
+| Reason | Meaning |
+|---|---|
+| `:end-turn`, `:max-tokens`, `:stop` | the model's own |
+| `:max-turns` | the model still asked for tools after `:max-turns` requests |
+| `:deadline` | `:max-seconds` passed |
+| `:token-budget` | the run's tokens reached `:max-run-tokens` |
+| `:busy` | the persona's concurrency limit and queue were full |
+| `:daily-budget` | the persona's day's runs or tokens are spent |
+| `:error` | anything else; `run-error` holds the condition |
+
+### How the guards work
+
+The guards wrap what `llm:send` is given, so core's tool loop is
+unchanged. The provider is wrapped: before each model request it
+checks the deadline and the token budget, and it caps `llm:*timeout*`
+at the time left. After each response it adds the reported usage to
+the run, counting a response without usage as zero. Each tool is
+wrapped with `llm:copy-tool`: the deadline is checked before its body,
+and the call is recorded.
+
+- **A tool body is never interrupted.** A thread interrupt inside a
+  graph transaction can corrupt a store. So a slow tool overruns the
+  deadline by its own duration, and the run stops at the next check. A
+  long tool can read `(harness:time-left)`, the seconds remaining or
+  NIL, and give up early.
+- **One request can outlast the deadline.** Its timeout is capped at
+  the time left, but `llm:*retries*` can retry it within that cap.
+- **The token budget is checked before a request,** so the request
+  that crosses it completes and is counted.
